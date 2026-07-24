@@ -512,10 +512,11 @@ class QuotationDetailView(DetailView):
 
         # If there are approved altered prices, use the alternate template
         if altered_prices:
-            print("Im here3")
+            # print("Im here3")
             self.template_name = "quotations/quotation_detail_altered.html"
 
         # Total calculations part added by kashish on 7-1-26
+        grand_total = 0
         original_total = 0
         discount_total = 0
 
@@ -523,14 +524,88 @@ class QuotationDetailView(DetailView):
             qty = item.quantity
 
             # ✅ ALWAYS use GST INCLUDED price (matches table)
-            unit_price = item.gst_unit_price()
+            # 1. Standard calculation (for original records)
+            orig_unit_price = item.gst_unit_price()
+            original_total += (orig_unit_price * qty)
+            discount_total += (item.discount or 0)
 
-            line_original = unit_price * qty
-            original_total += line_original
+            # 2. Grand Total calculation (Check for altered prices)
+            # Note: JSON keys are strings, so we check both item.id and str(item.id)
+            new_price = altered_prices.get(item.id) or altered_prices.get(str(item.id))
 
-            discount_total += item.discount or 0
+            if new_price:
+                # Use approved altered price
+                grand_total += (float(new_price) * qty)
+            else:
+                # Use original total price (standard behavior)
+                grand_total += item.total_price ()
 
+        # Add all variables to context so both templates work
         context["original_total"] = original_total
         context["discount_total"] = discount_total
+        context["grand_total"] = grand_total
+        return context
+
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        quotation = self.object
+
+        # Get all related items
+        items_qs = quotation.items.select_related('product').all()
+        context["items"] = items_qs
+        context["has_discount"] = items_qs.filter(discount__gt=0).exists()
+
+        # Default: no altered prices
+        altered_prices = {}
+
+        # Logic for Approved Price Changes
+        if quotation.is_price_altered:
+            approved_request = (
+                PriceChangeRequest.objects
+                .filter(quotation=quotation, status='approved')
+                .order_by('-id')
+                .first()
+            )
+            if approved_request:
+                altered_prices = approved_request.requested_prices or {}
+
+        context["altered_prices"] = altered_prices
+
+        # Switch template if approved prices exist
+        if altered_prices:
+            self.template_name = "quotations/quotation_detail_altered.html"
+
+        # --- Total Calculations ---
+        # We initialize as 0.0 to ensure floating point math
+        grand_total = 0.0
+        original_total = 0.0
+        discount_total = 0.0
+
+        for item in items_qs:
+            qty = item.quantity
+
+            # FIXED: Added () to call the method
+            # This was causing the 'int and method' error
+            orig_unit_price = float(item.gst_unit_price())
+
+            original_total += (orig_unit_price * qty)
+            discount_total += float(item.discount or 0)
+
+            # Calculate Grand Total (Use altered price if exists, else use item's total)
+            # We check for item.id as both an integer and a string (common in JSON fields)
+            new_price = altered_prices.get(item.id) or altered_prices.get(str(item.id))
+
+            if new_price:
+                # If there is an approved change request for this item
+                grand_total += (float(new_price) * qty)
+            else:
+                # Standard price (no change request)
+                grand_total += float(item.total_price())  # <--- Added ()
+
+        # Pass totals to context
+        context["original_total"] = original_total
+        context["discount_total"] = discount_total
+        context["grand_total"] = grand_total
 
         return context

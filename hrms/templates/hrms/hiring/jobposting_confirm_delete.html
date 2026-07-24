@@ -1,0 +1,16 @@
+{% extends "hrms/base.html" %}
+{% block title %}Delete Job Posting{% endblock %}
+{% block page_title %}Delete Job Posting{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:480px;">
+  <div class="card-body">
+    <p>Delete job posting <strong>{{ object.title }}</strong>? Its applications and interviews will be removed too.</p>
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-danger">Delete</button>
+      <a href="{% url 'hrms:jobposting_list' %}" class="btn btn-outline-secondary">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

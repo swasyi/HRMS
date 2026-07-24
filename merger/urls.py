@@ -19,11 +19,15 @@ from django.urls import path , include
 from django.contrib.auth.views import LoginView, LogoutView
 from inventory.views import SignUpView, WelcomeView
 from django.contrib.auth import views as auth_views
+from django.conf import settings
+from django.conf.urls.static import static
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('login/',LoginView.as_view() ,name='login'),
     path('logout/',LogoutView.as_view() ,name='logout'),
+
     # 🔐 Password reset
     path(
         'password-reset/',
@@ -56,4 +60,9 @@ urlpatterns = [
     path("meta/", include("meta.urls")),
     path("logs/", include('request_logs.urls')),
     path("docs/", include("docs.urls")),
+    path('hrms/', include('hrms.urls')),
+
 ]
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+

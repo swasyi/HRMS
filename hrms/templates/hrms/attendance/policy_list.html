@@ -1,0 +1,43 @@
+{% extends "hrms/base.html" %}
+{% block title %}Attendance Policy{% endblock %}
+{% block page_title %}Attendance Policy{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr><th>Company</th><th>Work Hours</th><th>Grace Window</th><th>Half-Day Threshold</th><th>Overtime After</th><th class="text-end">Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for company in companies %}
+        <tr>
+          <td>{{ company.name }}</td>
+          {% with p=company.attendance_policy %}
+          {% if p %}
+            <td>{{ p.work_start_time }} – {{ p.work_end_time }}</td>
+            <td>{{ p.grace_window_minutes }} min · {{ p.max_grace_per_month }}/month</td>
+            <td>{{ p.half_day_threshold_hours }} hrs</td>
+            <td>{{ p.overtime_threshold_hours }} hrs</td>
+          {% else %}
+            <td colspan="4" class="text-muted">Not configured yet</td>
+          {% endif %}
+          {% endwith %}
+          <td class="text-end">
+            <a href="{% url 'hrms:attendance_policy_configure' company.pk %}" class="btn btn-sm btn-outline-secondary">
+              {% if company.attendance_policy %}Edit{% else %}Configure{% endif %}
+            </a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="text-muted text-center py-4">No companies found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-muted small mt-3">
+  Tip: to replicate the classic "10:00 AM start / 10:15 strict half-day / 3 grace instances a month" rule,
+  set Work Start Time = 10:00, Grace Window = 15 minutes, Max Grace / Month = 3.
+</p>
+{% endblock %}

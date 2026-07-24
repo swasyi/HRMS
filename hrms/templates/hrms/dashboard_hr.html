@@ -1,0 +1,157 @@
+{% extends "hrms/base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- COMPANY FILTER DROPDOWN -->
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="h4 mb-0">Overview</h2>
+    <form action="{% url 'hrms:set_active_company' %}" method="POST" class="d-flex align-items-center">
+        {% csrf_token %}
+        <label class="me-2 text-muted small">Company View:</label>
+        <select name="company_id" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+            <option value="all">All Accessible Companies</option>
+            {% for comp in available_companies %}
+                <option value="{{ comp.id }}" {% if active_company_id == comp.id|stringformat:"s" %}selected{% endif %}>
+                    {{ comp.name }}
+                </option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<!-- STAT CARDS -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100 bg-primary text-white">
+      <div class="card-body">
+        <div class="small opacity-75">Active Employees</div>
+        <div class="h3 mb-0">{{ total_employees }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100 bg-success text-white">
+      <div class="card-body">
+        <div class="small opacity-75">Present Today</div>
+        <div class="h3 mb-0">{{ present_today }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100 bg-warning">
+      <div class="card-body">
+        <div class="small opacity-75">Pending Leaves</div>
+        <div class="h3 mb-0">{{ pending_leaves }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100 bg-info text-white">
+      <div class="card-body">
+        <div class="small opacity-75">Open Jobs</div>
+        <div class="h3 mb-0">{{ open_jobs }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-lg-7">
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-bold">Recent Joiners</div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle">
+          <thead class="table-light"><tr><th>Employee</th><th>Designation</th><th>Joined</th></tr></thead>
+          <tbody>
+            {% for emp in recent_joiners %}
+            <tr>
+              <td><a href="{% url 'hrms:employee_detail' emp.pk %}" class="text-decoration-none fw-medium text-dark">{{ emp.full_name }}</a></td>
+              <td><span class="small text-muted">{{ emp.designation|default:"—" }}</span></td>
+              <td>{{ emp.date_of_joining|date:"d M Y" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="3" class="text-center text-muted">No records found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-bold">Leave Pipeline</div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle">
+          <tbody>
+            {% for lv in pending_leave_list %}
+            <tr>
+              <td>
+                  <div class="fw-medium">{{ lv.employee.full_name }}</div>
+                  <div class="small text-muted">{{ lv.leave_type }}</div>
+              </td>
+              <td class="text-end">
+                  <span class="badge rounded-pill bg-warning text-dark">Pending</span>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td class="text-center text-muted py-3">No pending requests.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ATTENDANCE BREAKDOWN TABLES (NEW) -->
+<div class="row">
+    <div class="col-12">
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                <span class="fw-bold">Today's Attendance Status</span>
+                <span class="badge bg-light text-dark">{{ "now"|date:"D, d M Y" }}</span>
+            </div>
+            <div class="card-body p-0">
+                <ul class="nav nav-tabs nav-fill" id="attendanceTab" role="tablist">
+                    <li class="nav-item">
+                        <button class="nav-link active text-success fw-bold" id="present-tab" data-bs-toggle="tab" data-bs-target="#present" type="button">Present ({{ present_employees.count }})</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link text-danger fw-bold" id="absent-tab" data-bs-toggle="tab" data-bs-target="#absent" type="button">Absent ({{ absent_employees.count }})</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link text-info fw-bold" id="leave-tab" data-bs-toggle="tab" data-bs-target="#on-leave" type="button">On Leave ({{ on_leave_employees.count }})</button>
+                    </li>
+                </ul>
+                <div class="tab-content p-3">
+                    <!-- Present -->
+                    <div class="tab-pane fade show active" id="present">
+                        <div class="row row-cols-2 row-cols-md-4 g-2">
+                            {% for emp in present_employees %}
+                            <div class="col"><div class="p-2 border rounded small">{{ emp.full_name }}</div></div>
+                            {% empty %}<p class="text-muted">No one checked in yet.</p>{% endfor %}
+                        </div>
+                    </div>
+                    <!-- Absent -->
+                    <div class="tab-pane fade" id="absent">
+                        <div class="row row-cols-2 row-cols-md-4 g-2">
+                            {% for emp in absent_employees %}
+                            <div class="col"><div class="p-2 border rounded small bg-light">{{ emp.full_name }}</div></div>
+                            {% empty %}<p class="text-muted text-center">Perfect Attendance!</p>{% endfor %}
+                        </div>
+                    </div>
+                    <!-- Leave -->
+                    <div class="tab-pane fade" id="on-leave">
+                        <div class="row row-cols-2 row-cols-md-4 g-2">
+                            {% for emp in on_leave_employees %}
+                            <div class="col"><div class="p-2 border rounded small">{{ emp.full_name }}</div></div>
+                            {% empty %}<p class="text-muted">No one on leave today.</p>{% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

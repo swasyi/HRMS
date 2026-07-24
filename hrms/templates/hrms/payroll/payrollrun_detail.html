@@ -1,0 +1,97 @@
+{% extends "hrms/base.html" %}
+{% load hrms_extras %}
+{% block title %}Payroll Summary{% endblock %}
+{% block page_title %}Payroll Summary — {{ run.month|month_name }} {{ run.year }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+  <div>
+    <span class="text-muted">{{ run.company }}</span>
+    <span class="badge ms-2 {% if run.status == 'completed' %}text-bg-success{% elif run.status == 'paid' %}text-bg-info{% else %}text-bg-secondary{% endif %}">
+      {{ run.get_status_display }}
+    </span>
+    {% if run.payroll_date %}<span class="text-muted small ms-2">Processed {{ run.payroll_date }}</span>{% endif %}
+  </div>
+  <a href="{% url 'hrms:payroll_process' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-repeat"></i> Re-run / Run Another Period
+  </a>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="label">Total Net Payable</div>
+      <div class="value">₹{{ totals.total_net|floatformat:2 }}</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-4">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="label">Total Earnings</div>
+      <div class="value">₹{{ totals.total_earnings|floatformat:2 }}</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-4">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="label">Total Deductions</div>
+      <div class="value">₹{{ totals.total_deductions|floatformat:2 }}</div>
+    </div></div>
+  </div>
+</div>
+
+<div class="card">
+<div class="table-responsive">
+    <table class="table table-bordered table-hover align-middle shadow-sm">
+        <thead class="table-dark">
+            <tr>
+                <th>Employee & Designation</th>
+                <th class="text-center">Daily Wage</th>
+                <th class="text-center">P / HD</th>
+                <th class="text-center">Sun / Hol</th>
+                <th class="text-center">Paid L / LWP</th>
+                <th class="bg-primary text-white">Earned Wage</th>
+                <th>Extras (OT)</th>
+                <th class="text-danger">Penalty</th>
+                <th>Loan / Bal</th>
+                <th class="bg-success text-white">Net Payable</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for slip in payslips %}
+            <tr>
+                <td>
+                    <a href="{% url 'hrms:employee_punch_report' slip.employee.id run.month run.year %}" class="fw-bold text-decoration-none">
+                        {{ slip.employee.full_name }}
+                    </a><br>
+                    <small class="text-muted">{{ slip.employee.designation.title }}</small>
+                </td>
+                <td class="text-center">₹{{ slip.daily_wage|floatformat:0 }}</td>
+                <td class="text-center">
+                    <span class="badge bg-success">{{ slip.full_days }}</span> /
+                    <span class="badge bg-warning">{{ slip.half_days }}</span>
+                </td>
+                <td class="text-center">{{ slip.off_days }}</td> <!-- Sunday + Holidays -->
+                <td class="text-center">
+                    <span class="text-success">{{ slip.paid_leave_days }}</span> /
+                    <span class="text-danger fw-bold">{{ slip.absent_days }}</span>
+                </td>
+                <td class="fw-bold">₹{{ slip.earned_wages }}</td>
+                <td>₹{{ slip.extra_earning }}</td>
+                <td class="text-danger">-₹{{ slip.penalty_deduction }}</td>
+                <td>
+                    ₹{{ slip.loan_deduction }}<br>
+                    <small class="text-muted">Rem: ₹{{ slip.employee.loans.first.remaining_balance }}</small>
+                </td>
+                <td class="table-success fw-bolder">₹{{ slip.net_pay }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</div>
+
+<p class="text-muted small mt-3">
+  "Salary" = fixed monthly gross (Basic + HRA + Special Allowance), excluding one-off Extras.
+  "Absent" is net of weekly-offs, holidays, comp-offs, and approved paid leave — see the
+  <a href="#" data-bs-toggle="tooltip" title="Off-days/holidays not worked are paid automatically and don't count as absent.">calculation note</a>.
+</p>
+{% endblock %}

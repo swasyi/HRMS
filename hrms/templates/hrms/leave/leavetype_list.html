@@ -1,0 +1,39 @@
+{% extends "hrms/base.html" %}
+{% block title %}Leave Types{% endblock %}
+{% block page_title %}Leave Types{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-end mb-3">
+  <a href="{% url 'hrms:leavetype_add' %}" class="btn btn-sm text-white" style="background:var(--accent);">
+    <i class="bi bi-plus-lg"></i> Add Leave Type
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr><th>Name</th><th>Code</th><th>Company</th><th>Days/Year</th><th>Paid</th><th>Approval</th><th class="text-end">Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for lt in leave_types %}
+        <tr>
+          <td>{{ lt.name }}</td>
+          <td><code>{{ lt.code }}</code></td>
+          <td>{{ lt.company }}</td>
+          <td>{{ lt.days_per_year }}</td>
+          <td>{% if lt.is_paid %}<span class="badge text-bg-success">Paid</span>{% else %}<span class="badge text-bg-secondary">Unpaid</span>{% endif %}</td>
+          <td>{% if lt.requires_approval %}Required{% else %}Auto{% endif %}</td>
+          <td class="text-end">
+            <a href="{% url 'hrms:leavetype_edit' lt.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
+            <a href="{% url 'hrms:leavetype_delete' lt.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="text-muted text-center py-4">No leave types yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

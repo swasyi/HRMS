@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'quotations',
     'inventory',
     'customer_dashboard',
+    'hrms',
     'crispy_forms',
     'crispy_bootstrap5',
     'django.contrib.admin',
@@ -86,10 +87,16 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'hrms.context_processors.hrms_role',  # add this
+
             ],
         },
     },
 ]
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'   # required: resumes, documents, policy files use FileField/ImageField
+
+
 
 WSGI_APPLICATION = 'merger.wsgi.application'
 
@@ -162,7 +169,7 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 
 
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 EMAIL_HOST = "email-smtp.ap-south-1.amazonaws.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True

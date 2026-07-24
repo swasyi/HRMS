@@ -1,0 +1,235 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}HRMS{% endblock %} · Oblu HRMS</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'hrms/css/style.css' %}">
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+<div class="d-flex hrms-shell">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="hrms-sidebar d-flex flex-column" id="hrmsSidebar">
+    <div class="hrms-brand d-flex align-items-center gap-2 px-3 py-3 border-bottom border-secondary-subtle">
+      <div class="mark">HR</div>
+      <div>
+        <div class="name">Oblu HRMS</div>
+        <div class="role-pill">
+          {% if hrms_role == ROLE_SUPERADMIN %}Super Admin
+          {% elif hrms_role == ROLE_HR %}HR / Manager
+          {% else %}Employee{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <nav class="hrms-nav flex-grow-1 px-2 py-2">
+      <ul class="nav flex-column">
+
+        <li class="nav-item">
+          <a class="nav-link hrms-toplink {% if active_group == 'dashboard' %}active{% endif %}"
+             href="{% url 'hrms:dashboard' %}">
+            <i class="bi bi-grid-1x2-fill"></i> Dashboard
+          </a>
+        </li>
+
+        {% if hrms_is_hr %}
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'organisation' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navOrganisation" role="button"
+             aria-expanded="{% if active_group == 'organisation' %}true{% else %}false{% endif %}">
+            <i class="bi bi-building"></i> Organisation <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'organisation' %}show{% endif %}" id="navOrganisation">
+            <ul class="nav flex-column hrms-sublist">
+              <li><a href="{% url 'hrms:company_list' %}" class="{% if active_item == 'company' %}current{% endif %}">Company Profile</a></li>
+              <li><a href="{% url 'hrms:department_list' %}" class="{% if active_item == 'department' %}current{% endif %}">Departments</a></li>
+              <li><a href="{% url 'hrms:designation_list' %}" class="{% if active_item == 'designation' %}current{% endif %}">Designations</a></li>
+            </ul>
+          </div>
+        </li>
+        {% endif %}
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'employee' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navEmployee" role="button"
+             aria-expanded="{% if active_group == 'employee' %}true{% else %}false{% endif %}">
+            <i class="bi bi-person-badge"></i> Employee <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'employee' %}show{% endif %}" id="navEmployee">
+            <ul class="nav flex-column hrms-sublist">
+              {% if hrms_is_hr %}
+                <li><a href="{% url 'hrms:employee_list' %}" class="{% if active_item == 'employee_list' %}current{% endif %}">Directory</a></li>
+                <li><a href="{% url 'hrms:employee_add' %}" class="{% if active_item == 'employee_add' %}current{% endif %}">Add Employee</a></li>
+              {% else %}
+                <li><a href="{% url 'hrms:my_profile' %}" class="{% if active_item == 'my_profile' %}current{% endif %}">My Profile</a></li>
+                <li><a href="{% url 'hrms:my_documents' %}" class="{% if active_item == 'my_documents' %}current{% endif %}">My Documents</a></li>
+              {% endif %}
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'hiring' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navHiring" role="button"
+             aria-expanded="{% if active_group == 'hiring' %}true{% else %}false{% endif %}">
+            <i class="bi bi-briefcase"></i> Hiring <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'hiring' %}show{% endif %}" id="navHiring">
+            <ul class="nav flex-column hrms-sublist">
+              {% if hrms_is_hr %}
+              <li><a href="{% url 'hrms:jobposting_list' %}" class="{% if active_item == 'jobposting' %}current{% endif %}">Job Postings</a></li>
+              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}">Candidates</a></li>
+              <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}">Applications</a></li>
+              <li><a href="{% url 'hrms:interview_list' %}" class="{% if active_item == 'interview' %}current{% endif %}">All Interviews</a></li>
+              {% endif %}
+              <li><a href="{% url 'hrms:my_interviews' %}" class="{% if active_item == 'my_interviews' %}current{% endif %}">My Interviews (Interviewer)</a></li>
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'attendance' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navAttendance" role="button"
+             aria-expanded="{% if active_group == 'attendance' %}true{% else %}false{% endif %}">
+            <i class="bi bi-clock-history"></i> Attendance <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'attendance' %}show{% endif %}" id="navAttendance">
+            <ul class="nav flex-column hrms-sublist">
+              {% if hrms_is_hr %}
+                <li><a href="{% url 'hrms:attendance_records' %}" class="{% if active_item == 'attendance_records' %}current{% endif %}">All Records</a></li>
+                <li><a href="{% url 'hrms:attendance_policy' %}" class="{% if active_item == 'attendance_policy' %}current{% endif %}">Policy Settings</a></li>
+              {% else %}
+                <li><a href="{% url 'hrms:my_attendance' %}" class="{% if active_item == 'my_attendance' %}current{% endif %}">My Attendance</a></li>
+              {% endif %}
+              <li><a href="{% url 'hrms:holiday_list' %}" class="{% if active_item == 'holiday' %}current{% endif %}">Holiday Calendar</a></li>
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'leave' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navLeave" role="button"
+             aria-expanded="{% if active_group == 'leave' %}true{% else %}false{% endif %}">
+            <i class="bi bi-calendar2-week"></i> Leave <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'leave' %}show{% endif %}" id="navLeave">
+            <ul class="nav flex-column hrms-sublist">
+              <li><a href="{% url 'hrms:my_leave' %}" class="{% if active_item == 'my_leave' %}current{% endif %}">{% if hrms_is_hr %}Leave Applications{% else %}Apply / My Leave{% endif %}</a></li>
+              <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>
+              {% if hrms_is_hr %}
+                <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
+              {% endif %}
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'payroll' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navPayroll" role="button"
+             aria-expanded="{% if active_group == 'payroll' %}true{% else %}false{% endif %}">
+            <i class="bi bi-cash-coin"></i> Payroll <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'payroll' %}show{% endif %}" id="navPayroll">
+            <ul class="nav flex-column hrms-sublist">
+              {% if hrms_is_hr %}
+                <li><a href="{% url 'hrms:salarystructure_list' %}" class="{% if active_item == 'salarystructure' %}current{% endif %}">Salary Structures</a></li>
+                <li><a href="{% url 'hrms:employee_salary_list' %}" class="{% if active_item == 'employee_salary' %}current{% endif %}">Employee Salaries</a></li>
+                <li><a href="{% url 'hrms:loan_list' %}" class="{% if active_item == 'loan' %}current{% endif %}">Loans &amp; Advances</a></li>
+                <li><a href="{% url 'hrms:extra_list' %}" class="{% if active_item == 'extra' %}current{% endif %}">Incentives / Extras</a></li>
+                <li><a href="{% url 'hrms:payrollrun_list' %}" class="{% if active_item == 'payrollrun' %}current{% endif %}">Payroll Runs</a></li>
+              {% endif %}
+              <li><a href="{% url 'hrms:my_payslips' %}" class="{% if active_item == 'my_payslips' %}current{% endif %}">{% if hrms_is_hr %}All Payslips{% else %}My Payslips{% endif %}</a></li>
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'policy' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navPolicy" role="button"
+             aria-expanded="{% if active_group == 'policy' %}true{% else %}false{% endif %}">
+            <i class="bi bi-file-earmark-text"></i> Policies &amp; Notices <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'policy' %}show{% endif %}" id="navPolicy">
+            <ul class="nav flex-column hrms-sublist">
+              <li><a href="{% url 'hrms:policy_list' %}" class="{% if active_item == 'policy' %}current{% endif %}">Policies</a></li>
+              <li><a href="{% url 'hrms:notice_list' %}" class="{% if active_item == 'notice' %}current{% endif %}">Company Notices</a></li>
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'asset' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navAsset" role="button"
+             aria-expanded="{% if active_group == 'asset' %}true{% else %}false{% endif %}">
+            <i class="bi bi-laptop"></i> Assets <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'asset' %}show{% endif %}" id="navAsset">
+            <ul class="nav flex-column hrms-sublist">
+              <li><a href="{% url 'hrms:asset_list' %}" class="{% if active_item == 'asset' %}current{% endif %}">{% if hrms_is_hr %}All Assets{% else %}My Assets{% endif %}</a></li>
+            </ul>
+          </div>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link hrms-group-toggle {% if active_group == 'performance' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#navPerformance" role="button"
+             aria-expanded="{% if active_group == 'performance' %}true{% else %}false{% endif %}">
+            <i class="bi bi-graph-up-arrow"></i> Performance <i class="bi bi-chevron-right ms-auto chev"></i>
+          </a>
+          <div class="collapse {% if active_group == 'performance' %}show{% endif %}" id="navPerformance">
+            <ul class="nav flex-column hrms-sublist">
+              <li><a href="{% url 'hrms:performance_list' %}" class="{% if active_item == 'performance' %}current{% endif %}">{% if hrms_is_hr %}All Reviews{% else %}My Reviews{% endif %}</a></li>
+            </ul>
+          </div>
+        </li>
+
+      </ul>
+    </nav>
+
+    <div class="hrms-sidebar-footer px-3 py-3 border-top border-secondary-subtle">
+      {% if hrms_role == ROLE_SUPERADMIN %}
+        <a href="/admin/" class="d-block mb-1"><i class="bi bi-gear-fill me-1"></i> Django Admin (Settings)</a>
+      {% endif %}
+      <a href="{% url 'logout' %}"><i class="bi bi-box-arrow-right me-1"></i> Log out</a>
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <div class="hrms-main flex-grow-1 d-flex flex-column">
+    <div class="hrms-topbar d-flex align-items-center justify-content-between px-4">
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-sm btn-light d-md-none" type="button" onclick="document.getElementById('hrmsSidebar').classList.toggle('open')">
+          <i class="bi bi-list"></i>
+        </button>
+        <span class="page-title">{% block page_title %}Dashboard{% endblock %}</span>
+      </div>
+      <div class="user-chip d-flex align-items-center gap-2">
+        <div class="avatar">{{ request.user.username|slice:":2"|upper }}</div>
+        <span>{{ request.user.get_full_name|default:request.user.username }}</span>
+      </div>
+    </div>
+
+    <div class="hrms-content p-4">
+      {% if messages %}
+        {% for message in messages %}
+          <div class="alert {% if message.tags == 'error' %}alert-danger{% elif message.tags == 'warning' %}alert-warning{% else %}alert-{{ message.tags|default:'success' }}{% endif %} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

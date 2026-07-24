@@ -10,6 +10,8 @@ from django.utils import timezone
 class User(AbstractUser):
     is_accountant = models.BooleanField(default=False)
     is_viewer = models.BooleanField(default=True)
+    # HR / Manager Role (Has "Admin" access to HRMS dashboard)
+
     pass
 
 class InventoryItem(models.Model):

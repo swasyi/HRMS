@@ -1,0 +1,76 @@
+{% extends "hrms/base.html" %}
+{% block title %}{% if object %}Edit{% else %}Add{% endif %} Employee{% endblock %}
+{% block page_title %}{% if object %}Edit{% else %}Add{% endif %} Employee{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:760px;">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">{{ form.company.label }}</label>
+          {{ form.company }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.department.label }}</label>
+          {{ form.department }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.designation.label }}</label>
+          {{ form.designation }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.employee_code.label }}</label>
+          {{ form.employee_code }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.first_name.label }}</label>
+          {{ form.first_name }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.last_name.label }}</label>
+          {{ form.last_name }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.email.label }}</label>
+          {{ form.email }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.phone.label }}</label>
+          {{ form.phone }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.gender.label }}</label>
+          {{ form.gender }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.date_of_birth.label }}</label>
+          {{ form.date_of_birth }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.date_of_joining.label }}</label>
+          {{ form.date_of_joining }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.employment_type.label }}</label>
+          {{ form.employment_type }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.status.label }}</label>
+          {{ form.status }}
+        </div>
+      </div>
+
+      {% if form.non_field_errors %}
+        <div class="text-danger small mt-2">{{ form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="mt-4 d-flex gap-2">
+        <button type="submit" class="btn text-white" style="background:var(--accent);">Save</button>
+        <a href="{% if object %}{% url 'hrms:employee_detail' object.pk %}{% else %}{% url 'hrms:employee_list' %}{% endif %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

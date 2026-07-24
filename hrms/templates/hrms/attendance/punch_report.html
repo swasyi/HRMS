@@ -1,0 +1,42 @@
+{% extends "hrms/base.html" %}
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h4 class="fw-bold">Attendance Report: {{ target_employee.full_name }}</h4>
+        <span class="badge bg-secondary">{{ month }}/{{ year }}</span>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Date</th>
+                        <th>Punch In</th>
+                        <th>Punch Out</th>
+                        <th>Total Hours</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for day in report %}
+                    <tr class="{% if day.is_weekend %}table-secondary{% elif not day.punch and not day.leave %}table-danger-subtle{% endif %}">
+                        <td>{{ day.date|date:"D, d M" }}</td>
+                        <td>
+                            {% if day.punch %}
+                                {{ day.punch.check_in|time:"H:i" }}
+                            {% elif day.leave %}
+                                <span class="badge bg-info">On Leave</span>
+                            {% else %}
+                                <span class="text-danger">Absent</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ day.punch.check_out|time:"H:i"|default:"—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

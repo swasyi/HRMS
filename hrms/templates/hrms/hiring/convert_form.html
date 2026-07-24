@@ -1,0 +1,30 @@
+{% extends "hrms/base.html" %}
+{% block title %}Convert to Employee{% endblock %}
+{% block page_title %}Convert {{ offer.application.candidate }} to Employee{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:520px;">
+  <div class="card-body">
+    <p class="text-muted small">
+      This creates an Employee record for {{ offer.application.candidate }} and seeds an initial
+      salary using the offered CTC (₹{{ offer.ctc_offered }}). You can complete the Basic/HRA/etc
+      breakup afterward from Employee Salaries.
+    </p>
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="mb-3">
+          <label class="form-label">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn text-white" style="background:var(--accent);">Onboard Employee</button>
+        <a href="{% url 'hrms:application_detail' offer.application.pk %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

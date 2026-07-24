@@ -1,0 +1,62 @@
+{% extends "hrms/base.html" %}
+{% block title %}My Dashboard{% endblock %}
+{% block page_title %}Welcome{% if employee %}, {{ employee.first_name }}{% endif %}{% endblock %}
+
+{% block content %}
+{% if not employee %}
+<div class="alert alert-warning">Your login isn't linked to an employee record yet. Contact HR to get set up.</div>
+{% else %}
+<div class="row g-3 mb-4">
+  {% for bal in leave_balances %}
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="label">{{ bal.leave_type.name }}</div>
+      <div class="value">{{ bal.available }}</div>
+      <div class="sub">of {{ bal.allocated }} days available</div>
+    </div></div>
+  </div>
+  {% empty %}
+  <div class="col-12"><div class="card"><div class="card-body text-muted">No leave balances allocated yet.</div></div></div>
+  {% endfor %}
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">Recent Attendance</div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle">
+          <thead class="table-light"><tr><th>Date</th><th>Check In</th><th>Check Out</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for rec in recent_attendance %}
+            <tr>
+              <td>{{ rec.attendance_date }}</td>
+              <td>{{ rec.check_in|time:"H:i"|default:"—" }}</td>
+              <td>{{ rec.check_out|time:"H:i"|default:"—" }}</td>
+              <td><span class="badge text-bg-secondary">{{ rec.get_status_display }}</span></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="text-muted">No attendance recorded yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">Company Notices</div>
+      <div class="card-body">
+        {% for n in recent_notices %}
+          <p class="mb-2"><strong>{{ n.title }}</strong><br>
+          <span class="text-muted small">{{ n.notice_date }}</span></p>
+        {% empty %}
+          <p class="text-muted mb-0">No active notices.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

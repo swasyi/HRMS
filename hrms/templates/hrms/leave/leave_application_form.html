@@ -1,0 +1,27 @@
+{% extends "hrms/base.html" %}
+{% block title %}Apply for Leave{% endblock %}
+{% block page_title %}Apply for Leave{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:560px;">
+  <div class="card-body">
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+    {% endif %}
+    <form method="post">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="mb-3">
+          <label class="form-label">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn text-white" style="background:var(--accent);">Submit Application</button>
+        <a href="{% url 'hrms:my_leave' %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

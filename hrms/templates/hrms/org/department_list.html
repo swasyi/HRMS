@@ -1,0 +1,42 @@
+{% extends "hrms/base.html" %}
+{% block title %}Departments{% endblock %}
+{% block page_title %}Departments{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-end mb-3">
+  <a href="{% url 'hrms:department_add' %}" class="btn btn-sm text-white" style="background:var(--accent);">
+    <i class="bi bi-plus-lg"></i> Add Department
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light"><tr><th>Name</th><th>Company</th><th>Description</th><th class="text-end">Actions</th></tr></thead>
+      <tbody>
+        {% for dept in departments %}
+        <tr>
+          <td>{{ dept.name }}</td>
+          <td>{{ dept.company }}</td>
+          <td class="text-muted">{{ dept.description|truncatechars:60|default:"—" }}</td>
+          <td class="text-end">
+            <a href="{% url 'hrms:department_edit' dept.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
+            <a href="{% url 'hrms:department_delete' dept.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="text-muted text-center py-4">No departments yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if is_paginated %}
+<nav class="mt-3"><ul class="pagination pagination-sm">
+  {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>{% endif %}
+  <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+  {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+</ul></nav>
+{% endif %}
+{% endblock %}

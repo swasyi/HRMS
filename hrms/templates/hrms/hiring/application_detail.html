@@ -1,0 +1,173 @@
+{% extends "hrms/base.html" %}
+{% block title %}{{ application.candidate }} — {{ application.job_posting.title }}{% endblock %}
+{% block page_title %}{{ application.candidate }} → {{ application.job_posting.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    <span class="badge fs-6 {% if application.status == 'hired' %}text-bg-success{% elif application.status == 'rejected' %}text-bg-danger{% elif application.status == 'offered' %}text-bg-info{% else %}text-bg-light border{% endif %}">
+      {{ application.get_status_display }}
+    </span>
+    {% if application.is_locked %}
+      <span class="badge text-bg-dark"><i class="bi bi-lock-fill"></i> Locked
+        {% if application.locked_by %}by {{ application.locked_by }}{% endif %}
+        {% if application.locked_at %}on {{ application.locked_at|date:"d M Y H:i" }}{% endif %}
+      </span>
+      {% if hrms_role == ROLE_SUPERADMIN %}
+        <form method="post" action="{% url 'hrms:application_unlock' application.pk %}" class="d-inline">
+          {% csrf_token %}
+          <button class="btn btn-sm btn-outline-dark">Unlock</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  {% if not application.is_locked or hrms_role == ROLE_SUPERADMIN %}
+  <div class="d-flex gap-2 flex-wrap">
+    {% if application.status == 'applied' %}
+      <form method="post" action="{% url 'hrms:application_status' application.pk %}">
+        {% csrf_token %}<input type="hidden" name="status" value="shortlisted">
+        <button class="btn btn-sm btn-outline-primary">Shortlist</button>
+      </form>
+    {% endif %}
+    {% if application.status in 'applied,shortlisted,interviewing' %}
+      <a href="{% url 'hrms:interview_add' application.pk %}" class="btn btn-sm btn-outline-secondary">Schedule Interview</a>
+    {% endif %}
+    {% if application.status in 'shortlisted,interviewing' and not offer %}
+      <a href="{% url 'hrms:offer_create' application.pk %}" class="btn btn-sm text-white" style="background:var(--accent);">
+        <i class="bi bi-envelope-paper"></i> Generate Offer Letter
+      </a>
+    {% endif %}
+    {% if application.status not in 'hired,rejected' %}
+      <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#rejectModal">Reject</button>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="modal fade" id="rejectModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="{% url 'hrms:application_status' application.pk %}">
+        {% csrf_token %}<input type="hidden" name="status" value="rejected">
+        <div class="modal-header">
+          <h6 class="modal-title">Reject {{ application.candidate }}</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label small">Reason (optional, recorded in the audit trail)</label>
+          <textarea name="reason" class="form-control" rows="2"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-danger">Reject</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-5">
+    <div class="card mb-3">
+      <div class="card-header bg-white fw-semibold">Candidate</div>
+      <div class="card-body small">
+        <p class="mb-1"><a href="{% url 'hrms:candidate_detail' application.candidate.pk %}"><strong>{{ application.candidate }}</strong></a></p>
+        <p class="mb-1">{{ application.candidate.email }} · {{ application.candidate.phone|default:"—" }}</p>
+        <p class="mb-1">{{ application.candidate.current_company|default:"—" }} · {{ application.candidate.experience_years }} yrs exp</p>
+        {% if application.candidate.resume %}<p class="mb-0"><a href="{{ application.candidate.resume.url }}" target="_blank">Resume</a></p>{% endif %}
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header bg-white fw-semibold">Job Posting</div>
+      <div class="card-body small">
+        <p class="mb-1"><strong>{{ application.job_posting.title }}</strong></p>
+        <p class="mb-1">{{ application.job_posting.department|default:"—" }} · {{ application.job_posting.get_job_type_display }}</p>
+        <p class="mb-0">{{ application.job_posting.location|default:"—" }}</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">Audit Trail</div>
+      <div class="card-body small" style="max-height:280px; overflow-y:auto;">
+        {% for log in audit_logs %}
+          <div class="mb-2 pb-2 {% if not forloop.last %}border-bottom{% endif %}">
+            <div>{{ log.action }}</div>
+            <div class="text-muted" style="font-size:11.5px;">
+              {{ log.created_at|date:"d M Y H:i" }} — {{ log.performed_by|default:"system" }}
+            </div>
+            {% if log.note %}<div class="text-muted fst-italic" style="font-size:11.5px;">"{{ log.note }}"</div>{% endif %}
+          </div>
+        {% empty %}
+          <p class="text-muted mb-0">No actions logged yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-7">
+    <div class="card mb-3">
+      <div class="card-header bg-white fw-semibold">Interviews</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-light"><tr><th>Round</th><th>Scheduled</th><th>Interviewer</th><th>Mode</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {% for iv in interviews %}
+            <tr>
+              <td>{{ iv.interview_round }}</td>
+              <td>{{ iv.scheduled_on }}</td>
+              <td>{{ iv.interviewer|default:"—" }}</td>
+              <td>{{ iv.get_mode_display }}</td>
+              <td><span class="badge text-bg-light border">{{ iv.get_status_display }}</span></td>
+              <td><a href="{% url 'hrms:interview_edit' iv.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-muted text-center py-3">No interviews scheduled.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">Offer Letter</div>
+      <div class="card-body">
+        {% if offer %}
+          <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+            <div class="small">
+              <p class="mb-1"><strong>CTC Offered:</strong> ₹{{ offer.ctc_offered }}</p>
+              <p class="mb-1"><strong>Offer Date:</strong> {{ offer.offer_date }}</p>
+              <p class="mb-1"><strong>Joining Date:</strong> {{ offer.joining_date|default:"—" }}</p>
+              <p class="mb-0"><strong>Status:</strong>
+                <span class="badge {% if offer.status == 'accepted' %}text-bg-success{% elif offer.status == 'declined' or offer.status == 'expired' %}text-bg-danger{% else %}text-bg-light border{% endif %}">
+                  {{ offer.get_status_display }}
+                </span>
+              </p>
+            </div>
+            <div class="d-flex flex-column gap-2">
+              {% if offer.status == 'draft' %}
+                <form method="post" action="{% url 'hrms:offer_action' offer.pk 'send' %}">{% csrf_token %}
+                  <button class="btn btn-sm btn-outline-secondary w-100">Mark Sent</button></form>
+              {% endif %}
+              {% if offer.status == 'draft' or offer.status == 'sent' %}
+                <form method="post" action="{% url 'hrms:offer_action' offer.pk 'accept' %}">{% csrf_token %}
+                  <button class="btn btn-sm btn-outline-success w-100">Accept</button></form>
+                <form method="post" action="{% url 'hrms:offer_action' offer.pk 'decline' %}">{% csrf_token %}
+                  <button class="btn btn-sm btn-outline-danger w-100">Decline</button></form>
+              {% endif %}
+              {% if offer.status == 'accepted' %}
+                <a href="{% url 'hrms:offer_convert' offer.pk %}" class="btn btn-sm text-white" style="background:var(--accent);">
+                  <i class="bi bi-person-check"></i> Convert to Employee
+                </a>
+              {% endif %}
+            </div>
+          </div>
+        {% else %}
+          <p class="text-muted mb-0">No offer letter yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

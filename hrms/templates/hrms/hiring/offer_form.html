@@ -1,0 +1,25 @@
+{% extends "hrms/base.html" %}
+{% block title %}Generate Offer Letter{% endblock %}
+{% block page_title %}Generate Offer Letter — {{ application.candidate }}{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:520px;">
+  <div class="card-body">
+    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="mb-3">
+          <label class="form-label">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn text-white" style="background:var(--accent);">Create Offer</button>
+        <a href="{% url 'hrms:application_detail' application.pk %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

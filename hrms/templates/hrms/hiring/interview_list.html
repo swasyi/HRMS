@@ -1,0 +1,28 @@
+{% extends "hrms/base.html" %}
+{% block title %}Interviews{% endblock %}
+{% block page_title %}Interviews{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light"><tr><th>Candidate</th><th>Job</th><th>Round</th><th>Scheduled</th><th>Interviewer</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for iv in interviews %}
+        <tr>
+          <td>{{ iv.application.candidate }}</td>
+          <td>{{ iv.application.job_posting.title }}</td>
+          <td>{{ iv.interview_round }}</td>
+          <td>{{ iv.scheduled_on }}</td>
+          <td>{{ iv.interviewer|default:"—" }}</td>
+          <td><span class="badge text-bg-light border">{{ iv.get_status_display }}</span></td>
+          <td><a href="{% url 'hrms:application_detail' iv.application.pk %}" class="btn btn-sm btn-outline-secondary">Open</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="text-muted text-center py-4">No interviews scheduled.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

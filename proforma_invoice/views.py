@@ -2760,6 +2760,8 @@ class ProformaPriceChangeRequestListView(AccountantRequiredMixin, ListView):
     model = ProformaPriceChangeRequest
     template_name = "proforma_invoice/price_change_request_list.html"
     context_object_name = "requests"
+    paginate_by = 50  # <--- ADD THIS LINE
+
 
     def get_queryset(self):
         # Default ordering: Latest first
@@ -2805,7 +2807,11 @@ class ProformaPriceChangeRequestListView(AccountantRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
 
         # Use the already-filtered list from the ListView
-        queryset = self.object_list
+        # queryset = self.object_list
+
+        # instead of the full queryset to keep performance high.
+        queryset = context['page_obj']
+
 
         grouped_data = {}
         for req in queryset:

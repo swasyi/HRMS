@@ -1,0 +1,49 @@
+{% extends "hrms/base.html" %}
+{% block title %}Configure Policy{% endblock %}
+{% block page_title %}Attendance Policy — {{ company.name }}{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:560px;">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">{{ form.work_start_time.label }}</label>
+          {{ form.work_start_time }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">{{ form.work_end_time.label }}</label>
+          {{ form.work_end_time }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">{{ form.grace_window_minutes.label }}</label>
+          {{ form.grace_window_minutes }}
+          <div class="form-text">Minutes after start time still eligible for grace (e.g. 15).</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">{{ form.max_grace_per_month.label }}</label>
+          {{ form.max_grace_per_month }}
+          <div class="form-text">How many late arrivals are forgiven per month (e.g. 3).</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.half_day_threshold_hours.label }}</label>
+          {{ form.half_day_threshold_hours }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.full_day_threshold_hours.label }}</label>
+          {{ form.full_day_threshold_hours }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.overtime_threshold_hours.label }}</label>
+          {{ form.overtime_threshold_hours }}
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button type="submit" class="btn text-white" style="background:var(--accent);">Save</button>
+        <a href="{% url 'hrms:attendance_policy' %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

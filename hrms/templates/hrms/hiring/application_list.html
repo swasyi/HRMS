@@ -1,0 +1,80 @@
+{% extends "hrms/base.html" %}
+{% block content %}
+
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h4>Candidates List
+            {% if current_job_id %}
+                <small class="text-muted">for Job ID #{{ current_job_id }}</small>
+            {% endif %}
+        </h4>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'hrms:application_add' %}" class="btn btn-primary btn-sm">Add Application</a>
+    </div>
+</div>
+
+<!-- FILTER BAR -->
+<div class="card mb-3 bg-light">
+    <div class="card-body">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small">Filter by Job</label>
+                <select name="job" class="form-select form-select-sm">
+                    <option value="">All Jobs</option>
+                    {% for job in jobs %}
+                    <option value="{{ job.id }}" {% if current_job_id == job.id|stringformat:"i" %}selected{% endif %}>
+                        {{ job.title }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small">Filter by Status</label>
+                <select name="status" class="form-select form-select-sm">
+                    <option value="">All Statuses</option>
+                    {% for val, label in statuses %}
+                    <option value="{{ val }}" {% if current_status == val %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-sm btn-dark w-100">Apply Filters</button>
+                <a href="{% url 'hrms:application_list' %}" class="btn btn-link btn-sm w-100 text-decoration-none">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- TABLE -->
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Candidate</th>
+                    <th>Job Title</th>
+                    <th>Applied On</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for app in applications %}
+                <tr>
+                    <td>{{ app.candidate.first_name }} {{ app.candidate.last_name }}</td>
+                    <td>{{ app.job_posting.title }}</td>
+                    <td>{{ app.applied_on }}</td>
+                    <td><span class="badge bg-info text-dark">{{ app.get_status_display }}</span></td>
+                    <td>
+                        <a href="{% url 'hrms:application_detail' app.pk %}" class="btn btn-sm btn-outline-primary">View</a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center py-4">No applications found for these criteria.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,224 @@
+{% extends "hrms/base.html" %}
+
+{% block content %}
+<!-- Font Awesome for better icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<style>
+    .asset-card {
+        border: none;
+        border-radius: 12px;
+        transition: transform 0.2s ease;
+    }
+    .info-label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 600;
+        color: #6c757d;
+        margin-bottom: 4px;
+    }
+    .info-value {
+        font-size: 1rem;
+        font-weight: 500;
+        color: #2d3436;
+    }
+    .status-badge {
+        padding: 6px 12px;
+        border-radius: 30px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .password-box {
+        background-color: #f8f9fa;
+        border: 1px dashed #dee2e6;
+        border-radius: 8px;
+        padding: 12px;
+        position: relative;
+    }
+    .history-table thead {
+        background-color: #f8f9fa;
+    }
+    .history-table th {
+        font-weight: 600;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        color: #495057;
+        border-top: none;
+    }
+    .btn-action {
+        border-radius: 8px;
+        padding: 8px 16px;
+        font-weight: 500;
+        transition: all 0.3s;
+    }
+    .avatar-circle {
+        width: 35px;
+        height: 35px;
+        background: #e9ecef;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        color: #495057;
+    }
+</style>
+
+<div class="container-fluid p-4">
+    <!-- Header Section -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="#" class="text-decoration-none">Assets</a></li>
+                    <li class="breadcrumb-item active">{{ asset.name }}</li>
+                </ol>
+            </nav>
+            <h3 class="fw-bold mb-0 text-dark"><i class="fas fa-laptop me-2"></i>Asset Details</h3>
+        </div>
+
+        <div class="d-flex gap-2">
+            {% if hrms_is_hr %}
+                <a href="{% url 'hrms:asset_edit' asset.pk %}" class="btn btn-light btn-action border">
+                    <i class="fas fa-edit me-1 text-primary"></i> Edit Details
+                </a>
+
+                {% if asset.employee %}
+                <form method="post" action="{% url 'hrms:asset_return' asset.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger btn-action text-white shadow-sm">
+                        <i class="fas fa-undo-alt me-1"></i> Return to Inventory
+                    </button>
+                </form>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- Left Column: Asset Info -->
+        <div class="col-lg-4">
+            <div class="card asset-card shadow-sm">
+                <div class="card-body p-4">
+                    <h5 class="fw-bold mb-4 pb-2 border-bottom">Specifications</h5>
+
+                    <div class="mb-4">
+                        <label class="info-label">Device Name</label>
+                        <div class="info-value">{{ asset.name }}</div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="info-label">Security Credentials</label>
+                        <div class="password-box">
+                            {% if hrms_is_hr or user.is_superuser %}
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <code class="text-danger fw-bold fs-6">{{ asset.device_password|default:"No Password Provided" }}</code>
+                                    <i class="far fa-copy text-muted cursor-pointer" title="Copy Password"></i>
+                                </div>
+                            {% else %}
+                                <div class="text-muted"><i class="fas fa-lock me-2"></i>******** (Encrypted)</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="info-label">Current Availability</label>
+                        <div class="mt-1">
+                            {% if asset.employee %}
+                                <span class="badge bg-soft-info text-info p-2 px-3 border border-info" style="--bs-bg-opacity: .1;">
+                                    <i class="fas fa-user-check me-2"></i>Assigned to {{ asset.employee.full_name }}
+                                </span>
+                            {% else %}
+                                <span class="badge bg-soft-success text-success p-2 px-3 border border-success" style="--bs-bg-opacity: .1;">
+                                    <i class="fas fa-warehouse me-2"></i>In Inventory
+                                </span>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="p-3 bg-light rounded-3">
+                        <div class="d-flex align-items-center">
+                            <div class="avatar-circle me-3">
+                                {{ asset.employee.full_name|slice:":1"|default:"?" }}
+                            </div>
+                            <div>
+                                <small class="text-muted d-block">Current Holder</small>
+                                <span class="fw-bold">{{ asset.employee.full_name|default:"Unassigned" }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Timeline/History -->
+        <div class="col-lg-8">
+            <div class="card asset-card shadow-sm h-100">
+                <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="fw-bold mb-0">Assignment & Usage History</h5>
+                    <span class="badge bg-light text-dark border">{{ history|length }} Records</span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table history-table mb-0 align-middle">
+                            <thead>
+                                <tr>
+                                    <th class="ps-4">Employee</th>
+                                    <th>Handover Date</th>
+                                    <th>Return Date</th>
+                                    <th class="text-center">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for h in history %}
+                                <tr>
+                                    <td class="ps-4">
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-3">
+                                                <div class="fw-bold text-dark">{{ h.employee.full_name }}</div>
+                                                <div class="text-muted small" style="font-size: 0.75rem;">ID: {{ h.employee.employee_code }}</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="text-dark"><i class="far fa-calendar-alt me-2 text-muted"></i>{{ h.assigned_date|date:"d M, Y" }}</div>
+                                    </td>
+                                    <td>
+                                        {% if h.returned_date %}
+                                            <div class="text-dark"><i class="far fa-calendar-check me-2 text-muted"></i>{{ h.returned_date|date:"d M, Y" }}</div>
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-center">
+                                        {% if h.is_still_using %}
+                                            <span class="status-badge bg-primary text-white shadow-sm">
+                                                <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true"></span>
+                                                Active
+                                            </span>
+                                        {% else %}
+                                            <span class="badge rounded-pill bg-light text-success border border-success px-3">
+                                                <i class="fas fa-check-circle me-1"></i> Returned
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="4" class="text-center py-5">
+                                        <img src="https://cdn-icons-png.flaticon.com/512/4076/4076432.png" width="60" class="opacity-25 mb-3" alt="No data">
+                                        <p class="text-muted">No assignment history found for this asset.</p>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
