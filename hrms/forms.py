@@ -1,4 +1,5 @@
 from django import forms
+from django.forms import inlineformset_factory
 
 from . import models as m
 
@@ -195,6 +196,28 @@ class LeaveRejectForm(forms.Form):
         required=False,
     )
 
+from django import forms
+from .models import EmployeeLeaveBalance
+
+class LeaveBalanceForm(forms.ModelForm):
+    class Meta:
+        model = EmployeeLeaveBalance
+        fields = [
+            'bereavement_leave', 'menstrual_leave', 'sick_leave',
+            'earned_leave', 'casual_leave', 'comp_off', 'status'
+        ]
+        widgets = {
+            'status': forms.Select(choices=[('Active', 'Active'), ('Left', 'Left'), ('Terminated', 'Terminated')]),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Add Bootstrap classes to all fields
+        for field in self.fields.values():
+            field.widget.attrs.update({'class': 'form-control form-control-sm'})
+            # Ensure Django doesn't block the save if a field is momentarily empty
+            field.required = False
+
 
 # ---------------------------------------------------------------------------
 # Payroll & Salary Structure
@@ -286,6 +309,8 @@ class ApplicationForm(BootstrapModelForm):
             'cover_letter': forms.Textarea(attrs={'rows': 3}),
         }
 
+
+
 # -------this is mixture of two forms ----
 
 class UnifiedCandidateForm(forms.ModelForm):
@@ -303,27 +328,130 @@ class UnifiedCandidateForm(forms.ModelForm):
         model = m.Candidate
         fields = ['first_name', 'last_name', 'email', 'phone', 'resume', 'current_company', 'experience_years']
 
-class InterviewForm(BootstrapModelForm):
+
+# --- UPDATE: InterviewForm — pipeline stage + scorecard --------------------
+# --- UPDATE: ApplicationForm — add the new ATS metadata fields ------------
+class ApplicationForm(forms.ModelForm):
     class Meta:
-        model = m.Interview
-        fields = ['interview_round', 'scheduled_on', 'interviewer', 'mode', 'feedback', 'status']
+        model = m.Application
+        fields = [
+            'candidate', 'job_posting', 'status', 'source', 'cover_letter',
+            'expected_ctc', 'current_ctc', 'notice_period', 'current_stage',
+        ]
         widgets = {
-            'scheduled_on': forms.DateTimeInput(attrs={'type': 'datetime-local'}),
-            'feedback': forms.Textarea(attrs={'rows': 3}),
+            'cover_letter': forms.Textarea(attrs={'rows': 4}),
         }
-
-
-class OfferLetterForm(forms.Form):
-    """Used by the 'move Candidate to OfferLetter status' action."""
-    offer_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
-    ctc_offered = forms.DecimalField(max_digits=12, decimal_places=2)
-    joining_date = forms.DateField(required=False, widget=forms.DateInput(attrs={'type': 'date'}))
-    expiry_date = forms.DateField(required=False, widget=forms.DateInput(attrs={'type': 'date'}))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            field.widget.attrs.setdefault('class', 'form-control')
+        job = None
+        if self.instance and self.instance.pk:
+            job = self.instance.job_posting
+        elif 'job_posting' in self.data:
+            job = m.JobPosting.objects.filter(pk=self.data.get('job_posting')).first()
+        # Only offer stages that are actually in this job's pipeline
+        if job:
+            self.fields['current_stage'].queryset = m.RecruitmentStage.objects.filter(
+                job_pipelines__job=job).distinct()
+        else:
+            self.fields['current_stage'].queryset = m.RecruitmentStage.objects.none()
+        self.fields['current_stage'].required = False
+
+SCORECARD_CATEGORIES = ['technical', 'communication', 'culture']
+
+
+class InterviewForm(forms.ModelForm):
+    # Individual 1-5 rating widgets that get packed into the `scorecard` JSON
+    # field on save — friendlier for HR than hand-typing JSON.
+    score_technical = forms.IntegerField(min_value=1, max_value=5, required=False, label='Technical (1-5)')
+    score_communication = forms.IntegerField(min_value=1, max_value=5, required=False, label='Communication (1-5)')
+    score_culture = forms.IntegerField(min_value=1, max_value=5, required=False, label='Culture Fit (1-5)')
+
+    class Meta:
+        model = m.Interview
+        fields = [
+            'pipeline_stage', 'interview_round', 'scheduled_on', 'interviewer',
+            'mode', 'feedback', 'status',
+        ]
+        widgets = {
+            'scheduled_on': forms.DateTimeInput(attrs={'type': 'datetime-local'}),
+            'feedback': forms.Textarea(attrs={'rows': 4}),
+        }
+
+    def __init__(self, *args, application=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.application = application or getattr(self.instance, 'application', None)
+        if self.application:
+            self.fields['pipeline_stage'].queryset = m.JobPipeline.objects.filter(
+                job=self.application.job_posting).select_related('stage').order_by('order')
+        self.fields['pipeline_stage'].required = False
+        self.fields['interview_round'].required = False
+
+        if self.instance and self.instance.pk and self.instance.scorecard:
+            self.fields['score_technical'].initial = self.instance.scorecard.get('technical')
+            self.fields['score_communication'].initial = self.instance.scorecard.get('communication')
+            self.fields['score_culture'].initial = self.instance.scorecard.get('culture')
+
+    def clean(self):
+        cleaned = super().clean()
+        if not cleaned.get('pipeline_stage') and not cleaned.get('interview_round'):
+            raise forms.ValidationError('Pick a pipeline stage or enter a free-text interview round.')
+        return cleaned
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        scorecard = {}
+        for key in SCORECARD_CATEGORIES:
+            value = self.cleaned_data.get(f'score_{key}')
+            if value is not None:
+                scorecard[key] = value
+        instance.scorecard = scorecard
+        if commit:
+            instance.save()
+        return instance
+
+
+
+# --- NEW: RecruitmentStage --------------------------------------------------
+class RecruitmentStageForm(forms.ModelForm):
+    class Meta:
+        model = m.RecruitmentStage
+        fields = ['name', 'description', 'is_default']
+        widgets = {'description': forms.Textarea(attrs={'rows': 3})}
+
+
+# --- NEW: JobPipeline — managed as an inline formset against one JobPosting
+JobPipelineFormSet = inlineformset_factory(
+    m.JobPosting, m.JobPipeline,
+    fields=['stage', 'order'],
+    extra=1, can_delete=True,
+)
+
+
+# --- NEW: OfferTemplate -----------------------------------------------------
+class OfferTemplateForm(forms.ModelForm):
+    class Meta:
+        model = m.OfferTemplate
+        fields = ['name', 'body_html', 'is_active']
+        widgets = {'body_html': forms.Textarea(attrs={'rows': 14, 'class': 'font-monospace'})}
+
+
+# --- UPDATE: OfferLetterForm — template picker + editable content ---------
+class OfferLetterForm(forms.ModelForm):
+    class Meta:
+        model = m.OfferLetter
+        fields = ['template', 'offer_date', 'ctc_offered', 'joining_date', 'expiry_date', 'content']
+        widgets = {
+            'offer_date': forms.DateInput(attrs={'type': 'date'}),
+            'joining_date': forms.DateInput(attrs={'type': 'date'}),
+            'expiry_date': forms.DateInput(attrs={'type': 'date'}),
+            'content': forms.Textarea(attrs={'rows': 14}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['template'].queryset = m.OfferTemplate.objects.filter(is_active=True)
+        self.fields['content'].required = False
 
 
 class ConvertToEmployeeForm(forms.Form):

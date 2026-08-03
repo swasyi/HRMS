@@ -124,6 +124,9 @@
               {% if hrms_is_hr %}
                 <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
               {% endif %}
+                      <!-- ADD THIS LINE BELOW -->
+              <li><a href="{% url 'hrms:leave-bank' %}" class="{% if active_item == 'leave_bank' %}current{% endif %}">Leave Bank (Admin)</a></li>
+
             </ul>
           </div>
         </li>

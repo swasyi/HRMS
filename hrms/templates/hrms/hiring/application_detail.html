@@ -25,10 +25,16 @@
   {% if not application.is_locked or hrms_role == ROLE_SUPERADMIN %}
   <div class="d-flex gap-2 flex-wrap">
     {% if application.status == 'applied' %}
-      <form method="post" action="{% url 'hrms:application_status' application.pk %}">
-        {% csrf_token %}<input type="hidden" name="status" value="shortlisted">
-        <button class="btn btn-sm btn-outline-primary">Shortlist</button>
-      </form>
+
+        <form method="post" action="{% url 'hrms:application_status' application.pk %}" class="ms-3 d-inline">
+            {% csrf_token %}
+            <label class="small text-muted me-1">Change to:</label>
+            <select name="status" class="form-select form-select-sm d-inline w-auto" onchange="this.form.submit()">
+                {% for val, label in application.Status.choices %}
+                    <option value="{{ val }}" {% if application.status == val %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </form>
     {% endif %}
     {% if application.status in 'applied,shortlisted,interviewing' %}
       <a href="{% url 'hrms:interview_add' application.pk %}" class="btn btn-sm btn-outline-secondary">Schedule Interview</a>

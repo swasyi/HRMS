@@ -1,25 +1,67 @@
 {% extends "hrms/base.html" %}
 {% block title %}Generate Offer Letter{% endblock %}
-{% block page_title %}Generate Offer Letter — {{ application.candidate }}{% endblock %}
 
 {% block content %}
-<div class="card" style="max-width:520px;">
-  <div class="card-body">
-    {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
-    <form method="post">
-      {% csrf_token %}
-      {% for field in form %}
-        <div class="mb-3">
-          <label class="form-label">{{ field.label }}</label>
-          {{ field }}
-          {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
-        </div>
-      {% endfor %}
-      <div class="d-flex gap-2">
-        <button type="submit" class="btn text-white" style="background:var(--accent);">Create Offer</button>
-        <a href="{% url 'hrms:application_detail' application.pk %}" class="btn btn-outline-secondary">Cancel</a>
-      </div>
-    </form>
+<h4 class="mb-1">Generate Offer Letter</h4>
+<div class="text-muted mb-3">{{ application.candidate }} — {{ application.job_posting.title }}</div>
+
+<form method="post" class="col-lg-8">
+  {% csrf_token %}
+
+  <div class="mb-3">
+    <label class="form-label">Offer Template</label>
+    {{ form.template }}
+    <div class="form-text">Choose a template, then use "Preview" to pull its rendered text into the content box below before you fine-tune it.</div>
   </div>
-</div>
+
+  <div class="row">
+    <div class="col-md-4 mb-3">
+      <label class="form-label">Offer Date</label>
+      {{ form.offer_date }}
+    </div>
+    <div class="col-md-4 mb-3">
+      <label class="form-label">CTC Offered</label>
+      {{ form.ctc_offered }}
+    </div>
+    <div class="col-md-4 mb-3">
+      <label class="form-label">Joining Date</label>
+      {{ form.joining_date }}
+    </div>
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label">Expiry Date</label>
+    {{ form.expiry_date }}
+  </div>
+
+  <div class="mb-3">
+    <div class="d-flex justify-content-between align-items-center">
+      <label class="form-label mb-0">Final Content</label>
+      <button type="button" id="preview-btn" class="btn btn-outline-secondary btn-sm">Preview from Template</button>
+    </div>
+    {{ form.content }}
+    <div class="form-text">This is the exact text/HTML that gets saved to the offer and used to generate the PDF — edit freely.</div>
+  </div>
+
+  {% if form.non_field_errors %}
+    <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <button type="submit" class="btn btn-primary">Save Offer Letter</button>
+  <a href="{% url 'hrms:application_detail' application.pk %}" class="btn btn-link">Cancel</a>
+</form>
+
+<script>
+  // Pulls the selected template's rendered HTML into the content textarea.
+  // Wire the URL pattern name/args up to your actual offertemplate_preview route.
+  document.getElementById('preview-btn').addEventListener('click', function () {
+    var templateId = document.getElementById('{{ form.template.id_for_label }}').value;
+    var ctc = document.getElementById('{{ form.ctc_offered.id_for_label }}').value;
+    if (!templateId) { alert('Pick a template first.'); return; }
+    var url = '/hiring/offer-templates/' + templateId + '/preview/{{ application.pk }}/?ctc_offered=' + encodeURIComponent(ctc || 0);
+    fetch(url).then(function (r) { return r.text(); }).then(function (html) {
+      document.getElementById('{{ form.content.id_for_label }}').value = html;
+    });
+  });
+</script>
 {% endblock %}

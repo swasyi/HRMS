@@ -147,6 +147,90 @@ def compute_attendance_breakdown(employee, year, month):
     }
 
 
+def compute_attendance_breakdown(employee, year, month):
+    """Returns a dict: full_days, half_days, comp_off_days, off_days,
+    paid_leave_days, absent_days, paid_days, total_days_in_month."""
+    total_days_in_month = calendar.monthrange(year, month)[1]
+    period_start = date(year, month, 1)
+    period_end = date(year, month, total_days_in_month)
+
+    holidays = get_company_holidays(employee.company, year, month)
+    # Prefetch records
+    records = {
+        r.attendance_date: r
+        for r in m.AttendanceRecord.objects.filter(
+            employee=employee, attendance_date__year=year, attendance_date__month=month)
+    }
+
+    full_days = Decimal('0')
+    half_days = Decimal('0')
+    comp_off_days = Decimal('0')
+    off_days = Decimal('0')
+    paid_leave_days = Decimal('0')
+    unaccounted_working_days = Decimal('0')
+
+    for day in range(1, total_days_in_month + 1):
+        d = date(year, month, day)
+        is_off_day = (d.weekday() == 6) or (d in holidays)
+        record = records.get(d)
+
+        # 1. Handle Sundays and Holidays
+        if is_off_day:
+            if record and record.check_in:
+                comp_off_days += 1  # Worked on Sunday
+            else:
+                off_days += 1  # Normal Sunday off
+            continue
+
+        # 2. Handle Working Days (Mon-Sat)
+        if record:
+            # CHECK FOR LEAVE FIRST
+            if record.status == m.AttendanceRecord.Status.ON_LEAVE:
+                # We check the actual leave application to see if it was PAID
+                # (Remarks contains the code like 'SL', 'CL')
+                if record.remarks != "LWP" and employee.employment_type != 'intern':
+                    paid_leave_days += 1
+                else:
+                    unaccounted_working_days += 1  # LWP is treated as absent
+
+            # CHECK FOR PUNCHES (Includes Graces)
+            elif record.status == m.AttendanceRecord.Status.PRESENT:
+                full_days += 1  # This now correctly counts G1, G2, G3
+
+            elif record.status == m.AttendanceRecord.Status.HALF_DAY:
+                half_days += 1
+
+            else:
+                unaccounted_working_days += 1  # Absent
+        else:
+            # No Record in Attendance Table -> Check LeaveApplication directly as fallback
+            leave = m.LeaveApplication.objects.filter(
+                employee=employee, status='approved',
+                start_date__lte=d, end_date__gte=d
+            ).first()
+
+            if leave:
+                if leave.leave_type.is_paid and employee.employment_type != 'intern':
+                    paid_leave_days += 1
+                else:
+                    unaccounted_working_days += 1
+            else:
+                unaccounted_working_days += 1
+
+    absent_days = unaccounted_working_days
+    paid_days = full_days + (half_days * Decimal('0.5')) + comp_off_days + off_days + paid_leave_days
+
+    return {
+        'full_days': full_days,
+        'half_days': half_days,
+        'comp_off_days': comp_off_days,
+        'off_days': off_days,
+        'paid_leave_days': paid_leave_days,
+        'absent_days': absent_days,
+        'paid_days': paid_days,
+        'total_days_in_month': total_days_in_month,
+    }
+
 def get_loan_deduction(employee):
     """Sums this month's installment across all active loans (capped at each
     loan's remaining balance) and returns (total_deduction, [loan_objs_touched])."""

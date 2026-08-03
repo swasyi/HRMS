@@ -49,29 +49,80 @@
 <!-- TABLE -->
 <div class="card">
     <div class="table-responsive">
-        <table class="table table-hover align-middle">
+<!-- Table inside your Applications List template -->
+        <table class="table align-middle">
             <thead>
                 <tr>
                     <th>Candidate</th>
                     <th>Job Title</th>
                     <th>Applied On</th>
-                    <th>Status</th>
+                    <th>Status (Quick Change)</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for app in applications %}
                 <tr>
-                    <td>{{ app.candidate.first_name }} {{ app.candidate.last_name }}</td>
-                    <td>{{ app.job_posting.title }}</td>
-                    <td>{{ app.applied_on }}</td>
-                    <td><span class="badge bg-info text-dark">{{ app.get_status_display }}</span></td>
+                    <!-- 1. Candidate Name linked to Detail Page -->
                     <td>
-                        <a href="{% url 'hrms:application_detail' app.pk %}" class="btn btn-sm btn-outline-primary">View</a>
+                        <a href="{% url 'hrms:application_detail' app.pk %}" class="fw-bold text-decoration-none">
+                            {{ app.candidate.first_name }} {{ app.candidate.last_name }}
+                        </a>
                     </td>
+
+                    <td>{{ app.job_posting.title }}</td>
+                    <td>{{ app.applied_at|date:"F d, Y" }}</td>
+
+                    <!-- 2. Status Dropdown (Change on the fly) -->
+<!-- Dashboard Template: Status (Quick Change) Column -->
+                    <td>
+                        <form method="post" action="{% url 'hrms:application_status' app.pk %}" class="d-inline">
+                            {% csrf_token %}
+                            <!-- We keep the name as 'status' -->
+                            <select name="status" class="form-select form-select-sm w-auto d-inline shadow-sm"
+                                    onchange="this.form.submit()"
+                                    style="border-color: #dee2e6;">
+                                {% for val, label in app.Status.choices %}
+                                    <option value="{{ val }}" {% if app.status == val %}selected{% endif %}>
+                                        {{ label }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+
+                            <!-- FIX: This hidden input tells your view that this is a valid update action -->
+                            <input type="hidden" name="action" value="update_status">
+                        </form>
+                    </td>
+                    <!-- 3. Action Buttons connected to Interview Form -->
+                    <!-- Dashboard Template: Actions Column -->
+                    <td class="text-nowrap">
+                        <div class="btn-group">
+                            <!-- Direct link to detail page -->
+                            <a href="{% url 'hrms:application_detail' app.pk %}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-eye"></i> View
+                            </a>
+
+                            <!-- Direct link to Interview Form -->
+                            {% if app.status != 'rejected' and app.status != 'hired' %}
+                                <a href="{% url 'hrms:interview_add' app.pk %}" class="btn btn-sm btn-outline-secondary">
+                                    <i class="bi bi-calendar-plus"></i> + Schedule
+                                </a>
+                            {% endif %}
+                        </div>
+
+                        <!-- Optional: Show scheduled info right here if it exists -->
+                        {% with last_iv=app.interviews.last %}
+                            {% if last_iv %}
+                                <div class="mt-1">
+                                    <span class="badge text-bg-info" style="font-size: 10px;">
+                                        Next: {{ last_iv.scheduled_on|date:"d M" }}
+                                    </span>
+                                </div>
+                            {% endif %}
+                        {% endwith %}
+                    </td>
+
                 </tr>
-                {% empty %}
-                <tr><td colspan="5" class="text-center py-4">No applications found for these criteria.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

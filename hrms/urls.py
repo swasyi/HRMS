@@ -64,6 +64,23 @@ urlpatterns = [
     path('hiring/offers/<int:pk>/<str:action>/', views.OfferLetterActionView.as_view(), name='offer_action'),
     path('hiring/offers/<int:pk>/convert/', views.ConvertToEmployeeView.as_view(), name='offer_convert'),
 
+    # Recruitment stages (reusable stage library)
+    path('hiring/stages/', views.RecruitmentStageListView.as_view(), name='recruitmentstage_list'),
+    path('hiring/stages/add/', views.RecruitmentStageCreateView.as_view(), name='recruitmentstage_add'),
+    path('hiring/stages/<int:pk>/edit/', views.RecruitmentStageUpdateView.as_view(), name='recruitmentstage_edit'),
+    path('hiring/stages/<int:pk>/delete/', views.RecruitmentStageDeleteView.as_view(), name='recruitmentstage_delete'),
+
+    # Per-job pipeline management
+    path('hiring/jobs/<int:pk>/pipeline/', views.JobPipelineManageView.as_view(), name='jobpipeline_manage'),
+
+    # Offer templates
+    path('hiring/offer-templates/', views.OfferTemplateListView.as_view(), name='offertemplate_list'),
+    path('hiring/offer-templates/add/', views.OfferTemplateCreateView.as_view(), name='offertemplate_add'),
+    path('hiring/offer-templates/<int:pk>/edit/', views.OfferTemplateUpdateView.as_view(), name='offertemplate_edit'),
+    path('hiring/offer-templates/<int:pk>/delete/', views.OfferTemplateDeleteView.as_view(), name='offertemplate_delete'),
+    path('hiring/offer-templates/<int:template_pk>/preview/<int:application_pk>/',
+         views.OfferTemplatePreviewView.as_view(), name='offertemplate_preview'),
+
     # --- Attendance ---
 
     path('attendance/records/', views.AttendanceRecordListView.as_view(), name='attendance_records'),
@@ -96,6 +113,7 @@ urlpatterns = [
     path('leave/types/add/', views.LeaveTypeCreateView.as_view(), name='leavetype_add'),
     path('leave/types/<int:pk>/edit/', views.LeaveTypeUpdateView.as_view(), name='leavetype_edit'),
     path('leave/types/<int:pk>/delete/', views.LeaveTypeDeleteView.as_view(), name='leavetype_delete'),
+    path('leave-bank/', views.LeaveBankListView.as_view(), name='leave-bank'),
 
     # --- Payroll ---
     path('payroll/structures/', views.SalaryStructureListView.as_view(), name='salarystructure_list'),

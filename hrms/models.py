@@ -185,6 +185,26 @@ class EmployeeNotice(TimeStampedModel):
 # ---------------------------------------------------------------------------
 # 3. HIRING / RECRUITMENT PIPELINE
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 3. HIRING / RECRUITMENT PIPELINE
+# ---------------------------------------------------------------------------
+class RecruitmentStage(TimeStampedModel):
+    """Reusable stage definitions (e.g. 'Technical Round', 'Culture Fit').
+    Stages are composed, in whatever order a job needs, via JobPipeline —
+    they are not tied to any one job posting."""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+    is_default = models.BooleanField(
+        default=False,
+        help_text='If checked, this stage is auto-added to every new JobPipeline.')
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class JobPosting(TimeStampedModel):
     class JobType(models.TextChoices):
         FULL_TIME = 'full_time', 'Full Time'
@@ -192,9 +212,9 @@ class JobPosting(TimeStampedModel):
         CONTRACT = 'contract', 'Contract'
         INTERN = 'intern', 'Intern'
 
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='job_postings')
-    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True)
-    designation = models.ForeignKey(Designation, on_delete=models.SET_NULL, null=True, blank=True)
+    company = models.ForeignKey('Company', on_delete=models.CASCADE, related_name='job_postings')
+    department = models.ForeignKey('Department', on_delete=models.SET_NULL, null=True, blank=True)
+    designation = models.ForeignKey('Designation', on_delete=models.SET_NULL, null=True, blank=True)
     title = models.CharField(max_length=200)
     job_type = models.CharField(max_length=20, choices=JobType.choices, default=JobType.FULL_TIME)
     location = models.CharField(max_length=150, blank=True)
@@ -206,6 +226,27 @@ class JobPosting(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+    def ordered_pipeline(self):
+        """Convenience accessor used by templates/views: this job's stages,
+        in hiring order."""
+        return self.pipeline_stages.select_related('stage').order_by('order')
+
+
+class JobPipeline(TimeStampedModel):
+    """The ordered sequence of RecruitmentStages for ONE specific JobPosting —
+    each job can define its own unique hiring flow (e.g. a Sales role might
+    skip 'Technical Round' entirely)."""
+    job = models.ForeignKey(JobPosting, on_delete=models.CASCADE, related_name='pipeline_stages')
+    stage = models.ForeignKey(RecruitmentStage, on_delete=models.CASCADE, related_name='job_pipelines')
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = ('job', 'stage')
+        ordering = ['job', 'order']
+
+    def __str__(self):
+        return f'{self.job} — [{self.order}] {self.stage}'
 
 
 class Candidate(TimeStampedModel):
@@ -230,12 +271,27 @@ class Application(TimeStampedModel):
         REJECTED = 'rejected', 'Rejected'
         HIRED = 'hired', 'Hired'
 
+    class Source(models.TextChoices):
+        LINKEDIN = 'linkedin', 'LinkedIn'
+        INDEED = 'indeed', 'Indeed'
+        REFERRAL = 'referral', 'Referral'
+        CAREER_SITE = 'career_site', 'Career Site'
+
     candidate = models.ForeignKey(Candidate, on_delete=models.CASCADE, related_name='applications')
     job_posting = models.ForeignKey(JobPosting, on_delete=models.CASCADE, related_name='applications')
     applied_on = models.DateField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.APPLIED)
-    source = models.CharField(max_length=100, blank=True)
+    source = models.CharField(max_length=20, choices=Source.choices, blank=True)
     cover_letter = models.TextField(blank=True)
+
+    # --- ATS metadata ---
+    expected_ctc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    current_ctc = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    notice_period = models.PositiveIntegerField(default=0, help_text='Notice period, in days.')
+    current_stage = models.ForeignKey(RecruitmentStage, on_delete=models.SET_NULL, null=True, blank=True,
+                                       related_name='applications',
+                                       help_text="Where this candidate currently sits in the job's pipeline.")
+    progress_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
@@ -256,10 +312,24 @@ class Application(TimeStampedModel):
                 action=f"Status changed to {self.get_status_display()}",
                 note="Automatic system log"
             )
-            # --- Locking / confirmed-outcome protection ---
+
+    def recompute_progress(self):
+        """Sets progress_percentage from current_stage's position in the
+        job's pipeline. Call after changing current_stage; not automatic on
+        save() so bulk updates don't pay the query cost."""
+        total = self.job_posting.pipeline_stages.count()
+        if not total or not self.current_stage_id:
+            return
+        position = self.job_posting.pipeline_stages.filter(
+            order__lte=self.job_posting.pipeline_stages.get(stage_id=self.current_stage_id).order
+        ).count()
+        self.progress_percentage = round((position / total) * 100, 2)
+        self.save(update_fields=['progress_percentage', 'updated_at'])
+
+    # --- Locking / confirmed-outcome protection ---
     is_locked = models.BooleanField(
         default=False,
-        help_text='Set autoAssetCategorymatically once the outcome is confirmed (Hired/Rejected). '
+        help_text='Set automatically once the outcome is confirmed (Hired/Rejected). '
                    'A locked application can only be modified by a Super Admin.')
     locked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name='locked_applications')
@@ -270,7 +340,6 @@ class Application(TimeStampedModel):
 
     def __str__(self):
         return f'{self.candidate} -> {self.job_posting}'
-
 
 
 class RecruitmentAuditLog(TimeStampedModel):
@@ -304,16 +373,64 @@ class Interview(TimeStampedModel):
         NO_SHOW = 'no_show', 'No Show'
 
     application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name='interviews')
-    interview_round = models.CharField(max_length=100)
+    pipeline_stage = models.ForeignKey(
+        JobPipeline, on_delete=models.SET_NULL, null=True, blank=True, related_name='interviews',
+        help_text="Which stage of the job's own pipeline this interview covers.")
+    interview_round = models.CharField(
+        max_length=100, blank=True,
+        help_text='Free-text label — kept for cases with no matching JobPipeline stage.')
     scheduled_on = models.DateTimeField()
-    interviewer = models.ForeignKey(Employee, on_delete=models.SET_NULL, null=True, blank=True,
+    interviewer = models.ForeignKey('Employee', on_delete=models.SET_NULL, null=True, blank=True,
                                      related_name='interviews_conducted')
     mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.ONLINE)
     feedback = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
+    scorecard = models.JSONField(
+        default=dict, blank=True,
+        help_text='Structured ratings, e.g. {"technical": 4, "communication": 5, "culture": 3}')
+
+    def average_score(self):
+        """Handy for templates: mean of whatever numeric ratings are in
+        scorecard, or None if it's empty."""
+        values = [v for v in self.scorecard.values() if isinstance(v, (int, float))]
+        return round(sum(values) / len(values), 2) if values else None
 
     def __str__(self):
-        return f'{self.application} - {self.interview_round}'
+        label = self.pipeline_stage.stage.name if self.pipeline_stage_id else (self.interview_round or 'Interview')
+        return f'{self.application} - {label}'
+
+
+class OfferTemplate(TimeStampedModel):
+    """Reusable HTML offer-letter templates with {{ placeholder }} tokens
+    that OfferLetter.content is generated from."""
+    name = models.CharField(max_length=150)
+    body_html = models.TextField(
+        help_text='HTML body. Supported placeholders: {{candidate_name}}, {{job_title}}, '
+                   '{{company_name}}, {{ctc_offered}}, {{offer_date}}, {{joining_date}}.')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def render(self, application, ctc_offered, offer_date, joining_date=None):
+        """Simple, dependency-free token substitution. Swap for a proper
+        template engine (Jinja2 / Django Template) later if you need
+        loops/conditionals in offer bodies."""
+        tokens = {
+            '{{candidate_name}}': str(application.candidate),
+            '{{job_title}}': application.job_posting.title,
+            '{{company_name}}': str(application.job_posting.company),
+            '{{ctc_offered}}': str(ctc_offered),
+            '{{offer_date}}': offer_date.strftime('%d %b %Y') if offer_date else '',
+            '{{joining_date}}': joining_date.strftime('%d %b %Y') if joining_date else 'TBD',
+        }
+        html = self.body_html
+        for token, value in tokens.items():
+            html = html.replace(token, value)
+        return html
 
 
 class OfferLetter(TimeStampedModel):
@@ -325,15 +442,20 @@ class OfferLetter(TimeStampedModel):
         EXPIRED = 'expired', 'Expired'
 
     application = models.OneToOneField(Application, on_delete=models.CASCADE, related_name='offer_letter')
+    template = models.ForeignKey(OfferTemplate, on_delete=models.SET_NULL, null=True, blank=True,
+                                  related_name='offer_letters')
     offer_date = models.DateField()
     ctc_offered = models.DecimalField(max_digits=12, decimal_places=2)
     joining_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     expiry_date = models.DateField(null=True, blank=True)
+    content = models.TextField(
+        blank=True,
+        help_text='Final offer content (rendered from the chosen template, then hand-edited).')
+    generated_pdf = models.FileField(upload_to='offers/generated/', blank=True, null=True)
 
     def __str__(self):
         return f'Offer - {self.application.candidate}'
-
 
 # ---------------------------------------------------------------------------
 # 4. ATTENDANCE & GRACE POLICY
@@ -488,6 +610,83 @@ class LeaveApplication(TimeStampedModel):
     def __str__(self):
         return f'{self.employee} - {self.leave_type} ({self.start_date} to {self.end_date})'
 
+from django.db import models
+
+
+class EmployeeLeaveBalance(models.Model):
+    # Link directly to your existing Employee table
+    e_name = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="assigned_leaves")
+
+    # Status can stay here if 'Leave Status' is different from 'Work Status'
+    # Otherwise, you can also pull 'status' from the Employee model.
+    status = models.CharField(max_length=100, default="Active")
+
+    # Leave Balances
+    bereavement_leave = models.FloatField(default=0.0)
+    menstrual_leave = models.FloatField(default=0.0)
+    sick_leave = models.FloatField(default=0.0)
+    earned_leave = models.FloatField(default=0.0)
+    casual_leave = models.FloatField(default=0.0)
+    comp_off = models.FloatField(default=0.0)
+
+    def __str__(self):
+        return f"Leave Balance for {self.e_name.name}"
+
+    # These properties allow you to "see" the Dept/Desig without saving them here
+    @property
+    def department(self):
+        return self.e_name.department
+
+    @property
+    def designation(self):
+        return self.e_name.designation
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from datetime import timedelta
+
+
+@receiver(post_save, sender=LeaveApplication)
+def sync_leave_and_attendance_on_approval(sender, instance, created, **kwargs):
+    """
+    1. Deducts leave from bank.
+    2. Automatically creates AttendanceRecord entries as 'ON_LEAVE'
+    """
+    if instance.status == LeaveApplication.Status.APPROVED:
+        # --- PART A: Deduct from Leave Bank ---
+        mapping = {
+            'EL': 'earned_leave', 'SL': 'sick_leave', 'CL': 'casual_leave',
+            'MTL': 'menstrual_leave', 'BL': 'bereavement_leave', 'CO': 'comp_off',
+        }
+        field_name = mapping.get(instance.leave_type.code.upper())
+        if field_name:
+            bank, _ = EmployeeLeaveBalance.objects.get_or_create(e_name=instance.employee)
+            current_val = getattr(bank, field_name)
+            setattr(bank, field_name, max(0, float(current_val) - float(instance.total_days)))
+            bank.save()
+
+        # --- PART B: Create Attendance Records for the leave period ---
+        # This is the "Bridge" you were missing.
+        current_date = instance.start_date
+        while current_date <= instance.end_date:
+            AttendanceRecord.objects.update_or_create(
+                employee=instance.employee,
+                attendance_date=current_date,
+                defaults={
+                    'status': AttendanceRecord.Status.ON_LEAVE,
+                    'remarks': instance.leave_type.code.upper(),  # Store SL, CL etc here
+                }
+            )
+            current_date += timedelta(days=1)
+
+    # Handle Cancellation: If leave is cancelled, mark attendance back to ABSENT or delete
+    elif instance.status in [LeaveApplication.Status.REJECTED, LeaveApplication.Status.CANCELLED]:
+        AttendanceRecord.objects.filter(
+            employee=instance.employee,
+            attendance_date__range=[instance.start_date, instance.end_date],
+            status=AttendanceRecord.Status.ON_LEAVE
+        ).update(status=AttendanceRecord.Status.ABSENT, remarks="")
 
 # ---------------------------------------------------------------------------
 # 6. PAYROLL

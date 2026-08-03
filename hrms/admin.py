@@ -55,16 +55,20 @@ admin.site.register(m.EmployeeBankDetail)
 admin.site.register(m.EmployeeDocument)
 admin.site.register(m.EmployeeNotice)
 
+# -------hiring----------
+admin.site.register(m.RecruitmentStage)
 admin.site.register(m.JobPosting)
+admin.site.register(m.JobPipeline)
 admin.site.register(m.Candidate)
 admin.site.register(m.Application)
 admin.site.register(m.RecruitmentAuditLog)
 admin.site.register(m.Interview)
 admin.site.register(m.OfferLetter)
+admin.site.register(m.OfferTemplate)
 
+
+# -------------------
 admin.site.register(m.AttendancePolicy)
-
-
 @admin.register(m.AttendanceRecord)
 class AttendanceRecordAdmin(admin.ModelAdmin):
     list_display = ('employee', 'attendance_date', 'check_in', 'check_out', 'status', 'total_hours')
@@ -77,6 +81,8 @@ admin.site.register(m.Holiday)
 
 admin.site.register(m.LeaveType)
 admin.site.register(m.LeaveBalance)
+admin.site.register(m.EmployeeLeaveBalance)
+
 
 
 @admin.register(m.LeaveApplication)

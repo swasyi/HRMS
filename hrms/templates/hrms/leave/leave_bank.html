@@ -1,0 +1,186 @@
+{% extends "hrms/base.html" %}
+
+{% block title %}Leave Bank | Oblu HRMS{% endblock %}
+{% block page_title %}Leave Bank Management{% endblock %}
+
+{% block extra_css %}
+<style>
+    .leave-bank-card {
+        background: #fff;
+        border: 1px solid #e3e6f0;
+        border-radius: 8px;
+        box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.05);
+    }
+
+    .action-header {
+        background: #f8f9fc;
+        padding: 15px 20px;
+        border-bottom: 1px solid #e3e6f0;
+        border-radius: 8px 8px 0 0;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+
+    .table thead th {
+        background-color: #f8f9fc;
+        color: #4e73df;
+        font-weight: 700;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+    }
+
+    /* Style for Django-generated inputs */
+    .leave-input-cell input {
+        width: 65px;
+        border: 1px solid transparent;
+        background: transparent;
+        text-align: center;
+        font-weight: 600;
+        color: #5a5c69;
+        transition: all 0.2s;
+        pointer-events: none; /* Make it look/act like text by default */
+    }
+
+    /* Styling when unlocked for editing */
+    .editing-mode .leave-input-cell input,
+    .editing-mode select {
+        border-color: #d1d3e2 !important;
+        background: #fff !important;
+        border-radius: 4px !important;
+        pointer-events: auto !important;
+    }
+
+    .search-box { max-width: 300px; }
+    .hidden-actions { display: none !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="leave-bank-card">
+    <form method="post" id="leaveBankForm">
+        {% csrf_token %}
+        {{ formset.management_form }}
+
+        <div class="action-header d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
+            <div class="search-box input-group input-group-sm">
+                <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+                <input type="text" id="tableSearch" class="form-control border-start-0" placeholder="Search name, dept...">
+            </div>
+
+            <div class="actions">
+                {% if user.is_superuser %}
+                    <button type="button" id="unlockBtn" class="btn btn-sm btn-primary px-3">
+                        <i class="bi bi-unlock-fill me-1"></i> Unlock for Editing
+                    </button>
+
+                    <div id="saveActions" class="hidden-actions d-flex gap-2">
+                        <button type="button" onclick="window.location.reload()" class="btn btn-sm btn-outline-secondary">
+                            Discard
+                        </button>
+                        <button type="submit" class="btn btn-sm btn-success px-3">
+                            <i class="bi bi-cloud-arrow-up-fill me-1"></i> Save All Changes
+                        </button>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" id="leaveTable">
+                <thead>
+                    <tr>
+                        <th>Employee</th>
+                        <th>Dept.</th>
+                        <th>Designation</th>
+                        <th>Status</th>
+                        <th class="text-center">Bereave</th>
+                        <th class="text-center">Menstrual</th>
+                        <th class="text-center">Sick</th>
+                        <th class="text-center">Earned</th>
+                        <th class="text-center">Casual</th>
+                        <th class="text-center">Comp Off</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if user.is_superuser %}
+                        {% for form in formset %}
+                            <tr class="employee-row">
+                                <td class="fw-bold text-dark">
+                                    {{ form.id }} <!-- Critical for identifying the record -->
+                                    {{ form.instance.e_name.full_name }}
+                                </td>
+                                <td class="small">{{ form.instance.e_name.department.name }}</td>
+                                <td class="small">{{ form.instance.e_name.designation.title }}</td>
+                                <td style="width: 120px;">{{ form.status }}</td>
+
+                                {# We use Django's fields directly so they get the correct names (e.g. form-0-sick_leave) #}
+                                <td class="text-center leave-input-cell">{{ form.bereavement_leave }}</td>
+                                <td class="text-center leave-input-cell">{{ form.menstrual_leave }}</td>
+                                <td class="text-center leave-input-cell">{{ form.sick_leave }}</td>
+                                <td class="text-center leave-input-cell">{{ form.earned_leave }}</td>
+                                <td class="text-center leave-input-cell">{{ form.casual_leave }}</td>
+                                <td class="text-center leave-input-cell">{{ form.comp_off }}</td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                        {% for record in leave_balances %}
+                            <tr class="employee-row">
+                                <td class="fw-bold">{{ record.e_name.full_name }}</td>
+                                <td class="small">{{ record.e_name.department.name }}</td>
+                                <td class="small">{{ record.e_name.designation.title }}</td>
+                                <td><span class="badge bg-success">{{ record.status }}</span></td>
+                                <td class="text-center fw-bold">{{ record.bereavement_leave }}</td>
+                                <td class="text-center fw-bold">{{ record.menstrual_leave }}</td>
+                                <td class="text-center fw-bold">{{ record.sick_leave }}</td>
+                                <td class="text-center fw-bold">{{ record.earned_leave }}</td>
+                                <td class="text-center fw-bold">{{ record.casual_leave }}</td>
+                                <td class="text-center fw-bold">{{ record.comp_off }}</td>
+                            </tr>
+                        {% endfor %}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script>
+    $(document).ready(function() {
+        // By default, disable all inputs to prevent accidental changes/browser autofill issues
+        $("#leaveTable input, #leaveTable select").prop("disabled", true);
+
+        // 1. Live Search
+        $("#tableSearch").on("keyup", function() {
+            var value = $(this).val().toLowerCase();
+            $("#leaveTable tbody tr").filter(function() {
+                $(this).toggle($(this).text().toLowerCase().indexOf(value) > -1)
+            });
+        });
+
+        // 2. Unlock/Edit Logic
+        $("#unlockBtn").click(function() {
+            $(this).addClass('hidden-actions');
+            $("#saveActions").removeClass('hidden-actions');
+
+            // Add the 'editing-mode' class to the table for styling
+            $("#leaveTable").addClass('editing-mode');
+
+            // Actually enable the inputs so they can be typed into and submitted
+            $("#leaveTable input, #leaveTable select").prop("disabled", false);
+
+            // Focus the first input
+            $(".leave-input-cell input:first").focus();
+        });
+
+        // 3. Form Submit Safety
+        $("#leaveBankForm").on("submit", function() {
+            // Ensure everything is enabled right before the data is sent
+            $(this).find("input, select").prop("disabled", false);
+        });
+    });
+</script>
+{% endblock %}

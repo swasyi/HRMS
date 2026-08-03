@@ -1,74 +1,117 @@
-import csv
+import pandas as pd
 import re
 from datetime import datetime
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 from hrms.models import Employee, AttendanceRecord
 
 
 class Command(BaseCommand):
-    help = 'Imports attendance punches from a daily_punch_report CSV file'
-
-    def add_arguments(self, parser):
-        parser.add_argument('file_path', type=str, help='Path to the csv file')
+    help = 'Imports attendance punches (Check-In/Out) from Excel/CSV reports'
 
     def handle(self, *args, **options):
-        file_path = options['file_path']
+        # 1. Hardcoded File Path (Update this as needed)
+        file_path = r'C:\Users\Lenovo\Downloads\daily_punch_report (11).xlsx'
+
+        self.stdout.write(f"Reading file: {file_path}")
 
         try:
-            with open(file_path, mode='r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                header = next(reader)
+            # 2. Load File (Supports .xlsx, .xls, .csv)
+            if file_path.endswith('.csv'):
+                df = pd.read_csv(file_path, encoding='utf-8')
+            else:
+                df = pd.read_excel(file_path)
 
-                # Identify date columns (e.g., "01-06-2026 \n Monday")
-                # We skip the first 4 columns (ID, Name, Dept, Desig)
-                date_map = {}
-                for i in range(4, len(header)):
-                    date_match = re.search(r'(\d{2}-\d{2}-\d{4})', header[i])
-                    if date_match:
-                        date_map[i] = datetime.strptime(date_match.group(1), '%d-%m-%Y').date()
+            # 3. Clean headers
+            # Excel sometimes puts newlines in headers; we clean them to find dates easily
+            df.columns = [str(col).replace('\n', ' ').strip() for col in df.columns]
 
-                count = 0
-                for row in reader:
-                    emp_code = row[0].strip()
+            # 4. Identify Date Columns
+            # Looks for any header that contains a date pattern like DD-MM-YYYY or DD/MM/YYYY
+            date_map = {}
+            date_pattern = r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})'
+
+            for col in df.columns:
+                match = re.search(date_pattern, col)
+                if match:
+                    # Convert the string date found in header to a python date object
+                    header_date_str = match.group(1).replace('/', '-')
                     try:
-                        employee = Employee.objects.get(employee_code=emp_code)
-                    except Employee.DoesNotExist:
-                        self.stdout.write(self.style.WARNING(f"Employee {emp_code} not found. Skipping."))
+                        parsed_date = datetime.strptime(header_date_str, '%d-%m-%Y').date()
+                        date_map[col] = parsed_date
+                    except ValueError:
                         continue
 
-                    for idx, att_date in date_map.items():
-                        cell = row[idx].strip()
-                        if not cell:
-                            continue
+            if not date_map:
+                self.stdout.write(self.style.ERROR("No date columns (DD-MM-YYYY) found in the header!"))
+                return
 
-                        # Split "09:41 AM\n06:02 PM" into two parts
-                        punches = cell.split('\n')
-                        check_in_str = punches[0].strip()
-                        check_out_str = punches[1].strip() if len(punches) > 1 else None
+            self.stdout.write(f"Detected {len(date_map)} date columns.")
 
-                        # Helper to convert "09:41 AM" and date into a full datetime
-                        def parse_time(time_str):
-                            if not time_str: return None
-                            dt_str = f"{att_date.strftime('%Y-%m-%d')} {time_str}"
-                            return datetime.strptime(dt_str, '%Y-%m-%d %I:%M %p')
+            count = 0
+            # 5. Iterate through rows
+            for _, row in df.iterrows():
+                # Assuming first column or 'Employee ID' contains the code
+                emp_code = str(row.iloc[0]).strip() if 'Employee ID' not in df.columns else str(
+                    row['Employee ID']).strip()
 
-                        check_in_dt = parse_time(check_in_str)
-                        check_out_dt = parse_time(check_out_str)
+                # Skip header-like rows or empty rows
+                if not emp_code or emp_code == 'nan' or emp_code == 'None':
+                    continue
 
-                        # Create or Update the Attendance Record
-                        obj, created = AttendanceRecord.objects.update_or_create(
-                            employee=employee,
-                            attendance_date=att_date,
-                            defaults={
-                                'check_in': check_in_dt,
-                                'check_out': check_out_dt,
-                                'status': 'present'
-                            }
-                        )
-                        count += 1
+                try:
+                    employee = Employee.objects.get(employee_code=emp_code)
+                except Employee.DoesNotExist:
+                    # Optional: self.stdout.write(f"Skipping: Employee {emp_code} not found.")
+                    continue
 
-                self.stdout.write(self.style.SUCCESS(f"Successfully imported {count} punch records."))
+                for col_name, att_date in date_map.items():
+                    cell_value = str(row[col_name]).strip()
 
-        except FileNotFoundError:
-            self.stdout.write(self.style.ERROR("File not found!"))
+                    # Skip empty cells
+                    if not cell_value or cell_value.lower() in ['nan', '', 'absent', '-']:
+                        continue
+
+                    # 6. Parse Punches
+                    # The cell usually looks like: "09:41 AM\n06:02 PM" or "09:41 AM 06:02 PM"
+                    # We split by any whitespace or newline
+                    punches = cell_value.split()
+                    # punches[0] -> "09:41", punches[1] -> "AM", punches[2] -> "06:02", punches[3] -> "PM"
+
+                    check_in_dt = None
+                    check_out_dt = None
+
+                    try:
+                        # Reconstruct Time (Handles "09:41 AM" format)
+                        if len(punches) >= 2:
+                            in_time_str = f"{punches[0]} {punches[1]}"
+                            check_in_dt = datetime.strptime(f"{att_date} {in_time_str}", '%Y-%m-%d %I:%M %p')
+
+                        if len(punches) >= 4:
+                            out_time_str = f"{punches[2]} {punches[3]}"
+                            check_out_dt = datetime.strptime(f"{att_date} {out_time_str}", '%Y-%m-%d %I:%M %p')
+                    except Exception as e:
+                        self.stdout.write(self.style.WARNING(f"Error parsing time for {emp_code} on {att_date}: {e}"))
+                        continue
+
+                    # 7. Update or Create the Attendance Record
+                    # We set status to 'PRESENT' because there is punch data
+                    AttendanceRecord.objects.update_or_create(
+                        employee=employee,
+                        attendance_date=att_date,
+                        defaults={
+                            'check_in': check_in_dt,
+                            'check_out': check_out_dt,
+                            'status': AttendanceRecord.Status.PRESENT,
+                            'remarks': f"Imported Punch: {cell_value.replace('\n', ' ')}"
+                        }
+                    )
+                    count += 1
+
+                self.stdout.write(self.style.SUCCESS(f"Processed: {employee.full_name}"))
+
+            self.stdout.write(self.style.SUCCESS(f"Successfully imported {count} punch records."))
+
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"CRITICAL ERROR: {str(e)}"))
+            import traceback
+            traceback.print_exc()

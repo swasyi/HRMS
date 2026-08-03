@@ -1,0 +1,54 @@
+{% extends "hrms/base.html" %}
+{% block title %}Pipeline — {{ job.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-0">Hiring Pipeline</h4>
+    <div class="text-muted">{{ job.title }} · {{ job.company }}</div>
+  </div>
+  <a href="{% url 'hrms:jobposting_list' %}" class="btn btn-outline-secondary btn-sm">Back to Job Postings</a>
+</div>
+
+<p class="text-muted">
+  Define the exact sequence of rounds this job goes through. Applications for
+  this job will only be able to select a "current stage" from the list below.
+</p>
+
+<form method="post">
+  {% csrf_token %}
+  {{ formset.management_form }}
+
+  <table class="table align-middle" id="pipeline-table">
+    <thead>
+      <tr>
+        <th style="width:45%">Stage</th>
+        <th style="width:20%">Order</th>
+        <th style="width:15%">Remove</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for pform in formset %}
+      <tr>
+        <td>
+          {{ pform.id }}
+          {{ pform.stage }}
+          {% if pform.stage.errors %}<div class="text-danger small">{{ pform.stage.errors|striptags }}</div>{% endif %}
+        </td>
+        <td>{{ pform.order }}</td>
+        <td>
+          {% if pform.instance.pk %}
+            <div class="form-check">
+              {{ pform.DELETE }}
+              <label class="form-check-label">Remove</label>
+            </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <button type="submit" class="btn btn-primary">Save Pipeline</button>
+</form>
+{% endblock %}

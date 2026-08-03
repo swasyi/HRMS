@@ -40,6 +40,8 @@ CSRF_TRUSTED_ORIGINS = [
 # Application definition
 
 INSTALLED_APPS = [
+    'django.contrib.humanize',  # <--- Add this line
+
     'docs',
     'request_logs',
     'meta',
@@ -108,6 +110,10 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'OPTIONS': {
+            'timeout': 15,  # Increase timeout to 20 seconds
+        },
+
     }
 }
 
@@ -175,4 +181,4 @@ EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.getenv("SES_SMTP_USERNAME")
 EMAIL_HOST_PASSWORD = os.getenv("SES_SMTP_PASSWORD")
-DEFAULT_FROM_EMAIL = "Oblu Tools <noreply@oblutools.com>"
+DEFAULT_FROM_EMAIL = "Oblu Tools <swastioblu@gmail.com>"

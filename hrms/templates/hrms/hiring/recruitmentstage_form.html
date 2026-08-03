@@ -1,0 +1,21 @@
+{% extends "hrms/base.html" %}
+{% block title %}{{ object|yesno:"Edit,Add" }} Recruitment Stage{% endblock %}
+
+{% block content %}
+<h4 class="mb-3">{{ object|yesno:"Edit,Add" }} Recruitment Stage</h4>
+
+<form method="post" class="col-lg-6">
+  {% csrf_token %}
+  {% for field in form %}
+  <div class="mb-3">
+    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {{ field }}
+    {% if field.errors %}<div class="text-danger small">{{ field.errors|striptags }}</div>{% endif %}
+    {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+  </div>
+  {% endfor %}
+
+  <button type="submit" class="btn btn-primary">Save</button>
+  <a href="{% url 'hrms:recruitmentstage_list' %}" class="btn btn-link">Cancel</a>
+</form>
+{% endblock %}

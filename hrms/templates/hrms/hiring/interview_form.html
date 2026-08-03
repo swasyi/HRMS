@@ -1,24 +1,73 @@
 {% extends "hrms/base.html" %}
-{% block title %}{% if object %}Edit{% else %}Schedule{% endif %} Interview{% endblock %}
-{% block page_title %}{% if object %}Edit{% else %}Schedule{% endif %} Interview — {{ application.candidate }}{% endblock %}
+{% block title %}{{ object|yesno:"Edit,Schedule" }} Interview{% endblock %}
 
 {% block content %}
-<div class="card" style="max-width:560px;">
-  <div class="card-body">
-    <form method="post">
-      {% csrf_token %}
-      {% for field in form %}
-        <div class="mb-3">
-          <label class="form-label">{{ field.label }}</label>
-          {{ field }}
-          {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
-        </div>
-      {% endfor %}
-      <div class="d-flex gap-2">
-        <button type="submit" class="btn text-white" style="background:var(--accent);">Save</button>
-        <a href="{% url 'hrms:application_detail' application.pk %}" class="btn btn-outline-secondary">Cancel</a>
-      </div>
-    </form>
+<h4 class="mb-1">{{ object|yesno:"Edit,Schedule" }} Interview</h4>
+<div class="text-muted mb-3">{{ application.candidate }} — {{ application.job_posting.title }}</div>
+
+<form method="post" class="col-lg-7">
+  {% csrf_token %}
+
+<!--  <div class="mb-3">-->
+<!--    <label class="form-label">Pipeline Stage</label>-->
+<!--    {{ form.pipeline_stage }}-->
+<!--    <div class="form-text">Pick from {{ application.job_posting.title }}'s own pipeline, or use the free-text round below.</div>-->
+<!--  </div>-->
+
+  <div class="mb-3">
+    <label class="form-label">Interview Round (free text)</label>
+    {{ form.interview_round }}
   </div>
-</div>
+
+  <div class="row">
+    <div class="col-md-6 mb-3">
+      <label class="form-label">Scheduled On</label>
+      {{ form.scheduled_on }}
+    </div>
+    <div class="col-md-6 mb-3">
+      <label class="form-label">Mode</label>
+      {{ form.mode }}
+    </div>
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label">Interviewer</label>
+    {{ form.interviewer }}
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label">Status</label>
+    {{ form.status }}
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label">Feedback</label>
+    {{ form.feedback }}
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">Scorecard</div>
+    <div class="card-body row">
+      <div class="col-md-4 mb-2">
+        <label class="form-label">{{ form.score_technical.label }}</label>
+        {{ form.score_technical }}
+      </div>
+      <div class="col-md-4 mb-2">
+        <label class="form-label">{{ form.score_communication.label }}</label>
+        {{ form.score_communication }}
+      </div>
+      <div class="col-md-4 mb-2">
+        <label class="form-label">{{ form.score_culture.label }}</label>
+        {{ form.score_culture }}
+      </div>
+    </div>
+  </div>
+
+  {% if form.non_field_errors %}
+    <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <button type="submit" class="btn btn-primary">Save Interview</button>
+  <a href="{% url 'hrms:application_detail' application.pk %}" class="btn btn-link">Cancel</a>
+</form>
 {% endblock %}

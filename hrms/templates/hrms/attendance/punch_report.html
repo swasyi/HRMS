@@ -1,37 +1,74 @@
 {% extends "hrms/base.html" %}
 {% block content %}
+<style>
+    .mark-fd { color: #059669; background: #ecfdf5; border: 1px solid #059669; }
+    .mark-hd { color: #d97706; background: #fffbeb; border: 1px solid #d97706; }
+    .mark-abs { color: #dc2626; background: #fef2f2; border: 1px solid #dc2626; }
+    .status-badge { font-size: 0.7rem; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+    .grace-text { font-size: 10px; color: #64748b; font-weight: bold; display: block; }
+</style>
+
 <div class="container-fluid p-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h4 class="fw-bold">Attendance Report: {{ target_employee.full_name }}</h4>
-        <span class="badge bg-secondary">{{ month }}/{{ year }}</span>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body d-flex justify-content-between align-items-center">
+            <div>
+                <h4 class="fw-bold mb-0">{{ target_employee.full_name }}</h4>
+                <p class="text-muted small mb-0">{{ target_employee.employee_code }} | {{ target_employee.designation.title }}</p>
+            </div>
+            <div class="text-end">
+                <h5 class="fw-bold text-primary mb-0">{{ month_name }} {{ year }}</h5>
+                <span class="badge bg-light text-dark border">Attendance Summary</span>
+            </div>
+        </div>
     </div>
 
     <div class="card border-0 shadow-sm">
         <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
+            <table class="table table-hover align-middle mb-0" style="font-size: 0.85rem;">
                 <thead class="table-light">
                     <tr>
-                        <th>Date</th>
+                        <th class="ps-4">Date</th>
                         <th>Punch In</th>
                         <th>Punch Out</th>
-                        <th>Total Hours</th>
-                        <th>Status</th>
+                        <th>Effective Hours</th>
+                        <th class="text-center">Status</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for day in report %}
-                    <tr class="{% if day.is_weekend %}table-secondary{% elif not day.punch and not day.leave %}table-danger-subtle{% endif %}">
-                        <td>{{ day.date|date:"D, d M" }}</td>
+                    <tr class="{% if day.status == 'SUN' or day.status == 'HOL' %}bg-light opacity-75{% endif %}">
+                        <td class="ps-4 fw-bold">
+                            {{ day.date|date:"d M" }}
+                            <small class="text-muted fw-normal">({{ day.date|date:"D" }})</small>
+                        </td>
                         <td>
-                            {% if day.punch %}
-                                {{ day.punch.check_in|time:"H:i" }}
-                            {% elif day.leave %}
-                                <span class="badge bg-info">On Leave</span>
+                            {% if day.in %}
+                                <span class="text-success fw-bold">{{ day.in|time:"h:i A" }}</span>
                             {% else %}
-                                <span class="text-danger">Absent</span>
+                                <span class="text-muted">—</span>
                             {% endif %}
                         </td>
-                        <td>{{ day.punch.check_out|time:"H:i"|default:"—" }}</td>
+                        <td>
+                            {% if day.out %}
+                                <span class="text-danger fw-bold">{{ day.out|time:"h:i A" }}</span>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="fw-bold text-muted">
+                            {% if day.hours > 0 %}{{ day.hours }} hrs{% else %}—{% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if day.status == 'SUN' or day.status == 'HOL' %}
+                                <span class="text-muted small fw-bold">{{ day.status }}</span>
+                            {% else %}
+                                <span class="status-badge {{ day.css }}">{{ day.status }}</span>
+                            {% endif %}
+
+                            {% if day.label %}
+                                <span class="grace-text mt-1">{{ day.label }}</span>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>

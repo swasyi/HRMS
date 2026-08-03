@@ -28,11 +28,11 @@ class Command(BaseCommand):
                 reader.fieldnames = cleaned_headers
 
                 # Identify columns that contain attendance data for June
-                date_columns = [col for col in cleaned_headers if 'June' in col]
+                date_columns = [col for col in cleaned_headers if 'July' in col]
                 self.stdout.write(f"Date columns identified: {len(date_columns)}")
 
                 if not date_columns:
-                    self.stdout.write(self.style.ERROR("No 'June' columns found. Is the file saved as CSV?"))
+                    self.stdout.write(self.style.ERROR("No 'July' columns found. Is the file saved as CSV?"))
                     return
 
                 for row in reader:
@@ -124,7 +124,7 @@ class Command(BaseCommand):
         # 1. Setup Company
         company, _ = Company.objects.get_or_create(name="ObluHealthcare", defaults={'email': 'admin@company.com'})
 
-        file_path = r'C:\Users\Lenovo\Downloads\muster_report_june.csv'
+        file_path = r'C:\Users\Lenovo\Downloads\attendance-report.xls'
 
         self.stdout.write(f"Looking for file at: {file_path}")
 
