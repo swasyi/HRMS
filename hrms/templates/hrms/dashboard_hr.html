@@ -1,154 +1,220 @@
 {% extends "hrms/base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block extra_css %}
+<style>
+    .stat-card { border: none; border-radius: 15px; transition: transform 0.3s; }
+    .stat-card:hover { transform: translateY(-5px); }
+    .glass-tab { background: rgba(255, 255, 255, 0.9); border-radius: 12px; }
+    .avatar-sm { width: 32px; height: 32px; border-radius: 50%; background: #e2e8f0; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
+    .punch-pill { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; font-family: monospace; }
+</style>
+{% endblock %}
 
 {% block content %}
-<!-- COMPANY FILTER DROPDOWN -->
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2 class="h4 mb-0">Overview</h2>
-    <form action="{% url 'hrms:set_active_company' %}" method="POST" class="d-flex align-items-center">
-        {% csrf_token %}
-        <label class="me-2 text-muted small">Company View:</label>
-        <select name="company_id" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
-            <option value="all">All Accessible Companies</option>
-            {% for comp in available_companies %}
-                <option value="{{ comp.id }}" {% if active_company_id == comp.id|stringformat:"s" %}selected{% endif %}>
-                    {{ comp.name }}
-                </option>
-            {% endfor %}
-        </select>
-    </form>
-</div>
+<div class="container-fluid py-4">
 
-<!-- STAT CARDS -->
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
-    <div class="card stat-card h-100 bg-primary text-white">
-      <div class="card-body">
-        <div class="small opacity-75">Active Employees</div>
-        <div class="h3 mb-0">{{ total_employees }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-6 col-md-3">
-    <div class="card stat-card h-100 bg-success text-white">
-      <div class="card-body">
-        <div class="small opacity-75">Present Today</div>
-        <div class="h3 mb-0">{{ present_today }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-6 col-md-3">
-    <div class="card stat-card h-100 bg-warning">
-      <div class="card-body">
-        <div class="small opacity-75">Pending Leaves</div>
-        <div class="h3 mb-0">{{ pending_leaves }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-6 col-md-3">
-    <div class="card stat-card h-100 bg-info text-white">
-      <div class="card-body">
-        <div class="small opacity-75">Open Jobs</div>
-        <div class="h3 mb-0">{{ open_jobs }}</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="row g-3 mb-4">
-  <div class="col-lg-7">
-    <div class="card shadow-sm">
-      <div class="card-header bg-white fw-bold">Recent Joiners</div>
-      <div class="table-responsive">
-        <table class="table table-hover mb-0 align-middle">
-          <thead class="table-light"><tr><th>Employee</th><th>Designation</th><th>Joined</th></tr></thead>
-          <tbody>
-            {% for emp in recent_joiners %}
-            <tr>
-              <td><a href="{% url 'hrms:employee_detail' emp.pk %}" class="text-decoration-none fw-medium text-dark">{{ emp.full_name }}</a></td>
-              <td><span class="small text-muted">{{ emp.designation|default:"—" }}</span></td>
-              <td>{{ emp.date_of_joining|date:"d M Y" }}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="3" class="text-center text-muted">No records found.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-5">
-    <div class="card shadow-sm">
-      <div class="card-header bg-white fw-bold">Leave Pipeline</div>
-      <div class="table-responsive">
-        <table class="table table-hover mb-0 align-middle">
-          <tbody>
-            {% for lv in pending_leave_list %}
-            <tr>
-              <td>
-                  <div class="fw-medium">{{ lv.employee.full_name }}</div>
-                  <div class="small text-muted">{{ lv.leave_type }}</div>
-              </td>
-              <td class="text-end">
-                  <span class="badge rounded-pill bg-warning text-dark">Pending</span>
-              </td>
-            </tr>
-            {% empty %}
-            <tr><td class="text-center text-muted py-3">No pending requests.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ATTENDANCE BREAKDOWN TABLES (NEW) -->
-<div class="row">
-    <div class="col-12">
-        <div class="card shadow-sm border-0">
-            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                <span class="fw-bold">Today's Attendance Status</span>
-                <span class="badge bg-light text-dark">{{ "now"|date:"D, d M Y" }}</span>
+    <!-- Top Bar: Logic Sync -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-0 fw-bold">HR Command Center</h1>
+            <p class="text-muted small mb-0">Managing {{ total_employees }} talent(s) across selected units.</p>
+        </div>
+        <form action="{% url 'hrms:set_active_company' %}" method="POST" class="bg-white p-2 rounded-3 shadow-sm border">
+            {% csrf_token %}
+            <div class="input-group input-group-sm">
+                <span class="input-group-text bg-transparent border-0"><i class="bi bi-building"></i></span>
+                <select name="company_id" class="form-select border-0 fw-bold" onchange="this.form.submit()" style="min-width: 200px;">
+                    <option value="all">All Global Units</option>
+                    {% for comp in available_companies %}
+                        <option value="{{ comp.id }}" {% if active_company_id == comp.id|stringformat:"s" %}selected{% endif %}>{{ comp.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
-            <div class="card-body p-0">
-                <ul class="nav nav-tabs nav-fill" id="attendanceTab" role="tablist">
-                    <li class="nav-item">
-                        <button class="nav-link active text-success fw-bold" id="present-tab" data-bs-toggle="tab" data-bs-target="#present" type="button">Present ({{ present_employees.count }})</button>
-                    </li>
-                    <li class="nav-item">
-                        <button class="nav-link text-danger fw-bold" id="absent-tab" data-bs-toggle="tab" data-bs-target="#absent" type="button">Absent ({{ absent_employees.count }})</button>
-                    </li>
-                    <li class="nav-item">
-                        <button class="nav-link text-info fw-bold" id="leave-tab" data-bs-toggle="tab" data-bs-target="#on-leave" type="button">On Leave ({{ on_leave_employees.count }})</button>
-                    </li>
-                </ul>
-                <div class="tab-content p-3">
-                    <!-- Present -->
-                    <div class="tab-pane fade show active" id="present">
-                        <div class="row row-cols-2 row-cols-md-4 g-2">
-                            {% for emp in present_employees %}
-                            <div class="col"><div class="p-2 border rounded small">{{ emp.full_name }}</div></div>
-                            {% empty %}<p class="text-muted">No one checked in yet.</p>{% endfor %}
+        </form>
+    </div>
+
+    <!-- Power Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm bg-white border-start border-primary border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <p class="text-muted small fw-bold mb-1">HEADCOUNT</p>
+                            <h2 class="mb-0 fw-bold">{{ total_employees }}</h2>
+                        </div>
+                        <div class="text-primary h1"><i class="bi bi-people-fill"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm bg-white border-start border-success border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <p class="text-muted small fw-bold mb-1">ATTENDANCE</p>
+                            <h2 class="mb-0 fw-bold">{{ attendance_percentage }}%</h2>
+                        </div>
+                        <div class="text-success h1"><i class="bi bi-calendar-check"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm bg-white border-start border-warning border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <p class="text-muted small fw-bold mb-1">LEAVE REQUESTS</p>
+                            <h2 class="mb-0 fw-bold">{{ pending_leaves }}</h2>
+                        </div>
+                        <div class="text-warning h1"><i class="bi bi-door-open"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm bg-white border-start border-info border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <p class="text-muted small fw-bold mb-1">OPEN ROLES</p>
+                            <h2 class="mb-0 fw-bold">{{ open_jobs }}</h2>
+                        </div>
+                        <div class="text-info h1"><i class="bi bi-briefcase"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- Main Panel: Attendance Detail -->
+        <div class="col-lg-8">
+            <div class="card shadow-sm border-0 rounded-4 overflow-hidden">
+                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-bold">Live Attendance Feed</h5>
+                    <div class="dropdown">
+                        <button class="btn btn-light btn-sm rounded-pill" data-bs-toggle="dropdown"><i class="bi bi-three-dots"></i></button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{% url 'hrms:attendance_records' %}">View Full Logs</a></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <ul class="nav nav-pills nav-justified bg-light m-3 p-1 rounded-pill" id="attendanceTab" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active rounded-pill py-2" data-bs-toggle="tab" data-bs-target="#present" type="button">
+                                Present ({{ present_today }})
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link text-danger rounded-pill py-2" data-bs-toggle="tab" data-bs-target="#absent" type="button">
+                                Absent ({{ absent_employees.count }})
+                            </button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content p-3">
+                        <div class="tab-pane fade show active" id="present">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle">
+                                    <thead class="small text-muted text-uppercase">
+                                        <tr>
+                                            <th>Employee</th>
+                                            <th>Check-In</th>
+                                            <th>Check-Out</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for data in present_employees_detailed %}
+                                        <tr>
+                                            <td>
+                                                <div class="d-flex align-items-center">
+                                                    <div class="avatar-sm me-2">{{ data.emp.first_name|first }}</div>
+                                                    <div>
+                                                        <div class="fw-bold small">{{ data.emp.full_name }}</div>
+                                                        <div class="text-muted" style="font-size: 0.7rem;">{{ data.emp.designation }}</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="punch-pill bg-success-subtle text-success border border-success">{{ data.check_in|date:"h:i A" }}</span></td>
+                                            <td><span class="punch-pill bg-light text-muted border">{{ data.check_out|date:"h:i A"|default:"--" }}</span></td>
+                                            <td>
+                                                {% if data.is_late %}
+                                                <span class="badge bg-danger-subtle text-danger rounded-pill px-2" style="font-size: 0.6rem;">LATE</span>
+                                                {% else %}
+                                                <span class="badge bg-success-subtle text-success rounded-pill px-2" style="font-size: 0.6rem;">ON-TIME</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="absent">
+                            <div class="row row-cols-1 row-cols-md-2 g-2">
+                                {% for emp in absent_employees %}
+                                <div class="col">
+                                    <div class="p-2 border rounded-3 d-flex align-items-center justify-content-between">
+                                        <span class="small fw-medium">{{ emp.full_name }}</span>
+                                        <a href="#" class="btn btn-outline-primary btn-sm border-0"><i class="bi bi-chat-dots"></i></a>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
                         </div>
                     </div>
-                    <!-- Absent -->
-                    <div class="tab-pane fade" id="absent">
-                        <div class="row row-cols-2 row-cols-md-4 g-2">
-                            {% for emp in absent_employees %}
-                            <div class="col"><div class="p-2 border rounded small bg-light">{{ emp.full_name }}</div></div>
-                            {% empty %}<p class="text-muted text-center">Perfect Attendance!</p>{% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar Panel -->
+        <div class="col-lg-4">
+            <!-- Quick Actions -->
+            <div class="card shadow-sm border-0 rounded-4 mb-4 bg-dark text-white">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">Quick Actions</h6>
+                    <div class="d-grid gap-2">
+                        <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary btn-sm rounded-3 text-start"><i class="bi bi-person-plus me-2"></i> Add New Employee</a>
+                        <a href="{% url 'hrms:leave_apply' %}" class="btn btn-outline-light btn-sm rounded-3 text-start"><i class="bi bi-pencil-square me-2"></i> Post Notice</a>
+                        <a href="{% url 'hrms:payroll_process' %}" class="btn btn-outline-light btn-sm rounded-3 text-start"><i class="bi bi-currency-dollar me-2"></i> Run Payroll Run</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Celebrations -->
+            <div class="card shadow-sm border-0 rounded-4 overflow-hidden mb-4">
+                <div class="card-header bg-white fw-bold"><i class="bi bi-balloon-fill text-danger me-2"></i>Celebrations</div>
+                <div class="card-body p-0">
+                    {% for emp in upcoming_birthdays %}
+                    <div class="d-flex align-items-center p-3 border-bottom">
+                        <div class="avatar-sm bg-danger-subtle text-danger me-3"><i class="bi bi-cake"></i></div>
+                        <div>
+                            <div class="fw-bold small">{{ emp.full_name }}</div>
+                            <div class="text-muted" style="font-size: 0.75rem;">Birthday: {{ emp.date_of_birth|date:"d M" }}</div>
                         </div>
                     </div>
-                    <!-- Leave -->
-                    <div class="tab-pane fade" id="on-leave">
-                        <div class="row row-cols-2 row-cols-md-4 g-2">
-                            {% for emp in on_leave_employees %}
-                            <div class="col"><div class="p-2 border rounded small">{{ emp.full_name }}</div></div>
-                            {% empty %}<p class="text-muted">No one on leave today.</p>{% endfor %}
+                    {% empty %}
+                    <p class="text-center text-muted p-3 mb-0 small">No birthdays this month.</p>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Hiring Pipeline -->
+            <div class="card shadow-sm border-0 rounded-4">
+                <div class="card-header bg-white fw-bold">Active Jobs</div>
+                <div class="list-group list-group-flush">
+                    {% for job in open_jobs_list %}
+                    <div class="list-group-item border-0 px-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="small fw-bold">{{ job.title }}</span>
+                            <span class="badge bg-light text-dark border">{{ job.applications.count }} Apps</span>
                         </div>
                     </div>
+                    {% endfor %}
                 </div>
             </div>
         </div>

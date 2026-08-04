@@ -1,111 +1,201 @@
 {% extends "hrms/base.html" %}
-{% block title %}Leave Applications{% endblock %}
-{% block page_title %}{% if is_hr %}Leave Applications{% else %}My Leave{% endif %}{% endblock %}
+{% block title %}Leave Management{% endblock %}
+
+{% block extra_css %}
+<style>
+    .leave-card { border: none; border-radius: 16px; transition: 0.3s; }
+    .filter-section { background: #fff; border-radius: 12px; border: 1px solid #eef2f6; }
+    .status-badge { font-size: 0.75rem; padding: 5px 12px; border-radius: 20px; font-weight: 600; }
+    .table-v-align td { vertical-align: middle; }
+    .avatar-circle { width: 35px; height: 35px; background: #6366f1; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.8rem; }
+    .date-box { background: #f8fafc; padding: 5px 10px; border-radius: 8px; border: 1px solid #e2e8f0; text-align: center; min-width: 90px; }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
-  {% if is_hr %}
-  <form method="get" class="d-flex gap-2 flex-wrap">
-    <select name="employee" class="form-select form-select-sm" style="width:200px;">
-      <option value="">All employees</option>
-      {% for emp in employees %}
-        <option value="{{ emp.pk }}" {% if filters.employee == emp.pk|stringformat:"s" %}selected{% endif %}>{{ emp.full_name }}</option>
-      {% endfor %}
-    </select>
-    <select name="status" class="form-select form-select-sm" style="width:160px;">
-      <option value="">All statuses</option>
-      {% for value, label in status_choices %}
-        <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    <button class="btn btn-sm btn-outline-secondary" type="submit">Filter</button>
-  </form>
-  {% else %}
-  <div></div>
-  {% endif %}
-  <a href="{% url 'hrms:leave_apply' %}" class="btn btn-sm text-white" style="background:var(--accent);">
-    <i class="bi bi-plus-lg"></i> Apply for Leave
-  </a>
-</div>
+<div class="container-fluid py-4">
 
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-hover mb-0 align-middle">
-      <thead class="table-light">
-        <tr>
-          {% if is_hr %}<th>Employee</th>{% endif %}
-          <th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th><th class="text-end">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for app in applications %}
-        <tr>
-          {% if is_hr %}<td>{{ app.employee.full_name }}</td>{% endif %}
-          <td>{{ app.leave_type.name }}</td>
-          <td>{{ app.start_date }}</td>
-          <td>{{ app.end_date }}</td>
-          <td>{{ app.total_days }}</td>
-          <td>
-            <span class="badge {% if app.status == 'approved' %}text-bg-success{% elif app.status == 'pending' %}text-bg-warning{% elif app.status == 'rejected' %}text-bg-danger{% else %}text-bg-secondary{% endif %}">
-              {{ app.get_status_display }}
-            </span>
-            {% if app.status == 'rejected' and app.rejection_reason %}
-              <div class="text-muted small">{{ app.rejection_reason }}</div>
-            {% endif %}
-          </td>
-          <td class="text-muted small">{{ app.reason|truncatechars:40|default:"—" }}</td>
-          <td class="text-end">
-            {% if is_hr and app.status == 'pending' %}
-              <form method="post" action="{% url 'hrms:leave_approve' app.pk %}" class="d-inline">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-success">Approve</button>
-              </form>
-              <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#rejectModal{{ app.pk }}">Reject</button>
+    <!-- Header & Action -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="fw-bold mb-0">{% if is_hr %}Leave Requests{% else %}My Leave History{% endif %}</h2>
+            <p class="text-muted small mb-0">Manage and track time-off applications.</p>
+        </div>
+        <a href="{% url 'hrms:leave_apply' %}" class="btn btn-primary rounded-pill px-4">
+            <i class="bi bi-plus-lg me-2"></i> Apply for Leave
+        </a>
+    </div>
 
-              <div class="modal fade" id="rejectModal{{ app.pk }}" tabindex="-1">
-                <div class="modal-dialog">
-                  <div class="modal-content">
-                    <form method="post" action="{% url 'hrms:leave_reject' app.pk %}">
-                      {% csrf_token %}
-                      <div class="modal-header">
-                        <h6 class="modal-title">Reject leave — {{ app.employee.full_name }}</h6>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                      </div>
-                      <div class="modal-body">
-                        {{ reject_form.rejection_reason }}
-                      </div>
-                      <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-danger">Reject</button>
-                      </div>
-                    </form>
-                  </div>
+    <!-- Stats Row -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-4">
+            <div class="card leave-card shadow-sm border-start border-warning border-4">
+                <div class="card-body p-3">
+                    <div class="text-muted small fw-bold">PENDING APPROVAL</div>
+                    <div class="h3 mb-0 fw-bold">{{ stats.pending }}</div>
                 </div>
-              </div>
-            {% endif %}
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card leave-card shadow-sm border-start border-success border-4">
+                <div class="card-body p-3">
+                    <div class="text-muted small fw-bold">APPROVED (CURRENT FILTER)</div>
+                    <div class="h3 mb-0 fw-bold">{{ stats.approved }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card leave-card shadow-sm border-start border-danger border-4">
+                <div class="card-body p-3">
+                    <div class="text-muted small fw-bold">REJECTED</div>
+                    <div class="h3 mb-0 fw-bold">{{ stats.rejected }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-            {% if not is_hr and app.status == 'pending' or not is_hr and app.status == 'approved' %}
-              <form method="post" action="{% url 'hrms:leave_cancel' app.pk %}" class="d-inline"
-                    onsubmit="return confirm('Cancel this leave application?');">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-secondary">Cancel</button>
-              </form>
+    <!-- Filter Bar (With Calendar) -->
+    <div class="filter-section p-3 shadow-sm mb-4">
+        <form method="get" class="row g-2 align-items-end">
+            {% if is_hr %}
+            <div class="col-md-3">
+                <label class="small fw-bold text-muted">Employee</label>
+                <select name="employee" class="form-select form-select-sm border-0 bg-light">
+                    <option value="">All Staff</option>
+                    {% for emp in employees %}
+                    <option value="{{ emp.pk }}" {% if filters.employee == emp.pk|stringformat:"s" %}selected{% endif %}>{{ emp.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             {% endif %}
-          </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="8" class="text-muted text-center py-4">No leave applications found.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+            <div class="col-md-2">
+                <label class="small fw-bold text-muted">Status</label>
+                <select name="status" class="form-select form-select-sm border-0 bg-light">
+                    <option value="">Any Status</option>
+                    {% for value, label in status_choices %}
+                    <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="small fw-bold text-muted">From Date</label>
+                <input type="date" name="start_date" class="form-control form-control-sm border-0 bg-light" value="{{ filters.start_date }}">
+            </div>
+            <div class="col-md-2">
+                <label class="small fw-bold text-muted">To Date</label>
+                <input type="date" name="end_date" class="form-control form-control-sm border-0 bg-light" value="{{ filters.end_date }}">
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-sm btn-dark w-100"><i class="bi bi-search"></i></button>
+            </div>
+            <div class="col-md-1">
+                <a href="{% url 'hrms:my_leave' %}" class="btn btn-sm btn-outline-secondary w-100">Clear</a>
+            </div>
+        </form>
+    </div>
+
+    <!-- Applications Table -->
+    <div class="card leave-card shadow-sm overflow-hidden">
+        <div class="table-responsive">
+            <table class="table table-hover table-v-align mb-0">
+                <thead class="bg-light">
+                    <tr class="small text-uppercase text-muted">
+                        {% if is_hr %}<th class="ps-4">Employee</th>{% endif %}
+                        <th>Leave Type</th>
+                        <th class="text-center">Duration</th>
+                        <th>Status</th>
+                        <th>Reason</th>
+                        <th class="text-end pe-4">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for app in applications %}
+                    <tr>
+                        {% if is_hr %}
+                        <td class="ps-4">
+                            <div class="d-flex align-items-center">
+                                <div class="avatar-circle me-2">{{ app.employee.first_name|first }}</div>
+                                <div class="fw-bold small">{{ app.employee.full_name }}</div>
+                            </div>
+                        </td>
+                        {% endif %}
+                        <td>
+                            <div class="fw-bold mb-0 small">{{ app.leave_type.name }}</div>
+                            <span class="text-muted" style="font-size: 0.7rem;">Applied: {{ app.applied_on|date:"d M" }}</span>
+                        </td>
+                        <td>
+                            <div class="d-flex align-items-center justify-content-center gap-2">
+                                <div class="date-box">
+                                    <div class="small fw-bold">{{ app.start_date|date:"d M" }}</div>
+                                </div>
+                                <i class="bi bi-arrow-right text-muted"></i>
+                                <div class="date-box">
+                                    <div class="small fw-bold">{{ app.end_date|date:"d M" }}</div>
+                                </div>
+                                <span class="badge bg-light text-dark border ms-2">{{ app.total_days }} Days</span>
+                            </div>
+                        </td>
+                        <td>
+                            {% if app.status == 'approved' %}
+                                <span class="status-badge bg-success-subtle text-success"><i class="bi bi-check-circle-fill me-1"></i> Approved</span>
+                            {% elif app.status == 'pending' %}
+                                <span class="status-badge bg-warning-subtle text-warning"><i class="bi bi-clock-history me-1"></i> Pending</span>
+                            {% elif app.status == 'rejected' %}
+                                <span class="status-badge bg-danger-subtle text-danger"><i class="bi bi-x-circle-fill me-1"></i> Rejected</span>
+                            {% else %}
+                                <span class="status-badge bg-secondary-subtle text-secondary">{{ app.get_status_display }}</span>
+                            {% endif %}
+                        </td>
+<td class="small text-muted" style="min-width: 180px; white-space: normal; line-height: 1.4;">
+    {{ app.reason|default:"—" }}
+</td>                        <td class="text-end pe-4">
+                            <div class="btn-group">
+                                {% if is_hr and app.status == 'pending' %}
+                                <form method="post" action="{% url 'hrms:leave_approve' app.pk %}">
+                                    {% csrf_token %}<button type="submit" class="btn btn-sm btn-success rounded-start"><i class="bi bi-check-lg"></i></button>
+                                </form>
+                                <button class="btn btn-sm btn-danger rounded-end" data-bs-toggle="modal" data-bs-target="#rejectModal{{ app.pk }}"><i class="bi bi-x-lg"></i></button>
+                                {% endif %}
+
+                                {% if not is_hr and app.status == 'pending' %}
+                                <form method="post" action="{% url 'hrms:leave_cancel' app.pk %}" onsubmit="return confirm('Cancel this request?');">
+                                    {% csrf_token %}<button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-trash"></i> Cancel</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+
+                    <!-- Rejection Modal -->
+                    {% if is_hr %}
+                    <div class="modal fade" id="rejectModal{{ app.pk }}" tabindex="-1">
+                        <div class="modal-dialog modal-dialog-centered">
+                            <div class="modal-content border-0 shadow">
+                                <form method="post" action="{% url 'hrms:leave_reject' app.pk %}">
+                                    {% csrf_token %}
+                                    <div class="modal-header border-0">
+                                        <h5 class="modal-title fw-bold">Reason for Rejection</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p class="small text-muted">Provide a brief reason why <strong>{{ app.employee.full_name }}'s</strong> request is being denied.</p>
+                                        {{ reject_form.rejection_reason }}
+                                    </div>
+                                    <div class="modal-footer border-0">
+                                        <button type="submit" class="btn btn-danger w-100 rounded-pill">Confirm Rejection</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% empty %}
+                    <tr><td colspan="6" class="text-center py-5 text-muted">No applications found for the selected criteria.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
 </div>
-
-{% if is_paginated %}
-<nav class="mt-3"><ul class="pagination pagination-sm">
-  {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>{% endif %}
-  <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
-  {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
-</ul></nav>
-{% endif %}
 {% endblock %}

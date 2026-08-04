@@ -1,128 +1,234 @@
 {% extends "hrms/base.html" %}
 {% block title %}{{ employee.full_name }}{% endblock %}
-{% block page_title %}{{ employee.full_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Profile Header Styling */
+    .profile-header-card {
+        border: none;
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        color: white;
+        border-radius: 20px;
+    }
+    .avatar-large {
+        width: 80px; height: 80px;
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
+        border-radius: 20px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 2rem; font-weight: 800; border: 2px solid rgba(255, 255, 255, 0.3);
+    }
+
+    /* Module Styling */
+    .info-card { border: none; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    .card-label { font-size: 0.7rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+    .card-value { font-size: 0.9rem; font-weight: 600; color: #1e293b; }
+
+    /* Document/Notice Icons */
+    .doc-icon { width: 35px; height: 35px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+
+    @media (max-width: 768px) {
+        .profile-header-card { text-align: center; }
+        .profile-header-card .d-flex { flex-direction: column; align-items: center !important; }
+        .header-actions { margin-top: 20px; width: 100%; display: flex; justify-content: center; gap: 10px; }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
-  <div>
-    <span class="badge {% if employee.status == 'active' %}text-bg-success{% elif employee.status == 'on_leave' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
-      {{ employee.get_status_display }}
-    </span>
-    <span class="text-muted small ms-2">{{ employee.employee_code }} · {{ employee.get_employment_type_display }}</span>
-  </div>
-  {% if hrms_is_hr %}
-  <div>
-    <a href="{% url 'hrms:employee_edit' employee.pk %}" class="btn btn-sm btn-outline-secondary">Edit Profile</a>
-    <a href="{% url 'hrms:employee_delete' employee.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
-  </div>
-  {% endif %}
-</div>
+<div class="container-fluid py-4">
 
-<div class="row g-3">
-  <div class="col-lg-4">
-    <div class="card mb-3">
-      <div class="card-header bg-white fw-semibold">Profile</div>
-      <div class="card-body small">
-        <p class="mb-1"><strong>Email:</strong> {{ employee.email }}</p>
-        <p class="mb-1"><strong>Phone:</strong> {{ employee.phone|default:"—" }}</p>
-        <p class="mb-1"><strong>Gender:</strong> {{ employee.get_gender_display|default:"—" }}</p>
-        <p class="mb-1"><strong>Date of Birth:</strong> {{ employee.date_of_birth|default:"—" }}</p>
-        <p class="mb-1"><strong>Date of Joining:</strong> {{ employee.date_of_joining }}</p>
-        <hr>
-        <p class="mb-1"><strong>Company:</strong> {{ employee.company }}</p>
-        <p class="mb-1"><strong>Department:</strong> {{ employee.department|default:"—" }}</p>
-        <p class="mb-0"><strong>Designation:</strong> {{ employee.designation|default:"—" }}</p>
-      </div>
+    <!-- 1. Hero Profile Header -->
+    <div class="card profile-header-card shadow-lg mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <div class="avatar-large me-3">{{ employee.first_name|first }}{{ employee.last_name|first }}</div>
+                    <div>
+                        <h2 class="fw-bold mb-1">{{ employee.full_name }}</h2>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <span class="badge bg-success rounded-pill px-3">{{ employee.get_status_display }}</span>
+                            <span class="opacity-75 small"><i class="bi bi-hash"></i> {{ employee.employee_code }}</span>
+                            <span class="opacity-75 small"><i class="bi bi-briefcase"></i> {{ employee.designation|default:"Staff" }}</span>
+                        </div>
+                    </div>
+                </div>
+                {% if hrms_is_hr %}
+                <div class="header-actions">
+                    <a href="{% url 'hrms:employee_edit' employee.pk %}" class="btn btn-light btn-sm rounded-pill px-3 shadow-sm">
+                        <i class="bi bi-pencil-square me-1"></i> Edit Profile
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
     </div>
 
-    <div class="card">
-      <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
-        Bank Detail
-        {% if hrms_is_hr %}
-          <a href="{% url 'hrms:employee_bankdetail' employee.pk %}" class="btn btn-sm btn-outline-secondary">
-            {% if employee.bank_detail %}Edit{% else %}Add{% endif %}
-          </a>
-        {% endif %}
-      </div>
-      <div class="card-body small">
-        {% with bd=employee.bank_detail %}
-          {% if bd %}
-            <p class="mb-1"><strong>{{ bd.account_holder }}</strong></p>
-            <p class="mb-1">{{ bd.bank_name }} — {{ bd.branch_name|default:"—" }}</p>
-            <p class="mb-1">A/C: {{ bd.account_number }}</p>
-            <p class="mb-0">IFSC: {{ bd.ifsc_code }}
-              {% if bd.is_verified %}<span class="badge text-bg-success ms-1">Verified</span>{% else %}<span class="badge text-bg-warning ms-1">Unverified</span>{% endif %}
-            </p>
-          {% else %}
-            <p class="text-muted mb-0">No bank details on file.</p>
-          {% endif %}
-        {% endwith %}
-      </div>
-    </div>
-  </div>
+    <div class="row g-4">
+        <!-- LEFT COLUMN: Personal & Bank -->
+        <div class="col-lg-4">
+            <!-- Basic Details -->
+            <div class="card info-card mb-4">
+                <div class="card-header bg-white py-3 fw-bold border-bottom">Personal Information</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <div class="card-label">Email Address</div>
+                        <div class="card-value">{{ employee.email }}</div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="card-label">Phone Number</div>
+                        <div class="card-value">{{ employee.phone|default:"Not Provided" }}</div>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <div class="card-label">Gender</div>
+                            <div class="card-value">{{ employee.get_gender_display|default:"--" }}</div>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <div class="card-label">Joining Date</div>
+                            <div class="card-value">{{ employee.date_of_joining|date:"d M Y" }}</div>
+                        </div>
+                    </div>
+                    <hr class="text-muted opacity-25">
+                    <div class="mb-0">
+                        <div class="card-label">Department</div>
+                        <div class="card-value">{{ employee.department|default:"Unassigned" }}</div>
+                    </div>
+                </div>
+            </div>
 
-  <div class="col-lg-8">
-    <div class="card mb-3">
-      <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
-        Documents
-        {% if hrms_is_hr %}
-          <a href="{% url 'hrms:employee_document_add' employee.pk %}" class="btn btn-sm text-white" style="background:var(--accent);">
-            <i class="bi bi-plus-lg"></i> Upload
-          </a>
-        {% endif %}
-      </div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0 align-middle">
-          <thead class="table-light"><tr><th>Type</th><th>Description</th><th>Issued</th><th>Expiry</th><th></th>{% if hrms_is_hr %}<th></th>{% endif %}</tr></thead>
-          <tbody>
-            {% for doc in employee.documents.all %}
-            <tr>
-              <td>{{ doc.get_document_type_display }}</td>
-              <td class="text-muted">{{ doc.description|default:"—" }}</td>
-              <td>{{ doc.issued_on|default:"—" }}</td>
-              <td>{{ doc.expiry_on|default:"—" }}</td>
-              <td><a href="{{ doc.file.url }}" target="_blank" class="btn btn-sm btn-outline-secondary">Open</a></td>
-              {% if hrms_is_hr %}
-              <td><a href="{% url 'hrms:employee_document_delete' doc.pk %}" class="btn btn-sm btn-outline-danger">Delete</a></td>
-              {% endif %}
-            </tr>
-            {% empty %}
-            <tr><td colspan="6" class="text-muted text-center py-3">No documents uploaded.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+            <!-- Bank Details -->
+            <div class="card info-card">
+                <div class="card-header bg-white py-3 fw-bold border-bottom d-flex justify-content-between align-items-center">
+                    Financial Details
+                    {% if hrms_is_hr %}
+                    <a href="{% url 'hrms:employee_bankdetail' employee.pk %}" class="btn btn-link btn-sm p-0 text-decoration-none">
+                        <i class="bi bi-plus-circle me-1"></i> Update
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+                    {% with bd=employee.bank_detail %}
+                    {% if bd %}
+                        <div class="mb-3">
+                            <div class="card-label">Account Holder</div>
+                            <div class="card-value">{{ bd.account_holder }}</div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="card-label">Bank Name</div>
+                            <div class="card-value text-primary"><i class="bi bi-bank me-1"></i> {{ bd.bank_name }}</div>
+                        </div>
+                        <div class="p-2 bg-light rounded-3 border">
+                            <div class="card-label">Account Number</div>
+                            <div class="card-value font-monospace">{{ bd.account_number }}</div>
+                            <div class="small text-muted mt-1">IFSC: {{ bd.ifsc_code }}</div>
+                        </div>
+                    {% else %}
+                        <div class="text-center py-3 text-muted small">
+                            <i class="bi bi-credit-card-2-front h1 d-block"></i>
+                            Bank details not available.
+                        </div>
+                    {% endif %}
+                    {% endwith %}
+                </div>
+            </div>
+        </div>
 
-    <div class="card">
-      <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
-        Notices
-        {% if hrms_is_hr %}
-          <a href="{% url 'hrms:employee_notice_add' employee.pk %}" class="btn btn-sm text-white" style="background:var(--accent);">
-            <i class="bi bi-plus-lg"></i> Add Notice
-          </a>
-        {% endif %}
-      </div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0 align-middle">
-          <thead class="table-light"><tr><th>Title</th><th>Date</th><th>Active</th>{% if hrms_is_hr %}<th></th>{% endif %}</tr></thead>
-          <tbody>
-            {% for n in employee.notices.all %}
-            <tr>
-              <td>{{ n.title }}</td>
-              <td>{{ n.notice_date }}</td>
-              <td>{% if n.is_active %}<span class="badge text-bg-success">Active</span>{% else %}<span class="badge text-bg-secondary">Closed</span>{% endif %}</td>
-              {% if hrms_is_hr %}
-              <td><a href="{% url 'hrms:employee_notice_delete' n.pk %}" class="btn btn-sm btn-outline-danger">Delete</a></td>
-              {% endif %}
-            </tr>
-            {% empty %}
-            <tr><td colspan="4" class="text-muted text-center py-3">No notices.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+        <!-- RIGHT COLUMN: Documents & Notices -->
+        <div class="col-lg-8">
+            <!-- Documents Module -->
+            <div class="card info-card mb-4">
+                <div class="card-header bg-white py-3 fw-bold border-bottom d-flex justify-content-between align-items-center">
+                    Documents Vault
+                    {% if hrms_is_hr %}
+                    <a href="{% url 'hrms:employee_document_add' employee.pk %}" class="btn btn-primary btn-sm rounded-pill px-3">
+                        <i class="bi bi-upload me-1"></i> Upload
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="table-responsive">
+                    <table class="table align-middle mb-0">
+                        <thead class="bg-light">
+                            <tr class="small text-muted text-uppercase">
+                                <th class="ps-4">Document Type</th>
+                                <th>Validity</th>
+                                <th class="text-end pe-4">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for doc in employee.documents.all %}
+                            <tr>
+                                <td class="ps-4">
+                                    <div class="d-flex align-items-center">
+                                        <div class="doc-icon bg-info-subtle text-info me-3"><i class="bi bi-file-earmark-pdf"></i></div>
+                                        <div>
+                                            <div class="fw-bold small">{{ doc.get_document_type_display }}</div>
+                                            <div class="text-muted small">{{ doc.description|truncatechars:20|default:"No description" }}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    {% if doc.expiry_on %}
+                                        <div class="small fw-bold">Exp: {{ doc.expiry_on|date:"M Y" }}</div>
+                                    {% else %}
+                                        <span class="text-muted small">No Expiry</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end pe-4">
+                                    <a href="{{ doc.file.url }}" target="_blank" class="btn btn-light btn-sm rounded-pill">View</a>
+                                    {% if hrms_is_hr %}
+                                    <a href="{% url 'hrms:employee_document_delete' doc.pk %}" class="btn btn-outline-danger btn-sm rounded-circle p-1 ms-1">
+                                        <i class="bi bi-x"></i>
+                                    </a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="3" class="text-center py-4 text-muted small">No documents found.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Notices Module -->
+            <div class="card info-card">
+                <div class="card-header bg-white py-3 fw-bold border-bottom d-flex justify-content-between align-items-center">
+                    Employee Notices
+                    {% if hrms_is_hr %}
+                    <a href="{% url 'hrms:employee_notice_add' employee.pk %}" class="btn btn-dark btn-sm rounded-pill px-3">
+                        <i class="bi bi-plus-lg me-1"></i> Add Notice
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="card-body p-0">
+                    <div class="list-group list-group-flush">
+                        {% for n in employee.notices.all %}
+                        <div class="list-group-item p-3 border-bottom">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <div class="fw-bold text-dark">{{ n.title }}</div>
+                                    <div class="text-muted small"><i class="bi bi-calendar-event"></i> Issued: {{ n.notice_date|date:"d M Y" }}</div>
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    {% if n.is_active %}
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-light text-muted border rounded-pill">Closed</span>
+                                    {% endif %}
+                                    {% if hrms_is_hr %}
+                                    <a href="{% url 'hrms:employee_notice_delete' n.pk %}" class="text-danger ms-2"><i class="bi bi-trash"></i></a>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% empty %}
+                        <div class="text-center py-4 text-muted small">No active notices for this employee.</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-  </div>
 </div>
 {% endblock %}
