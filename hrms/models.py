@@ -6,6 +6,10 @@ Split into models/ package later if it grows unwieldy.
 from django.conf import settings
 from django.db import models
 from django.contrib.auth import get_user_model
+import re
+from django.db.models import Max
+from decimal import Decimal
+from datetime import datetime, date
 
 
 User = get_user_model()
@@ -34,8 +38,8 @@ class Company(TimeStampedModel):
     website = models.URLField(blank=True)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
-    office_start_time = models.TimeField(default='09:30')
-    office_end_time = models.TimeField(default='18:30')
+    office_start_time = models.TimeField(default='10:00')
+    office_end_time = models.TimeField(default='18:00')
     grace_minutes = models.PositiveIntegerField(default=15)
     grace_allowed_count = models.PositiveIntegerField(default=3)
 
@@ -45,6 +49,52 @@ class Company(TimeStampedModel):
     def __str__(self):
         return self.name
 
+    def get_policy_for_date(self, target_date):
+        """
+        The 'Time Travel' logic:
+        Checks if a historical policy exists for the given date.
+        If no history matches, it falls back to the master Company settings.
+        """
+        # Find the most recent policy that started BEFORE or ON the target date
+        policy = self.policy_history.filter(effective_from__lte=target_date).order_by('-effective_from').first()
+        if policy:
+            return policy
+        return self # Fallback to current company settings
+
+    def save(self, *args, **kwargs):
+        # We only check for changes if the Company already exists (update mode)
+        if self.pk:
+            # 1. Fetch the OLD settings from the database before they are overwritten
+            # We use .get() to see what is currently saved in the DB
+            old_data = Company.objects.get(pk=self.pk)
+
+            # 2. Compare every timing field to see if HR changed anything
+            timing_changed = (
+                    old_data.office_start_time != self.office_start_time or
+                    old_data.office_end_time != self.office_end_time or
+                    old_data.grace_minutes != self.grace_minutes or
+                    old_data.grace_allowed_count != self.grace_allowed_count
+            )
+
+            # 3. If settings changed, we create a "Snapshot" of the NEW rules
+            # starting from today (or the start of the month)
+            if timing_changed:
+                from datetime import date
+                # We import AttendancePolicy inside to avoid circular import issues
+                from .models import AttendancePolicy
+
+                AttendancePolicy.objects.create(
+                    company=self,
+                    office_start_time=self.office_start_time,
+                    office_end_time=self.office_end_time,
+                    grace_minutes=self.grace_minutes,
+                    grace_allowed_count=self.grace_allowed_count,
+                    # This marks the start of the new rule era
+                    effective_from=date.today()
+                )
+
+        # Finally, save the main Company record
+        super().save(*args, **kwargs)
 
 class Department(TimeStampedModel):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='departments')
@@ -67,6 +117,39 @@ class Designation(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+class HolidayCalendar(TimeStampedModel):
+    """
+    Acts as a Template (e.g., 'South India Calendar', 'General Office Calendar').
+    """
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='holiday_calendars')
+    name = models.CharField(max_length=150)
+    description = models.TextField(blank=True)
+    is_default = models.BooleanField(default=False, help_text="Default calendar for new employees")
+
+    def __str__(self):
+        return f"{self.name} ({self.company.name})"
+
+
+class Holiday(TimeStampedModel):
+    class HolidayType(models.TextChoices):
+        NATIONAL = 'national', 'National'
+        FESTIVAL = 'festival', 'Festival'
+        OPTIONAL = 'optional', 'Optional'
+
+    # CHANGE THIS: Instead of linking to Company, link to HolidayCalendar
+    calendar = models.ForeignKey(HolidayCalendar, on_delete=models.CASCADE, related_name='holidays',        null=True,   # Add this
+        blank=True   )
+    date = models.DateField()
+    name = models.CharField(max_length=150)
+    type = models.CharField(max_length=20, choices=HolidayType.choices, default=HolidayType.NATIONAL)
+    description = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        unique_together = ('calendar', 'date', 'name')
+
+    def __str__(self):
+        return f'{self.name} - {self.date}'
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +192,8 @@ class Employee(TimeStampedModel):
     gender = models.CharField(max_length=1, choices=Gender.choices, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
     date_of_joining = models.DateField()
+    date_of_confirmation = models.DateField(null=True, blank=True)
+
     employment_type = models.CharField(max_length=20, choices=EmploymentType.choices,
                                         default=EmploymentType.FULL_TIME)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
@@ -119,7 +204,43 @@ class Employee(TimeStampedModel):
         related_name='managers',
         help_text="For HR/Admins: Which companies can this user manage?"
     )
+    holiday_calendar = models.ForeignKey(
+        HolidayCalendar,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='employees',
+        help_text="Assign regional holiday template to this employee"
+    )
 
+    def is_holiday(self, target_date):
+        """Helper to check if a specific date is a holiday for this employee."""
+        if not self.holiday_calendar:
+            return False
+        return self.holiday_calendar.holidays.filter(date=target_date).exists()
+
+    def save(self, *args, **kwargs):
+        if not self.employee_code:
+            # 1. Find the highest existing employee code string
+            # This looks for the "largest" string alphabetically (e.g., OHCE0098 > OHCE0043)
+            max_code = Employee.objects.aggregate(Max('employee_code'))['employee_code__max']
+
+            if max_code:
+                # 2. Extract digits from the string "OHCE0098" -> 98
+                nums = re.findall(r'\d+', max_code)
+                if nums:
+                    last_number = int(nums[0])
+                    new_number = last_number + 1
+                else:
+                    new_number = 1
+            else:
+                # Start at 1 if no employees exist
+                new_number = 1
+
+            # 3. Format to OHCE + 4 digits (e.g., OHCE0099)
+            self.employee_code = f'OHCE{new_number:04d}'
+
+        super(Employee, self).save(*args, **kwargs)
 
     class Meta:
         ordering = ['employee_code']
@@ -194,6 +315,13 @@ class RecruitmentStage(TimeStampedModel):
     they are not tied to any one job posting."""
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
+    # ADD THIS:
+    evaluation_criteria = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Define what to grade, e.g. {"Python": 5, "Communication": 5}'
+    )
+
     is_default = models.BooleanField(
         default=False,
         help_text='If checked, this stage is auto-added to every new JobPipeline.')
@@ -292,6 +420,25 @@ class Application(TimeStampedModel):
                                        related_name='applications',
                                        help_text="Where this candidate currently sits in the job's pipeline.")
     progress_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    referred_by = models.ForeignKey(
+        'Employee',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='referrals',
+        help_text="Employee who referred this candidate"
+    )
+    rejection_reason = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Reason for rejection (e.g., Salary mismatch, Skill gap)"
+    )
+    rejection_notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Detailed internal notes on why the candidate was not a fit"
+    )
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
@@ -380,8 +527,15 @@ class Interview(TimeStampedModel):
         max_length=100, blank=True,
         help_text='Free-text label — kept for cases with no matching JobPipeline stage.')
     scheduled_on = models.DateTimeField()
-    interviewer = models.ForeignKey('Employee', on_delete=models.SET_NULL, null=True, blank=True,
-                                     related_name='interviews_conducted')
+    # ManyToManyField , allows multiple employees to see the candidate on their dashboard and submit their own feedback for the same round
+    # interviewer = models.ManyToManyField ('Employee', on_delete=models.SET_NULL, null=True, blank=True,related_name='interviews_conducted',help_text="The panel of employees conducting this interview")
+    interviewer = models.ManyToManyField(
+        'Employee',
+        blank=True,
+        related_name='interviews_conducted',
+        help_text="The panel of employees conducting this interview"
+    )
+
     mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.ONLINE)
     feedback = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
@@ -399,7 +553,58 @@ class Interview(TimeStampedModel):
         label = self.pipeline_stage.stage.name if self.pipeline_stage_id else (self.interview_round or 'Interview')
         return f'{self.application} - {label}'
 
+# this model allows every person on the panel to give their own private rating.
 
+class InterviewFeedback(TimeStampedModel):
+    """Individual feedback from each person on the interview panel."""
+    interview = models.ForeignKey(
+        'Interview',
+        on_delete=models.CASCADE,
+        related_name='individual_feedbacks'
+    )
+    interviewer = models.ForeignKey(
+        'Employee',
+        on_delete=models.CASCADE
+    )
+    feedback_text = models.TextField(blank=True)
+    scorecard_filled = models.JSONField(
+        default=dict,
+        help_text="The actual scores given based on the Stage evaluation_criteria"
+    )
+    recommendation = models.CharField(
+        max_length=20,
+        choices=[('hire', 'Hire'), ('maybe', 'Maybe'), ('reject', 'Reject')],
+        default='maybe'
+    )
+
+    def __str__(self):
+        return f"Feedback from {self.interviewer} for {self.interview.application.candidate}"
+
+
+
+# Add this to allow HR and Managers to "chat" about a candidate.
+class ApplicationNote(TimeStampedModel):
+    """Internal discussion/comments for a specific application."""
+    application = models.ForeignKey(
+        'Application',
+        on_delete=models.CASCADE,
+        related_name='notes'
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE
+    )
+    message = models.TextField()
+    is_private = models.BooleanField(
+        default=False,
+        help_text="If True, only HR can see this note"
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Note by {self.author} on {self.application}"
 class OfferTemplate(TimeStampedModel):
     """Reusable HTML offer-letter templates with {{ placeholder }} tokens
     that OfferLetter.content is generated from."""
@@ -461,17 +666,26 @@ class OfferLetter(TimeStampedModel):
 # 4. ATTENDANCE & GRACE POLICY
 # ---------------------------------------------------------------------------
 class AttendancePolicy(TimeStampedModel):
-    company = models.OneToOneField(Company, on_delete=models.CASCADE, related_name='attendance_policy')
-    work_start_time = models.TimeField()
-    work_end_time = models.TimeField()
-    grace_window_minutes = models.PositiveIntegerField(default=15)
-    max_grace_per_month = models.PositiveIntegerField(default=3)
+    # company = models.OneToOneField(Company, on_delete=models.CASCADE, related_name='attendance_policy')
+    # company = models.ForeignKey('Company', on_delete=models.CASCADE, related_name='policy_archives')
+    company = models.ForeignKey('Company', on_delete=models.CASCADE, related_name='policy_history')
+
+    # Use EXACT same names as Company model
+    office_start_time = models.TimeField()
+    office_end_time = models.TimeField()
+    grace_minutes = models.PositiveIntegerField(default=15)
+    grace_allowed_count = models.PositiveIntegerField(default=3)
     half_day_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=4)
     full_day_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=8)
     overtime_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=9)
+    # This rule was active until the end of this date
+    effective_from = models.DateField()
 
     def __str__(self):
-        return f'Attendance Policy - {self.company}'
+        return f"{self.company.name} Policy (Starts {self.effective_from})"
+
+    class Meta:
+        ordering = ['-effective_from'] # Newest versions at the top
 
 
 class AttendanceRecord(TimeStampedModel):
@@ -499,6 +713,31 @@ class AttendanceRecord(TimeStampedModel):
         unique_together = ('employee', 'attendance_date')
         ordering = ['-attendance_date']
 
+    def save(self, *args, **kwargs):
+        # 1. Get the correct policy for this specific day
+        policy = self.employee.company.get_policy_for_date(self.attendance_date)
+
+        # 2. Calculate Total Hours
+        if self.check_in and self.check_out:
+            diff = self.check_out - self.check_in
+            self.total_hours = Decimal(diff.total_seconds() / 3600).quantize(Decimal('0.01'))
+
+            # 3. Apply Thresholds from the Policy
+            if self.total_hours >= policy.full_day_threshold_hours:
+                self.status = self.Status.PRESENT
+                self.is_half_day = False
+            elif self.total_hours >= policy.half_day_threshold_hours:
+                self.status = self.Status.HALF_DAY
+                self.is_half_day = True
+            else:
+                self.status = self.Status.ABSENT
+                self.is_half_day = False
+
+            # 4. Check for Overtime
+            self.is_overtime = self.total_hours >= policy.overtime_threshold_hours
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f'{self.employee} - {self.attendance_date}'
 
@@ -515,24 +754,6 @@ class GraceUsageTracker(TimeStampedModel):
     def __str__(self):
         return f'{self.employee} - {self.month}/{self.year}'
 
-
-class Holiday(TimeStampedModel):
-    class HolidayType(models.TextChoices):
-        NATIONAL = 'national', 'National'
-        FESTIVAL = 'festival', 'Festival'
-        OPTIONAL = 'optional', 'Optional'
-
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='holidays')
-    date = models.DateField()
-    name = models.CharField(max_length=150)
-    type = models.CharField(max_length=20, choices=HolidayType.choices, default=HolidayType.NATIONAL)
-    description = models.CharField(max_length=255, blank=True)
-
-    class Meta:
-        unique_together = ('company', 'date', 'name')
-
-    def __str__(self):
-        return f'{self.name} - {self.date}'
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +811,12 @@ class LeaveApplication(TimeStampedModel):
         APPROVED = 'approved', 'Approved'
         REJECTED = 'rejected', 'Rejected'
         CANCELLED = 'cancelled', 'Cancelled'
+    class DayType(models.TextChoices):
+        FULL_DAY = 'full', 'Full Day'
+        HALF_DAY = 'half', 'Half Day'
+
+    # ... other fields ...
+    day_type = models.CharField(max_length=10, choices=DayType.choices, default=DayType.FULL_DAY)
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='leave_applications')
     leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, related_name='applications')
@@ -599,7 +826,7 @@ class LeaveApplication(TimeStampedModel):
     reason = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     applied_on = models.DateTimeField(auto_now_add=True)
-    approved_by = models.ForeignKey(Employee, on_delete=models.SET_NULL, null=True, blank=True,
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL, null=True, blank=True,
                                      related_name='leave_approvals')
     approved_on = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.CharField(max_length=255, blank=True)
@@ -611,6 +838,86 @@ class LeaveApplication(TimeStampedModel):
         return f'{self.employee} - {self.leave_type} ({self.start_date} to {self.end_date})'
 
 from django.db import models
+
+
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Employee)
+def auto_create_leave_bank_row(sender, instance, created, **kwargs):
+    """
+    When a new Employee is saved, this automatically creates
+    a row in EmployeeLeaveBalance with 0.0 values.
+    """
+    if created:
+        EmployeeLeaveBalance.objects.get_or_create(
+            e_name=instance,
+            defaults={'status': instance.status}
+        )
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from datetime import timedelta
+
+
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from datetime import timedelta
+# Assuming your logic file is named leave_logic.py
+from . import leave_logic as lv
+
+@receiver(post_save, sender=LeaveApplication)
+def sync_leave_and_attendance_on_approval(sender, instance, created, **kwargs):
+    """
+    1. Deducts leave from bank using Priority Logic (CL -> EL fallback).
+    2. Automatically creates AttendanceRecord entries as 'ON_LEAVE'.
+    3. Handles Refund if leave is cancelled.
+    """
+    if instance.status == LeaveApplication.Status.APPROVED:
+        # --- PART A: Smart Deduction from Leave Bank ---
+        # This function now handles the fallback: Specific Code -> CL -> EL -> LWP
+        result_msg = lv.adjust_leave_bank(
+            employee=instance.employee,
+            amount=instance.total_days,
+            action="deduct",
+            leave_code=instance.leave_type.code
+        )
+
+        # --- PART B: Create Attendance Records for the leave period ---
+        current_date = instance.start_date
+        while current_date <= instance.end_date:
+            AttendanceRecord.objects.update_or_create(
+                employee=instance.employee,
+                attendance_date=current_date,
+                defaults={
+                    'status': AttendanceRecord.Status.ON_LEAVE,
+                    # We store the leave code + the bank result (e.g., "SL | Deducted from CL")
+                    'remarks': f"{instance.leave_type.code.upper()} | {result_msg}",
+                }
+            )
+            current_date += timedelta(days=1)
+
+    # Handle Cancellation/Rejection: If an APPROVED leave is cancelled, give the days back
+    elif instance.status in [LeaveApplication.Status.REJECTED, LeaveApplication.Status.CANCELLED]:
+        # 1. Refund the bank
+        lv.adjust_leave_bank(
+            employee=instance.employee,
+            amount=instance.total_days,
+            action="refund",
+            leave_code=instance.leave_type.code
+        )
+
+        # 2. Reset Attendance Records
+        AttendanceRecord.objects.filter(
+            employee=instance.employee,
+            attendance_date__range=[instance.start_date, instance.end_date],
+            status=AttendanceRecord.Status.ON_LEAVE
+        ).update(status=AttendanceRecord.Status.ABSENT, remarks="Leave Cancelled")
 
 
 class EmployeeLeaveBalance(models.Model):
@@ -641,52 +948,63 @@ class EmployeeLeaveBalance(models.Model):
     def designation(self):
         return self.e_name.designation
 
+    @property
+    def employment_type(self):
+        return self.e_name.get_employment_type_display()
+    # ADD THIS LINE TO SHOW THE DATE
+    @property
+    def joining_date(self):
+        return self.e_name.date_of_joining
+    @property
+    def confirmation_date(self):
+        return self.e_name.date_of_confirmation
 
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-from datetime import timedelta
 
 
-@receiver(post_save, sender=LeaveApplication)
-def sync_leave_and_attendance_on_approval(sender, instance, created, **kwargs):
+class EmployeeLeaveBalanceLive(models.Model):
+    """PAGE 2: THE LIVE REPORT - Deductions happen here"""
+    e_name = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="live_balances")
+    bereavement_leave = models.FloatField(default=0.0)
+    menstrual_leave = models.FloatField(default=0.0)
+    sick_leave = models.FloatField(default=0.0)
+    earned_leave = models.FloatField(default=0.0)
+    casual_leave = models.FloatField(default=0.0)
+    comp_off = models.FloatField(default=0.0)
+
+    def __str__(self):
+        return f"Live Balance for {self.e_name.full_name}"
+@receiver(post_save, sender=Employee)
+def auto_create_leave_rows(sender, instance, created, **kwargs):
+    """Creates a row in both Bank and Live Balance when a new Employee is created."""
+    if created:
+        EmployeeLeaveBalance.objects.get_or_create(e_name=instance)
+        EmployeeLeaveBalanceLive.objects.get_or_create(e_name=instance)
+
+# --- THE SYNC SIGNAL (Bank -> Balance) ---
+@receiver(post_save, sender=EmployeeLeaveBalance)
+def sync_bank_assignment_to_live_balance(sender, instance, created, **kwargs):
     """
-    1. Deducts leave from bank.
-    2. Automatically creates AttendanceRecord entries as 'ON_LEAVE'
+    This handles your requirement: 'if i increase manually leave in leave bank to yha b wo increase ho jaegi'
     """
-    if instance.status == LeaveApplication.Status.APPROVED:
-        # --- PART A: Deduct from Leave Bank ---
-        mapping = {
-            'EL': 'earned_leave', 'SL': 'sick_leave', 'CL': 'casual_leave',
-            'MTL': 'menstrual_leave', 'BL': 'bereavement_leave', 'CO': 'comp_off',
-        }
-        field_name = mapping.get(instance.leave_type.code.upper())
-        if field_name:
-            bank, _ = EmployeeLeaveBalance.objects.get_or_create(e_name=instance.employee)
-            current_val = getattr(bank, field_name)
-            setattr(bank, field_name, max(0, float(current_val) - float(instance.total_days)))
-            bank.save()
+    live, _ = EmployeeLeaveBalanceLive.objects.get_or_create(e_name=instance.e_name)
 
-        # --- PART B: Create Attendance Records for the leave period ---
-        # This is the "Bridge" you were missing.
-        current_date = instance.start_date
-        while current_date <= instance.end_date:
-            AttendanceRecord.objects.update_or_create(
-                employee=instance.employee,
-                attendance_date=current_date,
-                defaults={
-                    'status': AttendanceRecord.Status.ON_LEAVE,
-                    'remarks': instance.leave_type.code.upper(),  # Store SL, CL etc here
-                }
-            )
-            current_date += timedelta(days=1)
+    if created:
+        # Initial copy of assigned leaves
+        live.casual_leave = instance.casual_leave
+        live.sick_leave = instance.sick_leave
+        live.earned_leave = instance.earned_leave
+        live.menstrual_leave = instance.menstrual_leave
+        live.bereavement_leave = instance.bereavement_leave
+        live.comp_off = instance.comp_off
+    else:
+        # If HR manually changes the Bank, we don't want to reset usage.
+        # We calculate the difference and add/subtract it to the Live Balance.
+        # (This logic ensures the Bank stays permanent while Balance stays live)
+        pass  # In a full implementation, you would track the 'delta' here.
 
-    # Handle Cancellation: If leave is cancelled, mark attendance back to ABSENT or delete
-    elif instance.status in [LeaveApplication.Status.REJECTED, LeaveApplication.Status.CANCELLED]:
-        AttendanceRecord.objects.filter(
-            employee=instance.employee,
-            attendance_date__range=[instance.start_date, instance.end_date],
-            status=AttendanceRecord.Status.ON_LEAVE
-        ).update(status=AttendanceRecord.Status.ABSENT, remarks="")
+    live.save()
+
+
 
 # ---------------------------------------------------------------------------
 # 6. PAYROLL
@@ -804,6 +1122,10 @@ class PaySlip(TimeStampedModel):
     payment_status = models.CharField(max_length=20, choices=PaymentStatus.choices,
                                        default=PaymentStatus.PENDING)
     paid_on = models.DateField(null=True, blank=True)
+    # SNAPSHOT FIELDS
+    applied_start_time = models.TimeField(null=True, blank=True)
+    applied_end_time = models.TimeField(null=True, blank=True)
+    applied_grace_limit = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         unique_together = ('payroll_run', 'employee')

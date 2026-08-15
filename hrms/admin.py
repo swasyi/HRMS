@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from . import models as m
 
-
+#add holiday calendar in admin file
 @admin.register(m.Company)
 class CompanyAdmin(admin.ModelAdmin):
     list_display = ('name', 'email', 'phone', 'created_at')
@@ -89,6 +89,7 @@ admin.site.register(m.EmployeeLeaveBalance)
 class LeaveApplicationAdmin(admin.ModelAdmin):
     list_display = ('employee', 'leave_type', 'start_date', 'end_date', 'status')
     list_filter = ('status', 'leave_type')
+admin.site.register(m.EmployeeLeaveBalanceLive)
 
 
 admin.site.register(m.SalaryStructure)
@@ -106,3 +107,5 @@ admin.site.register(m.NoticeRead)
 
 admin.site.register(m.Asset)
 admin.site.register(m.PerformanceReview)
+
+

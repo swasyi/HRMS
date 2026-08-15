@@ -367,21 +367,57 @@ $(function () {
         }
     }
 
+<!--    function checkCustomerCredit(customerId) {-->
+<!--        if (!customerId) return;-->
+<!--        fetch(`/proforma/api/check-credit/${customerId}/`)-->
+<!--            .then(res => res.json())-->
+<!--            .then(data => {-->
+<!--                isCreditBlocked = data.is_blocked;-->
+<!--                if (isCreditBlocked) {-->
+<!--                    $("#credit-lock-container").show();-->
+<!--                    $("#overdue-pi-list").empty();-->
+<!--                    data.overdue_invoices.forEach(inv => $("#overdue-pi-list").append(`<li>PI #${inv.pi_id} (Dated: ${inv.date})</li>`));-->
+<!--                } else { $("#credit-lock-container").hide(); }-->
+<!--                updateUnifiedButton();-->
+<!--            });-->
+<!--    }-->
+
+
     function checkCustomerCredit(customerId) {
         if (!customerId) return;
         fetch(`/proforma/api/check-credit/${customerId}/`)
             .then(res => res.json())
             .then(data => {
+                // 1. Update Global Variable
                 isCreditBlocked = data.is_blocked;
+
+                // 2. Handle Hard Block (Red Box)
+                // Show only if there are 'Real' overdue records (is_blocked is true)
                 if (isCreditBlocked) {
                     $("#credit-lock-container").show();
                     $("#overdue-pi-list").empty();
-                    data.overdue_invoices.forEach(inv => $("#overdue-pi-list").append(`<li>PI #${inv.pi_id} (Dated: ${inv.date})</li>`));
-                } else { $("#credit-lock-container").hide(); }
+                    data.overdue_invoices.forEach(inv =>
+                        $("#overdue-pi-list").append(`<li>PI #${inv.pi_id} (Dated: ${inv.date})</li>`)
+                    );
+                    $("#emi-info-container").hide(); // Hide green box if hard blocked
+                } else {
+                    $("#credit-lock-container").hide();
+
+                    // 3. Handle EMI Bypass (Green Box)
+                    // If not blocked, but there WERE overdue items covered by EMI
+                    if (data.emi_covered_invoices && data.emi_covered_invoices.length > 0) {
+                        $("#emi-info-container").show();
+                        $("#emi-pi-list").empty();
+                        data.emi_covered_invoices.forEach(inv =>
+                            $("#emi-pi-list").append(`<li>PI #${inv.pi_id} (Covered by EMI)</li>`)
+                        );
+                    } else {
+                        $("#emi-info-container").hide();
+                    }
+                }
                 updateUnifiedButton();
             });
     }
-
     function calculateLiveValues() {
         let grandCourier = 0; let mode = $("#id_courier_mode").val();
         let totalSheetQty = 0; let sheetRuleProduct = null;

@@ -49,33 +49,60 @@
     </div>
 
     <!-- Quick Stats (Responsive Grid) -->
-    <div class="row g-3 mb-4">
-        <div class="col-6 col-md-3">
-            <div class="card stat-card shadow-sm p-3 border-start border-primary border-4">
-                <div class="small text-muted fw-bold">TOTAL STAFF</div>
-                <div class="h3 mb-0 fw-bold">{{ employees.count }}</div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="card stat-card shadow-sm p-3 border-start border-success border-4">
-                <div class="small text-muted fw-bold">ACTIVE</div>
-                <div class="h3 mb-0 fw-bold">{{ employees.count }}</div> <!-- Logic: can be adjusted based on view filter -->
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="card stat-card shadow-sm p-3 border-start border-warning border-4">
-                <div class="small text-muted fw-bold">ON LEAVE</div>
-                <div class="h3 mb-0 fw-bold">--</div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="card stat-card shadow-sm p-3 border-start border-info border-4">
-                <div class="small text-muted fw-bold">DEPARTMENTS</div>
-                <div class="h3 mb-0 fw-bold">--</div>
+<!-- Quick Stats (Solid UI 🔥) -->
+<div class="row g-3 mb-4">
+    <!-- Total Staff -->
+    <div class="col-6 col-md-3">
+        <div class="card stat-card shadow-sm p-3 border-0" style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%); color: white;">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="small opacity-75 fw-bold text-uppercase">Total Staff</div>
+                    <div class="h2 mb-0 fw-bold">{{ employees.paginator.count|default:employees.count }}</div>
+                </div>
+                <div class="p-2 rounded-3" style="background: rgba(255,255,255,0.2);"><i class="bi bi-people h4 mb-0"></i></div>
             </div>
         </div>
     </div>
 
+    <!-- Active Staff -->
+    <div class="col-6 col-md-3">
+        <div class="card stat-card shadow-sm p-3 border-0" style="background: #fff; border-left: 4px solid #10b981 !important;">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="small text-muted fw-bold text-uppercase">Active Staff</div>
+                    <div class="h2 mb-0 fw-bold text-dark">{{ active_count }}</div>
+                </div>
+                <div class="text-success opacity-50"><i class="bi bi-check-circle-fill h4 mb-0"></i></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Departments (Requested) -->
+    <div class="col-6 col-md-3">
+        <div class="card stat-card shadow-sm p-3 border-0" style="background: #fff; border-left: 4px solid #f59e0b !important;">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="small text-muted fw-bold text-uppercase">Departments</div>
+                    <div class="h2 mb-0 fw-bold text-dark">{{ dept_count }}</div>
+                </div>
+                <div class="text-warning opacity-50"><i class="bi bi-building h4 mb-0"></i></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Relieved/Inactive (Requested) -->
+    <div class="col-6 col-md-3">
+        <div class="card stat-card shadow-sm p-3 border-0" style="background: #fff; border-left: 4px solid #ef4444 !important;">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="small text-muted fw-bold text-uppercase">Relieved/Left</div>
+                    <div class="h2 mb-0 fw-bold text-dark">{{ exited_count }}</div>
+                </div>
+                <div class="text-danger opacity-50"><i class="bi bi-person-x-fill h4 mb-0"></i></div>
+            </div>
+        </div>
+    </div>
+</div>
     <!-- Filter Bar -->
     <div class="card filter-card shadow-sm mb-4">
         <div class="card-body p-3">

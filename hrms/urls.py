@@ -88,15 +88,26 @@ urlpatterns = [
     path('attendance/records/<int:pk>/edit/', views.AttendanceRecordUpdateView.as_view(), name='attendance_record_edit'),
     path('attendance/policy/', views.AttendancePolicyListView.as_view(), name='attendance_policy'),
     path('attendance/policy/<int:pk>/configure/', views.AttendancePolicyFormView.as_view(), name='attendance_policy_configure'),
+    path('attendance/policy/add/', views.AttendancePolicyCreateView.as_view(), name='attendance_policy_create'),
+    path('attendance/policy-version/<int:pk>/edit/', views.AttendancePolicyUpdateView.as_view(), name='attendance_policy_edit'),
+
+
     path('attendance/me/', views.MyAttendanceView.as_view(), name='my_attendance'),
     path('attendance/check-in/', views.CheckInView.as_view(), name='attendance_check_in'),
     path('attendance/check-out/', views.CheckOutView.as_view(), name='attendance_check_out'),
+
     path('attendance/holidays/', views.HolidayListView.as_view(), name='holiday_list'),
     path('attendance/holidays/add/', views.HolidayCreateView.as_view(), name='holiday_add'),
     path('attendance/holidays/<int:pk>/edit/', views.HolidayUpdateView.as_view(), name='holiday_edit'),
     path('attendance/holidays/<int:pk>/delete/', views.HolidayDeleteView.as_view(), name='holiday_delete'),
     path('attendance/report/<int:emp_id>/<int:month>/<int:year>/', views.EmployeePunchReportView.as_view(), name='employee_punch_report'),
-
+    path('attendance/calendars/manage/', views.HolidayCalendarManageView.as_view(), name='holiday_calendar_manage'),
+    # path('attendance/calendars/<int:calendar_id>/holidays/', views.CalendarHolidayListView.as_view(),
+    #      name='calendar_holiday_list'),
+    #
+    # # This one is for adding a new date to that calendar
+    # path('attendance/calendars/<int:calendar_id>/holidays/add/', views.CalendarHolidayCreateView.as_view(),
+    #      name='calendar_holiday_add'),
 
     # --- Leave ---
     path('leave/', views.LeaveApplicationListView.as_view(), name='my_leave'),
@@ -106,6 +117,8 @@ urlpatterns = [
     path('leave/<int:pk>/cancel/', views.LeaveCancelView.as_view(), name='leave_cancel'),
 
     path('leave/balance/', views.LeaveBalanceListView.as_view(), name='leave_balance'),
+    path('leave/history/<int:pk>/', views.EmployeeLeaveHistoryView.as_view(), name='employee_leave_history'),
+
     path('leave/balance/add/', views.LeaveBalanceCreateView.as_view(), name='leave_balance_add'),
     path('leave/balance/<int:pk>/edit/', views.LeaveBalanceUpdateView.as_view(), name='leave_balance_edit'),
 

@@ -1897,6 +1897,11 @@ class PaymentFollowUpDashboardView(LoginRequiredMixin, TemplateView):
         search_query = self.request.GET.get("q")
         customer_id = self.request.GET.get("customer_id")
         is_power_user = user.is_superuser or getattr(user, 'is_accountant', False)
+        target_sp = self.request.GET.get("target_sp")
+        overdue_only = self.request.GET.get("overdue_only") == "true"
+        status_filter = self.request.GET.get("status_filter")
+
+
 
         qs = (CustomerVoucherStatus.objects.filter(
             Q(is_unpaid=True) | Q(is_partially_paid=True)
@@ -1921,7 +1926,35 @@ class PaymentFollowUpDashboardView(LoginRequiredMixin, TemplateView):
             if salesperson_id:
                 qs = qs.filter(customer__salesperson_id=salesperson_id)
         else:
-            qs = qs.filter(customer__salesperson__user=user)
+            current_sp = SalesPerson.objects.filter(user=user).first()
+            if current_sp and current_sp.name == "Ankush":
+                if target_sp in ["Ankush", "Satish", "Naveen"]:
+                    qs = qs.filter(customer__salesperson__name=target_sp)
+                else:
+                    # Default: Show all three
+                    qs = qs.filter(customer__salesperson__name__in=["Ankush", "Satish", "Naveen"])
+            else:
+                qs = qs.filter(customer__salesperson__user=user)
+
+        # STATUS FILTRATION LOGIC
+        if status_filter:
+            today = date.today()
+            valid_ids = []
+            for vs in qs:
+                credit_days = vs.customer.credit_profile.credit_period_days if hasattr(vs.customer,
+                                                                                       'credit_profile') and vs.customer.credit_profile else 0
+                days_elapsed = (today - vs.voucher_date).days
+                remaining = credit_days - days_elapsed
+
+                if status_filter == "overdue" and days_elapsed > credit_days:
+                    valid_ids.append(vs.id)
+                elif status_filter == "warning" and 0 <= remaining <= 10:
+                    valid_ids.append(vs.id)
+                elif status_filter == "healthy" and remaining > 10:
+                    valid_ids.append(vs.id)
+
+            qs = qs.filter(id__in=valid_ids)
+
 
         if search_query:
             qs = qs.filter(customer__name__icontains=search_query)
@@ -1980,6 +2013,12 @@ class PaymentFollowUpDashboardView(LoginRequiredMixin, TemplateView):
         ctx["selected_customer_id"] = self.request.GET.get("customer_id")
         ctx["selected_salesperson"] = self.request.GET.get("salesperson")
         ctx["is_accountant"] = is_power_user
+        user_sp = SalesPerson.objects.filter(user=self.request.user).first()
+        ctx["is_ankush"] = user_sp.name == "Ankush" if user_sp else False
+        ctx["selected_target_sp"] = self.request.GET.get("target_sp", "")
+        ctx["overdue_only"] = self.request.GET.get("overdue_only") == "true"
+        ctx["status_filter"] = self.request.GET.get("status_filter", "")
+
 
         return ctx
 
@@ -1990,6 +2029,8 @@ def export_payment_followup(request):
         search_query = request.GET.get("q")
         customer_id = request.GET.get("customer_id")
         export_type = request.GET.get("type")  # 'excel' or 'pdf'
+        target_sp = request.GET.get("target_sp")
+        overdue_only = request.GET.get("overdue_only") == "true"
 
         is_power_user = user.is_superuser or getattr(user, 'is_accountant', False)
 
@@ -2002,8 +2043,26 @@ def export_payment_followup(request):
         elif is_power_user:
             if salesperson_id:
                 qs = qs.filter(customer__salesperson_id=salesperson_id)
+        if overdue_only:
+            today = date.today()
+            valid_ids = []
+            for vs in qs:
+                cp = vs.customer.credit_profile.credit_period_days if hasattr(vs.customer,
+                                                                              'credit_profile') and vs.customer.credit_profile else 0
+                if (today - vs.voucher_date).days > cp:
+                    valid_ids.append(vs.id)
+            qs = qs.filter(id__in=valid_ids)
+
         else:
-            qs = qs.filter(customer__salesperson__user=user)
+            # Apply the same "Ankush" logic here
+            current_sp = SalesPerson.objects.filter(user=user).first()
+            if current_sp and current_sp.name == "Ankush":
+                if target_sp in ["Ankush", "Satish", "Naveen"]:
+                    qs = qs.filter(customer__salesperson__name=target_sp)
+                else:
+                    qs = qs.filter(customer__salesperson__name__in=["Ankush", "Satish", "Naveen"])
+            else:
+                qs = qs.filter(customer__salesperson__user=user)
 
         if search_query:
             qs = qs.filter(customer__name__icontains=search_query)
@@ -2070,6 +2129,7 @@ def export_payment_followup(request):
             if pisa_status.err:
                 return HttpResponse('We had some errors <pre>' + html + '</pre>')
             return response
+
 
 @require_POST
 def payment_followup_action(request):

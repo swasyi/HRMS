@@ -573,6 +573,47 @@ def check_customer_credit_api(request, customer_id):
     })
 
 
+from tally_voucher.models import VoucherEmiPaymentAllocation  # Ensure this import is correct
+
+
+def check_customer_credit_api(request, customer_id):
+    from customer_dashboard.models import CustomerVoucherStatus
+
+    # 1. Get all overdue/unpaid records
+    all_overdue = CustomerVoucherStatus.objects.filter(
+        customer_id=customer_id,
+        is_credit_period_crossed=True
+    ).filter(
+        Q(is_unpaid=True) | Q(is_partially_paid=True)
+    ).select_related('voucher')
+
+    # 2. Identify which ones have EMI running
+    overdue_ids = all_overdue.values_list('voucher_id', flat=True)
+    vouchers_with_emi = VoucherEmiPaymentAllocation.objects.filter(
+        voucher__voucher_id__in=overdue_ids
+    ).values_list('voucher__voucher_id', flat=True).distinct()
+
+    # 3. Separate them
+    # Hard Block: Overdue and NO EMI
+    hard_overdue = all_overdue.exclude(voucher_id__in=vouchers_with_emi)
+    # Bypassed: Overdue but HAS EMI
+    emi_covered = all_overdue.filter(voucher_id__in=vouchers_with_emi)
+
+    # 4. Determine blocking status
+    is_blocked = hard_overdue.exists()
+
+    return JsonResponse({
+        "is_blocked": is_blocked,
+        "overdue_invoices": [
+            {"pi_id": rec.voucher.voucher_number, "date": rec.voucher_date.strftime('%d-%m-%Y')}
+            for rec in hard_overdue
+        ],
+        "emi_covered_invoices": [
+            {"pi_id": rec.voucher.voucher_number, "date": rec.voucher_date.strftime('%d-%m-%Y')}
+            for rec in emi_covered
+        ],
+    })
+
 from django.db.models import Q
 from django.http import JsonResponse
 

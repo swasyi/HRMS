@@ -1,39 +1,273 @@
 {% extends "hrms/base.html" %}
-{% block title %}Holiday Calendar{% endblock %}
-{% block page_title %}Holiday Calendar{% endblock %}
+{% block title %}Holiday Governance Registry{% endblock %}
+
+{% block extra_css %}
+<style>
+    :root {
+        --primary-indigo: #4f46e5;
+        --surface-100: #f8fafc;
+        --surface-200: #e2e8f0;
+        --text-main: #1e293b;
+        --text-muted: #64748b;
+    }
+
+    .dashboard-wrapper {
+        background-color: #f1f5f9;
+        min-height: 100vh;
+        padding-bottom: 5rem;
+    }
+
+    .header-section {
+        background: white;
+        border-bottom: 1px solid var(--surface-200);
+        padding: 2rem 0;
+        margin-bottom: 2rem;
+    }
+
+    /* Stats Ribbon */
+    .stats-ribbon {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+    }
+
+    .stat-card {
+        background: white;
+        padding: 1.25rem;
+        border-radius: 16px;
+        border: 1px solid var(--surface-200);
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .stat-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+    }
+
+    /* Holiday Table Card */
+    .holiday-card {
+        background: white;
+        border-radius: 20px;
+        border: 1px solid var(--surface-200);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        overflow: hidden;
+    }
+
+    .month-divider {
+        background: var(--surface-100);
+        padding: 0.75rem 1.5rem;
+        font-weight: 700;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-muted);
+        border-top: 1px solid var(--surface-200);
+        border-bottom: 1px solid var(--surface-200);
+    }
+
+    .holiday-row {
+        transition: all 0.2s;
+    }
+
+    .holiday-row:hover {
+        background-color: #f8faff;
+    }
+
+    .date-box {
+        text-align: center;
+        min-width: 60px;
+    }
+
+    .date-day {
+        display: block;
+        font-size: 1.25rem;
+        font-weight: 800;
+        line-height: 1;
+        color: var(--text-main);
+    }
+
+    .date-month {
+        display: block;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--primary-indigo);
+    }
+
+    .template-tag {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-radius: 6px;
+        background: #eef2ff;
+        color: #4338ca;
+        border: 1px solid #c7d2fe;
+    }
+
+    .company-tag {
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--text-muted);
+    }
+
+    .search-bar {
+        border-radius: 12px;
+        padding-left: 2.5rem;
+        background: var(--surface-100);
+        border-color: var(--surface-200);
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-{% if hrms_is_hr %}
-<div class="d-flex justify-content-end mb-3">
-  <a href="{% url 'hrms:holiday_add' %}" class="btn btn-sm text-white" style="background:var(--accent);">
-    <i class="bi bi-plus-lg"></i> Add Holiday
-  </a>
-</div>
-{% endif %}
+<div class="dashboard-wrapper">
+    <!-- Header -->
+    <header class="header-section shadow-sm">
+        <div class="container">
+            <div class="d-flex justify-content-between align-items-end">
+                <div>
+                    <nav aria-label="breadcrumb">
+                        <ol class="breadcrumb mb-2">
+                            <li class="breadcrumb-item"><a href="#" class="text-decoration-none">Attendance</a></li>
+                            <li class="breadcrumb-item active">Holiday Registry</li>
+                        </ol>
+                    </nav>
+                    <h1 class="fw-bold text-dark mb-1">Holiday Governance</h1>
+                    <p class="text-muted mb-0">Manage global and regional holiday schedules across business units.</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="{% url 'hrms:holiday_calendar_manage' %}" class="btn btn-outline-dark rounded-3 px-4">
+                        <i class="bi bi-gear-wide-connected me-2"></i>Manage Templates
+                    </a>
+                    {% if hrms_is_hr %}
+                    <a href="{% url 'hrms:holiday_add' %}" class="btn btn-primary rounded-3 px-4 shadow">
+                        <i class="bi bi-plus-lg me-2"></i>Add Holiday
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </header>
 
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-hover mb-0 align-middle">
-      <thead class="table-light"><tr><th>Date</th><th>Name</th><th>Type</th><th>Company</th>{% if hrms_is_hr %}<th class="text-end">Actions</th>{% endif %}</tr></thead>
-      <tbody>
-        {% for h in holidays %}
-        <tr>
-          <td>{{ h.date }}</td>
-          <td>{{ h.name }}</td>
-          <td><span class="badge text-bg-light border">{{ h.get_type_display }}</span></td>
-          <td>{{ h.company }}</td>
-          {% if hrms_is_hr %}
-          <td class="text-end">
-            <a href="{% url 'hrms:holiday_edit' h.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
-            <a href="{% url 'hrms:holiday_delete' h.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
-          </td>
-          {% endif %}
-        </tr>
-        {% empty %}
-        <tr><td colspan="5" class="text-muted text-center py-4">No holidays configured.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+    <div class="container">
+        <!-- Stats Ribbon -->
+        <div class="stats-ribbon">
+            <div class="stat-card">
+                <div class="stat-icon bg-primary bg-opacity-10 text-primary">
+                    <i class="bi bi-calendar-check"></i>
+                </div>
+                <div>
+                    <small class="text-muted d-block uppercase fw-bold" style="font-size: 0.65rem;">Total Holidays</small>
+                    <span class="fs-4 fw-bold">{{ holidays.count }}</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon bg-success bg-opacity-10 text-success">
+                    <i class="bi bi-building"></i>
+                </div>
+                <div>
+                    <small class="text-muted d-block uppercase fw-bold" style="font-size: 0.65rem;">Calendars Active</small>
+                    <span class="fs-4 fw-bold">{{ calendars.count|default:"---" }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter & Search Bar -->
+        <div class="card border-0 shadow-sm rounded-4 mb-4">
+            <div class="card-body p-3">
+                <form method="GET" class="row g-2 align-items-center">
+                    <div class="col-md-4 position-relative">
+                        <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
+                        <input type="text" name="q" class="form-control search-bar" placeholder="Search by holiday name...">
+                    </div>
+                    <div class="col-md-3">
+                        <select name="template" class="form-select border-0 bg-light rounded-3" onchange="this.form.submit()">
+                            <option value="">All Templates</option>
+                            {% for cal in calendars %}
+                                <option value="{{ cal.id }}">{{ cal.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Holiday Registry -->
+        <div class="holiday-card">
+            <div class="table-responsive">
+                <table class="table table-borderless mb-0 align-middle">
+                    <thead class="bg-light text-muted">
+                        <tr>
+                            <th class="ps-4 py-3" style="font-size: 0.75rem; width: 120px;">DATE</th>
+                            <th class="py-3" style="font-size: 0.75rem;">HOLIDAY NAME</th>
+                            <th class="py-3" style="font-size: 0.75rem;">CALENDAR TEMPLATE</th>
+                            <th class="py-3" style="font-size: 0.75rem;">TYPE</th>
+                            {% if hrms_is_hr %}<th class="text-end pe-4 py-3" style="font-size: 0.75rem;">ACTIONS</th>{% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% regroup holidays by date|date:"F Y" as monthly_holidays %}
+
+                        {% for month in monthly_holidays %}
+                        <tr>
+                            <td colspan="5" class="month-divider">{{ month.grouper }}</td>
+                        </tr>
+
+                        {% for h in month.list %}
+                        <tr class="holiday-row border-bottom">
+                            <td class="ps-4 py-3">
+                                <div class="date-box">
+                                    <span class="date-month">{{ h.date|date:"M" }}</span>
+                                    <span class="date-day">{{ h.date|date:"d" }}</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="fw-bold text-dark">{{ h.name }}</div>
+                                <div class="company-tag"><i class="bi bi-building me-1"></i>{{ h.calendar.company.name }}</div>
+                            </td>
+                            <td>
+                                <span class="template-tag"><i class="bi bi-calendar3 me-1"></i>{{ h.calendar.name }}</span>
+                            </td>
+                            <td>
+                                <span class="badge rounded-pill {% if h.type == 'public' %}bg-info-subtle text-info{% else %}bg-secondary-subtle text-secondary{% endif %} border px-3">
+                                    {{ h.get_type_display }}
+                                </span>
+                            </td>
+                            {% if hrms_is_hr %}
+                            <td class="text-end pe-4">
+                                <div class="btn-group shadow-sm">
+                                    <a href="{% url 'hrms:holiday_edit' h.pk %}" class="btn btn-white btn-sm border" title="Edit">
+                                        <i class="bi bi-pencil-square text-primary"></i>
+                                    </a>
+                                    <a href="{% url 'hrms:holiday_delete' h.pk %}" class="btn btn-white btn-sm border" title="Delete">
+                                        <i class="bi bi-trash text-danger"></i>
+                                    </a>
+                                </div>
+                            </td>
+                            {% endif %}
+                        </tr>
+                        {% endfor %}
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center py-5">
+                                <div class="opacity-25 mb-3"><i class="bi bi-calendar-x display-1"></i></div>
+                                <h5 class="text-muted fw-bold">No holidays found in the registry</h5>
+                                <p class="text-muted small">Try adjusting your filters or add a new holiday date.</p>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

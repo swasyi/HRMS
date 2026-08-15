@@ -72,13 +72,23 @@ class EmployeeForm(BootstrapModelForm):
         model = m.Employee
         fields = [
             'company', 'department', 'designation', 'employee_code', 'first_name', 'last_name',
-            'email', 'phone', 'gender', 'date_of_birth', 'date_of_joining', 'employment_type', 'status',
+            'email', 'phone', 'gender', 'date_of_birth', 'date_of_joining', 'date_of_confirmation','employment_type', 'status',
         ]
         widgets = {
             'date_of_birth': forms.DateInput(attrs={'type': 'date'}),
             'date_of_joining': forms.DateInput(attrs={'type': 'date'}),
+            'date_of_confirmation': forms.DateInput(attrs={'type': 'date'}),
+
         }
 
+    # def __init__(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
+    #     # Make it read-only so users know it's handled by the system
+    #     if 'employee_code' in self.fields:
+    #         self.fields['employee_code'].widget.attrs['readonly'] = True
+    #         self.fields['employee_code'].required = False
+    #         self.fields['employee_code'].initial = "Auto-generated"
+    #
 
 class EmployeeBankDetailForm(BootstrapModelForm):
     class Meta:
@@ -113,12 +123,17 @@ class AttendancePolicyForm(BootstrapModelForm):
     class Meta:
         model = m.AttendancePolicy
         fields = [
-            'work_start_time', 'work_end_time', 'grace_window_minutes', 'max_grace_per_month',
+            'company','office_start_time', 'office_end_time', 'grace_minutes', 'grace_allowed_count','effective_from',
             'half_day_threshold_hours', 'full_day_threshold_hours', 'overtime_threshold_hours',
         ]
         widgets = {
-            'work_start_time': forms.TimeInput(attrs={'type': 'time'}),
-            'work_end_time': forms.TimeInput(attrs={'type': 'time'}),
+            # HTML5 date and time pickers for better UI
+            'effective_from': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'office_start_time': forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
+            'office_end_time': forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
+            'company': forms.Select(attrs={'class': 'form-select'}),
+            'grace_minutes': forms.NumberInput(attrs={'class': 'form-control'}),
+            'grace_allowed_count': forms.NumberInput(attrs={'class': 'form-control'}),
         }
 
 
@@ -134,15 +149,103 @@ class AttendanceRecordForm(BootstrapModelForm):
         }
 
 
+class HolidayCalendarForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        # We pass the user from the view to the form
+        user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+        if user:
+            if user.is_superuser:
+                # Superadmins see all companies
+                self.fields['company'].queryset = m.Company.objects.all()
+            else:
+                # HR Managers only see companies they are assigned to manage
+                self.fields['company'].queryset = user.employee_profile.managed_companies.all()
+
+    class Meta:
+        model = m.HolidayCalendar
+        fields = ['company', 'name', 'is_default']  # Added 'company'
+        widgets = {
+            'company': forms.Select(attrs={'class': 'form-select'}),
+            'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. North India Office'}),
+            'is_default': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
 class HolidayForm(BootstrapModelForm):
     class Meta:
         model = m.Holiday
-        fields = ['company', 'date', 'name', 'type', 'description']
+        fields = ['calendar', 'date', 'name', 'type', 'description']
         widgets = {
-            'date': forms.DateInput(attrs={'type': 'date'}),
+            'date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'name': forms.TextInput(attrs={'class': 'form-control'}),
+            'type': forms.Select(attrs={'class': 'form-select'}),
         }
 
 
+class HolidayCalendarForm(forms.ModelForm):
+    class Meta:
+        model = m.HolidayCalendar
+        # Include all necessary fields
+        fields = ['company', 'name', 'is_default', 'description']
+        widgets = {
+            'company': forms.Select(attrs={'class': 'form-select rounded-3'}),
+            'name': forms.TextInput(
+                attrs={'class': 'form-control rounded-3', 'placeholder': 'e.g. North India Office'}),
+            'is_default': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'description': forms.Textarea(attrs={'class': 'form-control rounded-3', 'rows': 2}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        # Pop user to filter companies
+        user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+        if user:
+            if user.is_superuser:
+                self.fields['company'].queryset = m.Company.objects.all()
+            else:
+                # Only show companies this HR is assigned to
+                self.fields['company'].queryset = user.employee_profile.managed_companies.all()
+
+        # Make company mandatory for creation
+        self.fields['company'].empty_label = "--- Select Company ---"
+        self.fields['company'].required = True
+
+
+class BulkHolidayForm(forms.ModelForm):
+    # This is a virtual field not in the DB, used for bulk selection
+    target_calendars = forms.ModelMultipleChoiceField(
+        queryset=m.HolidayCalendar.objects.none(),
+        widget=forms.CheckboxSelectMultiple(attrs={'class': 'list-unstyled'}),
+        label="Apply to these Templates"
+    )
+
+    class Meta:
+        model = m.Holiday
+        fields = ['name', 'date', 'type', 'description']
+        widgets = {
+            'date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. Independence Day'}),
+            'type': forms.Select(attrs={'class': 'form-select'}),
+            'description': forms.TextInput(attrs={'class': 'form-control'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+        # Filter the checklists so HR only sees calendars for THEIR companies
+        if user:
+            if user.is_superuser:
+                self.fields['target_calendars'].queryset = m.HolidayCalendar.objects.all().select_related('company')
+            else:
+                managed_ids = user.employee_profile.managed_companies.values_list('id', flat=True)
+                self.fields['target_calendars'].queryset = m.HolidayCalendar.objects.filter(
+                    company_id__in=managed_ids
+                ).select_related('company')
+
+        # Display the company name next to the calendar name in the checklist
+        self.fields['target_calendars'].label_from_instance = lambda obj: f"{obj.name} ({obj.company.name})"
 # ---------------------------------------------------------------------------
 # Leave Management
 # ---------------------------------------------------------------------------
@@ -168,7 +271,7 @@ class LeaveApplicationForm(BootstrapModelForm):
     """Self-service: the employee applying is fixed by the view, not a form field."""
     class Meta:
         model = m.LeaveApplication
-        fields = ['leave_type', 'start_date', 'end_date', 'reason']
+        fields = ['leave_type', 'day_type','start_date', 'end_date', 'reason']
         widgets = {
             'start_date': forms.DateInput(attrs={'type': 'date'}),
             'end_date': forms.DateInput(attrs={'type': 'date'}),
@@ -176,18 +279,49 @@ class LeaveApplicationForm(BootstrapModelForm):
         }
 
     def clean(self):
-        cleaned = super().clean()
-        start, end = cleaned.get('start_date'), cleaned.get('end_date')
-        if start and end and end < start:
+        cleaned_data = super().clean()
+        day_type = cleaned_data.get('day_type')
+        start_date = cleaned_data.get('start_date')
+        end_date = cleaned_data.get('end_date')
+
+        if day_type == 'half':
+            # For half day, end date must be same as start date
+            cleaned_data['end_date'] = start_date
+        elif start_date and end_date and end_date < start_date:
             raise forms.ValidationError('End date cannot be before start date.')
-        return cleaned
+
+        return cleaned_data
 
 
 class LeaveApplicationHRForm(LeaveApplicationForm):
     """Same as above, but HR picks which employee it's for."""
     class Meta(LeaveApplicationForm.Meta):
-        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'reason']
+        fields = ['employee'] + LeaveApplicationForm.Meta.fields
 
+
+class LeaveApplicationForm(forms.ModelForm):
+    class Meta:
+        model = m.LeaveApplication
+        fields = ['employee', 'leave_type', 'day_type', 'start_date', 'end_date', 'reason']
+
+    def clean(self):
+        cleaned_data = super().clean()
+        day_type = cleaned_data.get('day_type')
+        start_date = cleaned_data.get('start_date')
+        end_date = cleaned_data.get('end_date')
+
+        if day_type == 'half':
+            # 1. Force total_days to be 0.5
+            self.instance.total_days = 0.5
+            # 2. For half day, end_date must be the same as start_date
+            cleaned_data['end_date'] = start_date
+        else:
+            # 3. Standard calculation for Full Days
+            if start_date and end_date:
+                delta = (end_date - start_date).days + 1
+                self.instance.total_days = delta
+
+        return cleaned_data
 
 class LeaveRejectForm(forms.Form):
     rejection_reason = forms.CharField(
@@ -226,6 +360,8 @@ class SalaryStructureForm(BootstrapModelForm):
     class Meta:
         model = m.SalaryStructure
         fields = ['company', 'name', 'description']
+
+
 
 
 class SalaryComponentForm(BootstrapModelForm):

@@ -123,7 +123,13 @@
             <tr>
               <td>{{ iv.interview_round }}</td>
               <td>{{ iv.scheduled_on }}</td>
-              <td>{{ iv.interviewer|default:"—" }}</td>
+  <td>
+    {% for person in iv.interviewer.all %}
+      {{ person }}{% if not forloop.last %}, {% endif %}
+    {% empty %}
+      —
+    {% endfor %}
+  </td>
               <td>{{ iv.get_mode_display }}</td>
               <td><span class="badge text-bg-light border">{{ iv.get_status_display }}</span></td>
               <td><a href="{% url 'hrms:interview_edit' iv.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a></td>

@@ -79,6 +79,8 @@
     .punch-cell.is-changed { background-color: #fef9c3 !important; border: 1px solid #facc15 !important; }
 
     .form-control-sm, .form-select-sm { border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.8rem; }
+    .mark-sun { color: #16a34a; background: #f0fdf4; border: 1px solid #bbf7d0; }
+    .mark-future { color: #94a3b8; font-weight: normal; opacity: 0.5; }
 </style>
 {% endblock %}
 
@@ -151,35 +153,45 @@
                     {% for date in date_list %}
                         <td class="punch-cell" data-emp="{{ emp.id }}" data-date="{{ date|date:'Y-m-d' }}">
                             {% with rec=attendance_matrix|dict_key:emp.id|dict_key:date %}
-                                <div class="view-mode">
-                                    {% if rec %}
-                                        {% if rec.status == 'on_leave' %}
-                                            <span class="status-mark bg-primary text-white">{{ rec.display_label }}</span>
-                                        {% else %}
-                                            <span class="punch-time in-time">{{ rec.check_in|time:"h:i A" }}</span>
-                                            <span class="punch-time out-time">{{ rec.check_out|time:"h:i A" }}</span>
+<div class="view-mode">
+    {% if rec %}
+        {% if rec.status == 'on_leave' %}
+            <span class="status-mark bg-primary text-white">{{ rec.display_label }}</span>
 
-                                            {% if rec.status == 'present' %}
-                                                <span class="status-mark mark-fd">FD</span>
-                                            {% elif rec.status == 'half_day' %}
-                                                <span class="status-mark mark-hd">HD</span>
-                                            {% else %}
-                                                <span class="status-mark mark-abs">ABS</span>
-                                            {% endif %}
+        {% elif rec.status == 'present' or rec.status == 'half_day' %}
+            <span class="punch-time in-time">{{ rec.check_in|time:"h:i A" }}</span>
+            <span class="punch-time out-time">{{ rec.check_out|time:"h:i A"|default:"--" }}</span>
 
-                                            {% if rec.display_label %}
-                                                <div style="margin-top: 2px;">
-                                                    <span class="badge {% if 'Exhausted' in rec.display_label %}bg-danger{% else %}bg-warning text-dark{% endif %}" style="font-size: 8px;">
-                                                        {{ rec.display_label }}
-                                                    </span>
-                                                </div>
-                                            {% endif %}
-                                        {% endif %}
-                                    {% else %}
-                                        <span class="text-muted opacity-25">—</span>
-                                    {% endif %}
-                                </div>
+            {% if rec.status == 'present' %}
+                <span class="status-mark mark-fd">FD</span>
+            {% else %}
+                <span class="status-mark mark-hd">HD</span>
+            {% endif %}
 
+            {% if rec.display_label %}
+                <div style="margin-top: 2px;">
+                    <span class="badge {% if 'Exhausted' in rec.display_label %}bg-danger{% else %}bg-warning text-dark{% endif %}" style="font-size: 8px;">
+                        {{ rec.display_label }}
+                    </span>
+                </div>
+            {% endif %}
+
+        {% elif rec.status == 'sunday' %}
+            <span class="status-mark mark-sun">SUN</span>
+
+        {% elif rec.status == 'future' %}
+            <span class="mark-future">—</span>
+
+        {% elif rec.status == 'absent' %}
+            <span class="status-mark mark-abs">ABS</span>
+
+        {% else %}
+             <span class="text-muted opacity-25">—</span>
+        {% endif %}
+    {% else %}
+        <span class="text-muted opacity-25">—</span>
+    {% endif %}
+</div>
                                 <div class="edit-mode d-none">
                                     <input type="time" class="in-input mb-1 form-control form-control-sm p-0" value="{{ rec.check_in|date:'H:i' }}" style="font-size: 10px; height: 20px; text-align: center;">
                                     <input type="time" class="out-input form-control form-control-sm p-0" value="{{ rec.check_out|date:'H:i' }}" style="font-size: 10px; height: 20px; text-align: center;">
