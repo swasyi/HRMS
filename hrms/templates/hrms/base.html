@@ -211,6 +211,39 @@
         </button>
         <span class="page-title">{% block page_title %}Dashboard{% endblock %}</span>
       </div>
+<!--adddd new in navbar-->
+<!--    <div class="dropdown">-->
+<!--      <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">-->
+<!--        <i class="bi bi-building-fill me-1"></i>-->
+<!--        {% if active_company %}-->
+<!--            {{ active_company.name }}-->
+<!--        {% else %}-->
+<!--            All Global View-->
+<!--        {% endif %}-->
+<!--      </button>-->
+<!--      <ul class="dropdown-menu shadow border-0">-->
+<!--        <li><h6 class="dropdown-header">Switch Company</h6></li>-->
+
+<!--        {% for comp in available_companies %}-->
+<!--        <li>-->
+<!--            <a class="dropdown-item {% if active_company_id == comp.id|stringformat:'s' %}active{% endif %}"-->
+<!--               href="{% url 'hrms:set_active_company' %}?company_id={{ comp.id }}">-->
+<!--               {{ comp.name }}-->
+<!--            </a>-->
+<!--        </li>-->
+<!--        {% endfor %}-->
+
+<!--        <li><hr class="dropdown-divider"></li>-->
+<!--        <li>-->
+<!--            <a class="dropdown-item {% if active_company_id == 'all' or not active_company_id %}active{% endif %}"-->
+<!--               href="{% url 'hrms:set_active_company' %}?company_id=all">-->
+<!--               <i class="bi bi-globe me-2"></i>All Global Company-->
+<!--            </a>-->
+<!--        </li>-->
+<!--      </ul>-->
+<!--    </div>-->
+
+
       <div class="user-chip d-flex align-items-center gap-2">
         <div class="avatar">{{ request.user.username|slice:":2"|upper }}</div>
         <span>{{ request.user.get_full_name|default:request.user.username }}</span>

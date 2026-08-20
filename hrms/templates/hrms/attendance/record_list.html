@@ -81,6 +81,13 @@
     .form-control-sm, .form-select-sm { border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.8rem; }
     .mark-sun { color: #16a34a; background: #f0fdf4; border: 1px solid #bbf7d0; }
     .mark-future { color: #94a3b8; font-weight: normal; opacity: 0.5; }
+    .mark-hol {
+    color: #4f46e5;
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    font-size: 8px !important;
+}
+
 </style>
 {% endblock %}
 
@@ -147,7 +154,13 @@
                 {% for emp in employees %}
                 <tr>
                     <td class="sticky-col fw-bold">{{ emp.employee_code }}</td>
-                    <td class="sticky-col-2 fw-bold">{{ emp.full_name }}</td>
+                    <td class="sticky-col-2 fw-bold">
+                        <a href="{% url 'hrms:employee_punch_report' emp_id=emp.id month=start_date.month year=start_date.year %}"
+                           class="text-decoration-none text-dark link-primary" title="View Full Report">
+                            {{ emp.full_name }}
+                        </a>
+                    </td>
+
                     <td class="sticky-col-3 text-muted">{{ emp.department.name|truncatechars:18 }}</td>
 
                     {% for date in date_list %}
@@ -175,6 +188,11 @@
                     </span>
                 </div>
             {% endif %}
+        {% elif rec.status == 'holiday' %}
+        <span class="status-mark mark-hol">HOL</span>
+        <div class="text-muted" style="font-size: 7px; line-height: 1; margin-top: 2px;">{{ rec.display_label|truncatechars:10 }}</div>
+
+
 
         {% elif rec.status == 'sunday' %}
             <span class="status-mark mark-sun">SUN</span>

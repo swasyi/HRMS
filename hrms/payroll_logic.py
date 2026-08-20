@@ -187,6 +187,7 @@ def compute_attendance_breakdown(employee, year, month):
     }
 
 
+
 # Update this function
 def get_employee_holidays(employee, year, month):
     """Fetches holidays specific to the employee's assigned regional calendar."""
@@ -201,24 +202,25 @@ def get_employee_holidays(employee, year, month):
         ).values_list('date', flat=True)
     )
 
-def get_policy_for_date(company, target_date):
-    """
-    Checks if there is a historical policy record that covers the target_date.
-    If not, returns the current Company settings.
-    """
-    from .models import AttendancePolicy
+# def get_policy_for_date(company, target_date):
+#     """
+#     Checks if there is a historical policy record that covers the target_date.
+#     If not, returns the current Company settings.
+#     """
+#     from .models import AttendancePolicy
+#
+#     # Look for an archive where 'effective_until' is greater than or equal to the target date.
+#     # We order by effective_until to get the closest matching history.
+#     history = AttendancePolicy.objects.filter(
+#         company=company,
+#         effective_until__gte=target_date
+#     ).order_by('effective_until').first()
+#
+#     if history:
+#         return history  # This object has office_start_time, grace_minutes, etc.
+#
+#     return company  # Default to the current Company model fields
 
-    # Look for an archive where 'effective_until' is greater than or equal to the target date.
-    # We order by effective_until to get the closest matching history.
-    history = AttendancePolicy.objects.filter(
-        company=company,
-        effective_until__gte=target_date
-    ).order_by('effective_until').first()
-
-    if history:
-        return history  # This object has office_start_time, grace_minutes, etc.
-
-    return company  # Default to the current Company model fields
 class PayrollError(Exception):
     """Raised for run-level problems (e.g. no company/period)."""
 
@@ -421,6 +423,167 @@ def compute_attendance_breakdown(employee, year, month):
         'paid_days': paid_days, 'total_days_in_month': total_days_in_month,
     }
 
+def compute_attendance_breakdown(employee, year, month):
+    """
+    The 'Smart Engine': Calculates full_days and half_days using punch times
+    and office hours, matching the Attendance Report logic exactly.
+    Handles versioned policies (e.g. Aug 1st change) and regional holidays.
+    """
+    from django.utils import timezone
+    from datetime import datetime, timedelta, time
+    import calendar
+    from decimal import Decimal
+
+    total_days_in_month = calendar.monthrange(year, month)[1]
+    period_start = date(year, month, 1)
+    period_end = date(year, month, total_days_in_month)
+    tz = timezone.get_current_timezone()
+
+    comp = employee.company
+
+    # NEW: Fetch regional holidays for this specific employee's template
+    holidays = get_employee_holidays(employee, year, month)
+
+    records = {
+        r.attendance_date: r
+        for r in m.AttendanceRecord.objects.filter(
+            employee=employee, attendance_date__year=year, attendance_date__month=month)
+    }
+
+    # Initialize Counters
+    full_days = Decimal('0')
+    half_days = Decimal('0')
+    comp_off_days = Decimal('0')
+    off_days = Decimal('0')
+    paid_leave_days = Decimal('0')
+    unaccounted_working_days = Decimal('0')
+    grace_used_count = 0
+
+    for day_num in range(1, total_days_in_month + 1):
+        d = date(year, month, day_num)
+
+        # --- NEW: VERSIONED POLICY FETCHING (Handles Aug 1st transition) ---
+        policy = comp.get_policy_for_date(d)
+        off_start = policy.office_start_time
+        off_end = policy.office_end_time
+        grace_mins = policy.grace_minutes
+        grace_limit = policy.grace_allowed_count
+        # Using policy thresholds instead of hardcoded numbers
+        full_threshold = float(policy.full_day_threshold_hours)
+        half_threshold = float(policy.half_day_threshold_hours)
+        # -------------------------------------------------------------------
+
+        is_holiday_or_sun = (d.weekday() == 6) or (d in holidays)
+        record = records.get(d)
+
+        # 1. Handle Sundays and Holidays
+        if is_holiday_or_sun:
+            if record and record.check_in:
+                comp_off_days += 1
+            else:
+                off_days += 1
+            continue
+
+        # 2. Process Working Days
+        if record and record.check_in:
+            # A. Check for Leave First (via Status 'on_leave')
+            if record.status == m.AttendanceRecord.Status.ON_LEAVE:
+                if record.remarks != "LWP" and employee.employment_type != 'intern':
+                    paid_leave_days += 1
+                else:
+                    unaccounted_working_days += 1
+                continue
+
+            # B. Smart Logic for Punches
+            local_in = timezone.localtime(record.check_in)
+            local_out = timezone.localtime(record.check_out) if record.check_out else None
+            p_in = local_in.time()
+            p_out = local_out.time() if local_out else off_start
+
+            # Effective hours math (Strict 10-6 or 9-5 Window)
+            eff_s = max(p_in, off_start)
+            eff_e = min(p_out, off_end)
+            eff_hours = (datetime.combine(d, eff_e) - datetime.combine(d, eff_s)).total_seconds() / 3600
+            grace_deadline = (datetime.combine(d, off_start) + timedelta(minutes=grace_mins)).time()
+
+            if p_in <= off_start:
+                if eff_hours >= full_threshold:
+                    full_days += 1
+                elif eff_hours >= half_threshold:
+                    half_days += 1
+                    # --- NEW: TOP-UP LOGIC FOR PERMANENT EMPLOYEES ---
+                    if employee.employment_type == 'full_time':
+                        # Check if a half-day leave exists to cover the other half
+                        half_leave = m.LeaveApplication.objects.filter(
+                            employee=employee, status='approved',
+                            start_date=d, day_type='half', leave_type__is_paid=True
+                        ).first()
+                        if half_leave:
+                            paid_leave_days += Decimal('0.5')
+                else:
+                    unaccounted_working_days += 1
+
+            elif p_in <= grace_deadline:
+                if p_out >= off_end:
+                    if grace_used_count < grace_limit:
+                        grace_used_count += 1
+                        full_days += 1  # Grace 'saves' the full day
+                    else:
+                        half_days += 1  # Grace exhausted
+                        # --- NEW: TOP-UP LOGIC FOR LATE ARRIVAL ---
+                        if employee.employment_type == 'full_time':
+                            half_leave = m.LeaveApplication.objects.filter(
+                                employee=employee, status='approved',
+                                start_date=d, day_type='half', leave_type__is_paid=True
+                            ).first()
+                            if half_leave:
+                                paid_leave_days += Decimal('0.5')
+
+                else:
+                    half_days += 1  # Came late, left early
+                    # Same Top-up for Late > Grace
+                    if employee.employment_type == 'full_time':
+                        half_leave = m.LeaveApplication.objects.filter(
+                            employee=employee, status='approved',
+                            start_date=d, day_type='half', leave_type__is_paid=True
+                        ).first()
+                        if half_leave:
+                            paid_leave_days += Decimal('0.5')
+
+            else:
+                half_days += 1  # Late Arrival (> 10:15)\
+                # Same Top-up for Late > Grace
+                if employee.employment_type == 'full_time':
+                    half_leave = m.LeaveApplication.objects.filter(
+                        employee=employee, status='approved',
+                        start_date=d, day_type='half', leave_type__is_paid=True
+                    ).first()
+                    if half_leave:
+                        paid_leave_days += Decimal('0.5')
+
+
+        else:
+            # 3. No Punch -> Check LeaveApplication Table directly
+            leave = m.LeaveApplication.objects.filter(
+                employee=employee, status='approved',
+                start_date__lte=d, end_date__gte=d
+            ).first()
+            if leave:
+                if leave.leave_type.is_paid and employee.employment_type != 'intern':
+                    paid_leave_days += 1
+                else:
+                    unaccounted_working_days += 1
+            else:
+                unaccounted_working_days += 1
+
+    absent_days = unaccounted_working_days
+    paid_days = full_days + (half_days * Decimal('0.5')) + comp_off_days + off_days + paid_leave_days
+
+    return {
+        'full_days': full_days, 'half_days': half_days, 'comp_off_days': comp_off_days,
+        'off_days': off_days, 'paid_leave_days': paid_leave_days, 'absent_days': absent_days,
+        'paid_days': paid_days, 'total_days_in_month': total_days_in_month,
+    }
 
 
 def get_loan_deduction(employee):

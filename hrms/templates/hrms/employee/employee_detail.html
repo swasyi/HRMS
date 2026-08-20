@@ -153,7 +153,7 @@
                             </div>
                             <div class="col-md-6">
                                 <div class="info-label">Father's Name</div>
-                                <div class="info-value">Mr. Rajeev Kumar</div> <!-- Linked to model later -->
+                                <div class="info-value">{{ employee.father_name|default:"N/A" }}</div> <!-- Linked to model later -->
                             </div>
                             <div class="col-md-6">
                                 <div class="info-label">Email ID</div>
@@ -165,7 +165,7 @@
                             </div>
                             <div class="col-md-6">
                                 <div class="info-label">Emergency Contact</div>
-                                <div class="info-value text-danger fw-bold">+91 98877-66554 (Mother)</div>
+                                <div class="info-value text-danger fw-bold">{{ employee.emergency_contact|linebreaksbr|default:"N/A" }}</div>
                             </div>
                             <div class="col-md-6">
                                 <div class="info-label">Gender / DOB</div>
@@ -173,7 +173,9 @@
                             </div>
                             <div class="col-12 mt-2">
                                 <div class="info-label">Permanent Address</div>
-                                <div class="info-value">Plot 45, Sector 12, Gurugram, Haryana - 122001</div>
+
+                                <div class="info-value">{{ employee.address|linebreaksbr|default:"N/A" }}</div>
+
                             </div>
                         </div>
                     </div>

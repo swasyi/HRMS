@@ -3,57 +3,18 @@
 
 {% block extra_css %}
 <style>
-    :root {
-        --slate-900: #0f172a;
-        --indigo-600: #4f46e5;
-    }
-
-    /* Device Identity Header */
-    .device-header {
-        background: linear-gradient(135deg, var(--slate-900) 0%, #1e293b 100%);
-        border-radius: 24px;
-        color: white;
-        padding: 2.5rem;
-        margin-bottom: 2rem;
-    }
-
-    .device-icon-box {
-        width: 80px; height: 80px;
-        background: rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(10px);
-        border-radius: 20px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 2.5rem; border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    /* Info Cards */
-    .detail-card { border: none; border-radius: 20px; background: white; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.04); }
+    :root { --slate-900: #0f172a; --indigo-600: #4f46e5; }
+    .device-header { background: linear-gradient(135deg, var(--slate-900) 0%, #1e293b 100%); border-radius: 24px; color: white; padding: 2.5rem; margin-bottom: 2rem; }
+    .device-icon-box { width: 80px; height: 80px; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); border-radius: 20px; display: flex; align-items: center; justify-content: center; font-size: 2.5rem; border: 1px solid rgba(255, 255, 255, 0.2); }
+    .detail-card { border: none; border-radius: 20px; background: white; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.04); height: 100%; }
     .label-caps { font-size: 0.7rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
     .value-text { font-size: 1rem; font-weight: 600; color: var(--slate-900); }
-
-    /* Security Box */
-    .password-container {
-        background: #f8fafc;
-        border: 1px dashed #e2e8f0;
-        border-radius: 12px;
-        padding: 12px 16px;
-    }
+    .password-container { background: #f8fafc; border: 1px dashed #e2e8f0; border-radius: 12px; padding: 12px 16px; }
     .blur-text { filter: blur(5px); transition: filter 0.3s ease; user-select: none; }
     .unblur { filter: blur(0); user-select: auto; }
-
-    /* Status Badges */
-    .status-indicator {
-        padding: 6px 16px;
-        border-radius: 50px;
-        font-size: 0.75rem;
-        font-weight: 800;
-        text-transform: uppercase;
-    }
+    .status-indicator { padding: 6px 16px; border-radius: 50px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
     .status-available { background: #dcfce7; color: #15803d; }
     .status-assigned { background: #e0e7ff; color: #4338ca; }
-
-    /* Timeline Styling */
-    .history-table th { background: #f8fafc; color: #64748b; font-size: 0.75rem; text-transform: uppercase; border: none; }
     .active-row { border-left: 4px solid var(--indigo-600); background: #fcfdff; }
 </style>
 {% endblock %}
@@ -66,38 +27,45 @@
         <div class="d-flex flex-column flex-md-row justify-content-between align-items-center gap-4">
             <div class="d-flex align-items-center gap-4">
                 <div class="device-icon-box">
-                    <i class="bi {% if 'Phone' in asset.asset_type %}bi-phone{% elif 'Laptop' in asset.asset_type %}bi-laptop{% else %}bi-cpu{% endif %}"></i>
+                    <i class="bi
+                        {% if 'Phone' in asset.category.name or 'Mobile' in asset.category.name %}bi-phone
+                        {% elif 'Sim' in asset.category.name %}bi-sim-fill
+                        {% elif 'Laptop' in asset.category.name %}bi-laptop
+                        {% else %}bi-cpu{% endif %}">
+                    </i>
                 </div>
                 <div class="text-center text-md-start">
                     <div class="label-caps text-white-50 mb-1">Asset Identity</div>
                     <h1 class="fw-bold mb-1">{{ asset.name }}</h1>
                     <div class="d-flex flex-wrap justify-content-center justify-content-md-start gap-3 mt-2">
-                        <span class="small opacity-75"><i class="bi bi-upc-scan me-1"></i> {{ asset.serial_number|default:"No Serial" }}</span>
-                        <span class="small opacity-75"><i class="bi bi-tag me-1"></i> {{ asset.asset_type|default:"Hardware" }}</span>
+                        <span class="small opacity-75">
+                            <i class="bi bi-upc-scan me-1"></i>
+                            {% if 'Sim' in asset.category.name %}ICCID:{% else %}SN:{% endif %} {{ asset.serial_number|default:"No Serial" }}
+                        </span>
+                        <span class="small opacity-75"><i class="bi bi-tag me-1"></i> {{ asset.category.name }}</span>
                     </div>
                 </div>
             </div>
 
             <div class="d-flex gap-2">
-                {% if hrms_is_hr %}
-                <a href="{% url 'hrms:asset_edit' asset.pk %}" class="btn btn-light rounded-pill px-4 fw-bold">
-                    <i class="bi bi-pencil-square me-2"></i>Edit Specs
-                </a>
-                {% if asset.employee %}
-                <form method="post" action="{% url 'hrms:asset_return' asset.pk %}" onsubmit="return confirm('Release this asset back to inventory?')">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-danger rounded-pill px-4 fw-bold shadow">
-                        <i class="bi bi-arrow-return-left me-2"></i>Return Asset
-                    </button>
-                </form>
-                {% endif %}
-                {% endif %}
+                <a href="{% url 'hrms:asset_edit' asset.pk %}" class="btn btn-light rounded-pill px-4 fw-bold">Edit Specs</a>
+                    {# ONLY SHOW RETURN BUTTON IF EMPLOYEE IS ASSIGNED #}
+    {% if asset.employee %}
+    <form method="post" action="{% url 'hrms:asset_return' asset.pk %}"
+          onsubmit="return confirm('Are you sure you want to release this asset back to inventory?')">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger rounded-pill px-4 fw-bold shadow">
+            <i class="bi bi-arrow-return-left me-2"></i>Return Asset
+        </button>
+    </form>
+    {% endif %}
+
             </div>
         </div>
     </div>
 
     <div class="row g-4">
-        <!-- LEFT: SPECIFICATIONS & SECURITY -->
+        <!-- LEFT: SPECIFICATIONS -->
         <div class="col-xl-4 col-lg-5">
             <div class="card detail-card p-4">
                 <div class="label-caps mb-4"><i class="bi bi-info-circle me-2"></i>Hardware Intelligence</div>
@@ -106,11 +74,9 @@
                     <div class="col-6">
                         <div class="label-caps">Status</div>
                         <div class="mt-1">
-                            {% if asset.employee %}
-                            <span class="status-indicator status-assigned">Issued</span>
-                            {% else %}
-                            <span class="status-indicator status-available">In Stock</span>
-                            {% endif %}
+                            <span class="status-indicator {% if asset.status == 'available' %}status-available{% else %}status-assigned{% endif %}">
+                                {{ asset.get_status_display }}
+                            </span>
                         </div>
                     </div>
                     <div class="col-6">
@@ -118,17 +84,35 @@
                         <div class="value-text">{{ asset.purchase_date|date:"d M Y"|default:"--" }}</div>
                     </div>
 
-                    <div class="col-12">
+                    <!-- SHOW SIM DETAILS TOGETHER -->
+                    {% if asset.sim or asset.phone_number %}
+                    <div class="col-12 border-top pt-3">
+                        <div class="row">
+                            <div class="col-6">
+                                <div class="label-caps">Network / SIM</div>
+                                <div class="value-text text-primary">{{ asset.sim|default:"--" }}</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="label-caps">Phone Number</div>
+                                <div class="value-text">{{ asset.phone_number|default:"--" }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if asset.device_password %}
+                    <div class="col-12 border-top pt-3">
                         <div class="label-caps">Security Credentials</div>
                         <div class="password-container mt-2 d-flex justify-content-between align-items-center">
                             <div class="font-monospace fw-bold text-danger blur-text" id="passText">
-                                {{ asset.device_password|default:"NO_CREDENTIALS_SET" }}
+                                {{ asset.device_password }}
                             </div>
                             <button class="btn btn-link btn-sm text-muted p-0" id="togglePass">
                                 <i class="bi bi-eye" id="eyeIcon"></i>
                             </button>
                         </div>
                     </div>
+                    {% endif %}
 
                     <div class="col-12 mt-4 pt-3 border-top">
                         <div class="label-caps mb-3">Current Custodian</div>
@@ -139,13 +123,11 @@
                             </div>
                             <div>
                                 <div class="value-text mb-0">{{ asset.employee.full_name }}</div>
-                                <div class="small text-muted">{{ asset.employee.employee_code }}</div>
+                                <div class="small text-muted">Issued: {{ asset.assigned_on|date:"d M Y" }}</div>
                             </div>
                         </div>
                         {% else %}
-                        <div class="text-center py-3 bg-light rounded-4 text-muted small">
-                            <i class="bi bi-archive h4 d-block mb-1"></i> Available for Assignment
-                        </div>
+                        <div class="text-center py-3 bg-light rounded-4 text-muted small">Available for Assignment</div>
                         {% endif %}
                     </div>
                 </div>
@@ -162,8 +144,8 @@
                 <div class="table-responsive">
                     <table class="table align-middle mb-0">
                         <thead>
-                            <tr>
-                                <th class="ps-4">Employee / Custodian</th>
+                            <tr class="text-muted small fw-bold">
+                                <th class="ps-4">Employee</th>
                                 <th>Handover Date</th>
                                 <th>Return Date</th>
                                 <th class="text-end pe-4">Status</th>
@@ -176,34 +158,18 @@
                                     <div class="fw-bold text-dark">{{ h.employee.full_name }}</div>
                                     <small class="text-muted">{{ h.employee.employee_code }}</small>
                                 </td>
-                                <td>
-                                    <div class="value-text" style="font-size: 0.85rem;">{{ h.assigned_date|date:"d M, Y" }}</div>
-                                </td>
-                                <td>
-                                    {% if h.returned_date %}
-                                    <div class="value-text" style="font-size: 0.85rem;">{{ h.returned_date|date:"d M, Y" }}</div>
-                                    {% else %}
-                                    <span class="text-muted opacity-50 small">--</span>
-                                    {% endif %}
-                                </td>
+                                <td>{{ h.assigned_date|date:"d M Y" }}</td>
+                                <td>{{ h.returned_date|date:"d M Y"|default:"--" }}</td>
                                 <td class="text-end pe-4">
                                     {% if h.is_still_using %}
-                                    <span class="badge bg-primary rounded-pill px-3 py-2 shadow-sm">
-                                        <i class="bi bi-arrow-repeat spin me-1"></i> CURRENTLY HELD
-                                    </span>
+                                    <span class="badge bg-primary rounded-pill">CURRENT HOLDER</span>
                                     {% else %}
-                                    <span class="badge bg-light text-success border border-success-subtle rounded-pill px-3 py-2">
-                                        <i class="bi bi-check2-circle me-1"></i> COMPLETED
-                                    </span>
+                                    <span class="badge bg-light text-success border">RETURNED</span>
                                     {% endif %}
                                 </td>
                             </tr>
                             {% empty %}
-                            <tr>
-                                <td colspan="4" class="text-center py-5 text-muted">
-                                    No assignment records found for this unit.
-                                </td>
-                            </tr>
+                            <tr><td colspan="4" class="text-center py-5 text-muted">No assignment records found.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
@@ -213,18 +179,16 @@
     </div>
 </div>
 
-<!-- JS for Password Toggle -->
 <script>
-    document.getElementById('togglePass').addEventListener('click', function() {
-        const passText = document.getElementById('passText');
-        const eyeIcon = document.getElementById('eyeIcon');
-
-        passText.classList.toggle('unblur');
-        if (passText.classList.contains('unblur')) {
-            eyeIcon.classList.replace('bi-eye', 'bi-eye-slash');
-        } else {
-            eyeIcon.classList.replace('bi-eye-slash', 'bi-eye');
-        }
-    });
+    const toggle = document.getElementById('togglePass');
+    if (toggle) {
+        toggle.addEventListener('click', function() {
+            const passText = document.getElementById('passText');
+            const eyeIcon = document.getElementById('eyeIcon');
+            passText.classList.toggle('unblur');
+            eyeIcon.classList.toggle('bi-eye');
+            eyeIcon.classList.toggle('bi-eye-slash');
+        });
+    }
 </script>
 {% endblock %}

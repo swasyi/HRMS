@@ -105,6 +105,7 @@ admin.site.register(m.PolicyAcknowledgement)
 admin.site.register(m.CompanyNotice)
 admin.site.register(m.NoticeRead)
 
+admin.site.register(m.AssetCategory)
 admin.site.register(m.Asset)
 admin.site.register(m.PerformanceReview)
 

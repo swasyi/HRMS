@@ -8,6 +8,7 @@
     <form method="post">
       {% csrf_token %}
       <div class="row g-3">
+        <!-- Work Information -->
         <div class="col-md-4">
           <label class="form-label">{{ form.company.label }}</label>
           {{ form.company }}
@@ -24,6 +25,8 @@
           <label class="form-label">{{ form.employee_code.label }}</label>
           {{ form.employee_code }}
         </div>
+
+        <!-- Basic Personal Info -->
         <div class="col-md-4">
           <label class="form-label">{{ form.first_name.label }}</label>
           {{ form.first_name }}
@@ -48,15 +51,36 @@
           <label class="form-label">{{ form.date_of_birth.label }}</label>
           {{ form.date_of_birth }}
         </div>
+
+        <!-- NEW: Family Info -->
+        <div class="col-md-4">
+          <label class="form-label">{{ form.father_name.label }}</label>
+          {{ form.father_name }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">{{ form.mother_name.label }}</label>
+          {{ form.mother_name }}
+        </div>
+
+        <!-- NEW: Address & Emergency (Full width for textareas) -->
+        <div class="col-md-12">
+          <label class="form-label">{{ form.address.label }}</label>
+          {{ form.address }}
+        </div>
+        <div class="col-md-12">
+          <label class="form-label">{{ form.emergency_contact.label }}</label>
+          {{ form.emergency_contact }}
+        </div>
+
+        <!-- Dates & Status -->
         <div class="col-md-4">
           <label class="form-label">{{ form.date_of_joining.label }}</label>
           {{ form.date_of_joining }}
         </div>
-          <div class="col-md-4">
+        <div class="col-md-4">
           <label class="form-label">{{ form.date_of_confirmation.label }}</label>
           {{ form.date_of_confirmation }}
         </div>
-
         <div class="col-md-4">
           <label class="form-label">{{ form.employment_type.label }}</label>
           {{ form.employment_type }}
@@ -70,6 +94,13 @@
       {% if form.non_field_errors %}
         <div class="text-danger small mt-2">{{ form.non_field_errors }}</div>
       {% endif %}
+
+      <!-- Error handling for fields (Optional but recommended) -->
+      {% for field in form %}
+        {% if field.errors %}
+          <div class="text-danger small">{{ field.label }}: {{ field.errors|striptags }}</div>
+        {% endif %}
+      {% endfor %}
 
       <div class="mt-4 d-flex gap-2">
         <button type="submit" class="btn text-white" style="background:var(--accent);">Save</button>

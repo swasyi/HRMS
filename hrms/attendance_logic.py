@@ -4,7 +4,7 @@ Attendance business logic — kept out of views.py so it's independently testabl
 Business rules (the "3-strike" grace rule), driven entirely by AttendancePolicy
 fields per company — no hardcoded times:
 
-  - Official start   = policy.work_start_time              (e.g. 10:00 AM)
+  - Official start   = policy.office_start_time              (e.g. 10:00 AM)
   - Grace window      = policy.grace_window_minutes minutes  (e.g. 15 -> up to 10:15 AM)
   - Grace allowance   = policy.max_grace_per_month instances  (e.g. 3 per month)
 
@@ -71,7 +71,7 @@ def evaluate_arrival(record, policy):
 
     employee = record.employee
     today = record.attendance_date
-    work_start_naive = datetime.combine(today, policy.work_start_time)
+    work_start_naive = datetime.combine(today, policy.office_start_time)
     work_start = _to_local_aware(work_start_naive)
     check_in_local = timezone.localtime(record.check_in) if timezone.is_aware(record.check_in) else record.check_in
     delta_minutes = int((check_in_local - work_start).total_seconds() // 60)

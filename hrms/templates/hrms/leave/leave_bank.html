@@ -223,7 +223,9 @@
                                         <div class="text-muted extra-small" style="font-size: 0.7rem;">{{ form.instance.e_name.designation.title }}</div>
                                     </td>
                                     <td style="width: 130px;">
-                                        {{ form.status }}
+    <span class="badge {% if form.instance.e_name.status == 'active' %}bg-success{% else %}bg-warning{% endif %}">
+        {{ form.instance.e_name.get_status_display }}
+    </span>
                                     </td>
 
                                     <!-- Leave Fields -->
@@ -243,7 +245,7 @@
                                     <td>{{ record.joining_date|date:"d M Y" }}</td>
                                     <td><span class="badge bg-info">{{ record.employment_type }}</span></td>
                                     <td class="small">{{ record.e_name.department.name }}</td>
-                                    <td><span class="badge bg-success">{{ record.status }}</span></td>
+                                    <td><span class="badge bg-success">{{ record.e_name.get_status_display }}</span></td>
                                     <td class="text-center fw-bold">{{ record.bereavement_leave }}</td>
                                     <td class="text-center fw-bold">{{ record.menstrual_leave }}</td>
                                     <td class="text-center fw-bold">{{ record.sick_leave }}</td>

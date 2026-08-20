@@ -174,63 +174,69 @@
                         <div style="flex: 1;" class="text-end">Status & Action</div>
                     </div>
 
-                    {% for a in group.assets %}
-                    <div class="asset-row-detailed mx-3">
-                        <!-- Device Identity -->
-                        <div style="flex: 2;" class="d-flex align-items-center">
-                            <div class="p-2 bg-light rounded-3 me-3 text-muted"><i class="bi bi-hash"></i></div>
-                            <div>
-                                 <a href="{% url 'hrms:asset_detail' a.pk %}">
-                                    <div class="fw-bold text-dark mb-0">{{ a.name }}</div></a>
-                                <div class="small text-muted font-monospace">{{ a.serial_number|default:"No Serial" }}</div>
-                            </div>
-                        </div>
+{% for a in group.assets %}
+<div class="asset-row-detailed mx-3 mb-2 d-flex align-items-center justify-content-between">
+    <!-- 1. DEVICE INFO (Device + SIM together) -->
+    <div style="flex: 2;" class="d-flex align-items-center">
+        <div class="p-2 bg-light rounded-3 me-3 text-muted">
+            <i class="bi {% if a.sim %}bi-phone-vibrate{% else %}bi-hash{% endif %}"></i>
+        </div>
+        <div class="overflow-hidden">
+            <a href="{% url 'hrms:asset_detail' a.pk %}" class="text-decoration-none">
+                <div class="fw-bold text-dark text-truncate mb-0">
+                    <!-- This combines Device Name and SIM Name -->
+                    {{ a.name }}{% if a.sim %} + {{ a.sim }}{% endif %}
+                </div>
+            </a>
+            <div class="small text-muted font-monospace text-truncate">
+                {{ a.serial_number|default:"No Serial" }}
+                {% if a.phone_number %} • {{ a.phone_number }}{% endif %}
+            </div>
+        </div>
+    </div>
 
-                        <!-- Date Group -->
-                        <div style="flex: 1;" class="d-flex gap-4">
-                            <div class="meta-box">
-                                <div class="meta-label">Acquired</div>
-                                <div class="meta-value">{{ a.purchase_date|date:"d M Y"|default:"--" }}</div>
-                            </div>
-                        </div>
+    <!-- 2. DATES (Acquired) -->
+    <div style="flex: 1;" class="ps-3">
+        <div class="meta-label">Acquired</div>
+        <div class="meta-value">{{ a.purchase_date|date:"d M Y"|default:"--" }}</div>
+    </div>
 
-                        <!-- Holder Group -->
-                        <div style="flex: 1.5;">
-                            {% if a.employee %}
-                            <div class="d-flex align-items-center">
-                                <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center me-2" style="width: 32px; height: 32px; font-size: 11px; font-weight: 800;">
-                                    {{ a.employee.first_name|first }}{{ a.employee.last_name|first }}
-                                </div>
-                                <div>
-                                    <div class="meta-value mb-0">{{ a.employee.full_name }}</div>
-                                    <div class="text-muted" style="font-size: 0.65rem;">Issued: {{ a.assigned_on|date:"d M Y" }}</div>
-                                </div>
-                            </div>
-                            {% else %}
-                            <span class="text-muted small italic"><i class="bi bi-box-arrow-in-down me-1"></i>In Warehouse</span>
-                            {% endif %}
-                        </div>
+    <!-- 3. CURRENT HOLDER -->
+    <div style="flex: 1.5;" class="ps-3">
+        {% if a.employee %}
+        <div class="d-flex align-items-center">
+            <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center me-2 flex-shrink-0" style="width: 30px; height: 30px; font-size: 10px; font-weight: 800;">
+                {{ a.employee.first_name|first }}{{ a.employee.last_name|first }}
+            </div>
+            <div class="overflow-hidden">
+                <div class="meta-value text-truncate mb-0">{{ a.employee.full_name }}</div>
+                <div class="text-muted" style="font-size: 0.65rem;">Issued: {{ a.assigned_on|date:"d M Y"|default:"Recently" }}</div>
+            </div>
+        </div>
+        {% else %}
+        <span class="text-muted small"><i class="bi bi-box me-1"></i>In Warehouse</span>
+        {% endif %}
+    </div>
 
-                        <!-- Status & Action Group -->
-                        <div style="flex: 1;" class="text-end">
-                            <div class="d-flex align-items-center justify-content-end gap-3">
-                                {% if a.employee %}
-                                    <span class="status-pill pill-assigned">In Use</span>
-                                {% else %}
-                                    <span class="status-pill pill-available">Available</span>
-                                {% endif %}
+    <!-- 4. STATUS & ACTION -->
+    <div style="flex: 1;" class="text-end">
+        <div class="d-flex align-items-center justify-content-end gap-2">
+            {% if a.employee %}
+                <span class="status-pill pill-assigned">In Use</span>
+            {% else %}
+                <span class="status-pill pill-available">Available</span>
+            {% endif %}
 
-                                <div class="btn-group">
-                                    <a href="{% url 'hrms:asset_detail' a.pk %}" class="btn btn-sm btn-light border"><i class="bi bi-eye"></i></a>
-                                    {% if hrms_is_hr %}
-                                    <a href="{% url 'hrms:asset_edit' a.pk %}" class="btn btn-sm btn-light border"><i class="bi bi-pencil"></i></a>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    {% endfor %}
-
+            <div class="btn-group shadow-sm">
+                <a href="{% url 'hrms:asset_detail' a.pk %}" class="btn btn-xs btn-white border"><i class="bi bi-eye"></i></a>
+                {% if hrms_is_hr %}
+                <a href="{% url 'hrms:asset_edit' a.pk %}" class="btn btn-xs btn-white border"><i class="bi bi-pencil"></i></a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
                 </div>
             </div>
         </div>

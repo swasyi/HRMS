@@ -2,7 +2,7 @@ from datetime import date
 
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
-from django.views.generic import TemplateView, UpdateView, ListView, DetailView
+from django.views.generic import TemplateView, UpdateView, ListView, DetailView, FormView
 
 from django.shortcuts import render
 from django.urls import reverse_lazy
@@ -15,6 +15,35 @@ from django.utils import timezone # Make sure this is at the top
 from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR
 
 
+# mixins.py or views.py
+class CompanyFilterMixin:
+    """Filters querysets based on the session's active_company_id."""
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        active_id = self.request.session.get('active_company_id')
+
+        # 1. If a specific company is selected
+        if active_id and active_id != 'all':
+            # Handle different models (some link to company, some to employee__company)
+            if hasattr(self.model, 'company'):
+                return queryset.filter(company_id=active_id)
+            elif hasattr(self.model, 'employee'):
+                return queryset.filter(employee__company_id=active_id)
+
+        # 2. If 'Global' or nothing is selected, filter by all managed companies (Security)
+        if not user.is_superuser:
+            profile = get_employee_profile(user)
+            allowed_ids = list(profile.managed_companies.values_list('id', flat=True))
+            allowed_ids.append(profile.company_id)
+
+            if hasattr(self.model, 'company'):
+                return queryset.filter(company_id__in=allowed_ids)
+            elif hasattr(self.model, 'employee'):
+                return queryset.filter(employee__company_id__in=allowed_ids)
+
+        return queryset
 
 class HRMSLoginView(LoginView):
     template_name = 'hrms/login.html'
@@ -28,6 +57,21 @@ def set_active_company(request):
         if company_id:
             request.session['active_company_id'] = company_id
     return redirect(request.META.get('HTTP_REFERER', 'hrms:dashboard'))
+
+
+def set_active_company(request):
+    company_id = request.GET.get('company_id')  # Get from URL parameter
+
+    if company_id == 'all':
+        request.session['active_company_id'] = 'all'
+    elif company_id:
+        # Security: Optional check here to ensure user has permission
+        # for this specific company_id
+        request.session['active_company_id'] = company_id
+
+    return redirect(request.META.get('HTTP_REFERER', 'hrms:dashboard'))
+
+
 
 
 @login_required
@@ -360,7 +404,7 @@ class CompanyCreateView(SuperAdminRequiredMixin, SidebarContextMixin, CreateView
 # ---------------------------------------------------------------------------
 # Department — HR / Super Admin
 # ---------------------------------------------------------------------------
-class DepartmentListView(HRRequiredMixin, SidebarContextMixin, ListView):
+class DepartmentListView(CompanyFilterMixin,HRRequiredMixin, SidebarContextMixin, ListView):
     model = m.Department
     template_name = 'hrms/org/department_list.html'
     context_object_name = 'companies'
@@ -472,7 +516,7 @@ class DesignationDeleteView(HRRequiredMixin, SidebarContextMixin, DeleteView):
 from django.db.models import Q, Count
 
 
-class EmployeeListView(HRRequiredMixin, SidebarContextMixin, ListView):
+class EmployeeListView(CompanyFilterMixin,HRRequiredMixin, SidebarContextMixin, ListView):
     model = m.Employee
     template_name = 'hrms/employee/employee_list.html'
     context_object_name = 'employees'
@@ -1657,6 +1701,131 @@ class AttendanceRecordListView(HRRequiredMixin, SidebarContextMixin, ListView):
             'start_date': start_date, 'end_date': end_date
         })
         return ctx
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        tz = timezone.get_current_timezone()
+        today = timezone.now().date()
+
+        # 1. Date Range Handling
+        d_from, d_to = self.request.GET.get('from'), self.request.GET.get('to')
+        start_date = datetime.strptime(d_from, '%Y-%m-%d').date() if d_from else timezone.now().date().replace(day=1)
+        if d_to:
+            end_date = datetime.strptime(d_to, '%Y-%m-%d').date()
+        else:
+            next_m = start_date.replace(day=28) + timedelta(days=4)
+            end_date = next_m - timedelta(days=next_m.day)
+        date_list = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
+
+        # 2. Fetch ACTIVE Employees (Prefetch holiday_calendar for speed)
+        emp_filter = self.request.GET.get('employee')
+        employees = m.Employee.objects.select_related('company', 'department', 'holiday_calendar').filter(
+            status=m.Employee.Status.ACTIVE
+        ).order_by('employee_code')
+        if emp_filter: employees = employees.filter(id=emp_filter)
+
+        # 3. PRE-FETCH DATA FOR OPTIMIZATION
+        records = m.AttendanceRecord.objects.filter(attendance_date__range=[start_date, end_date])
+        leaves = m.LeaveApplication.objects.filter(
+            status=m.LeaveApplication.Status.APPROVED,
+            start_date__lte=end_date, end_date__gte=start_date
+        ).select_related('leave_type')
+
+        # NEW: Fetch Holidays across ALL calendars for the range
+        holidays = m.Holiday.objects.filter(date__range=[start_date, end_date])
+        holiday_lookup = collections.defaultdict(dict)
+        for h in holidays:
+            holiday_lookup[h.calendar_id][h.date] = h.name
+
+        # Create Lookups
+        att_lookup = collections.defaultdict(dict)
+        for r in records: att_lookup[r.employee_id][r.attendance_date] = r
+
+        leave_lookup = collections.defaultdict(dict)
+        for l in leaves:
+            curr = max(l.start_date, start_date);
+            while curr <= min(l.end_date, end_date):
+                leave_lookup[l.employee_id][curr] = l.leave_type.code
+                curr += timedelta(days=1)
+
+        # NEW: Holiday Lookup {Calendar_ID: {Date: Holiday_Name}}
+        holiday_lookup = collections.defaultdict(dict)
+        for h in holidays:
+            holiday_lookup[h.calendar_id][h.date] = h.name
+
+        # 4. Build Smart Matrix
+        attendance_matrix = collections.defaultdict(dict)
+
+        for emp in employees:
+            grace_counters = collections.defaultdict(int)
+
+            for day in date_list:
+                active_rule = emp.company.get_policy_for_date(day)
+                off_start, off_end = active_rule.office_start_time, active_rule.office_end_time
+                grace_mins, grace_limit = active_rule.grace_minutes, active_rule.grace_allowed_count
+
+                rec = att_lookup[emp.id].get(day)
+                leave_code = leave_lookup[emp.id].get(day)
+
+                # Check for holiday based on Employee's SPECIFIC calendar
+                holiday_name = None
+                if emp.holiday_calendar_id:
+                    holiday_name = holiday_lookup[emp.holiday_calendar_id].get(day)
+
+                display_obj = {'status': '', 'display_label': '', 'check_in': None, 'check_out': None}
+
+                if rec and rec.check_in:
+                    # --- PUNCH LOGIC ---
+                    display_obj['check_in'], display_obj['check_out'] = rec.check_in, rec.check_out
+                    l_in = timezone.localtime(rec.check_in)
+                    l_out = timezone.localtime(rec.check_out) if rec.check_out else None
+                    p_in = l_in.time()
+                    p_out = l_out.time() if l_out else off_start
+                    grace_deadline = (datetime.combine(day, off_start) + timedelta(minutes=grace_mins)).time()
+                    stayed_until_end = p_out >= off_end
+
+                    if p_in <= off_start:
+                        display_obj['status'] = 'present' if stayed_until_end else 'half_day'
+                    elif p_in <= grace_deadline:
+                        if stayed_until_end:
+                            m_key = (emp.id, day.month)
+                            if grace_counters[m_key] < grace_limit:
+                                grace_counters[m_key] += 1
+                                display_obj['status'], display_obj[
+                                    'display_label'] = 'present', f"G{grace_counters[m_key]}"
+                            else:
+                                display_obj['status'], display_obj['display_label'] = 'half_day', "Grace Exhausted"
+                        else:
+                            display_obj['status'] = 'half_day'
+                    else:
+                        display_obj['status'] = 'half_day'
+
+                    if display_obj['status'] == 'half_day' and leave_code:
+                        display_obj['display_label'] = f"HD + {leave_code}"
+
+                elif leave_code:
+                    display_obj['status'], display_obj['display_label'] = 'on_leave', leave_code
+
+                elif holiday_name:
+                    # NEW: Mark as holiday based on their regional template
+                    display_obj['status'], display_obj['display_label'] = 'holiday', holiday_name
+
+                else:
+                    # DEFAULT FALLBACKS
+                    if day > today:
+                        display_obj['status'] = 'future'
+                    elif day.weekday() == 6:  # Sunday
+                        display_obj['status'] = 'sunday'
+                    else:
+                        display_obj['status'] = 'absent'
+
+                attendance_matrix[emp.id][day] = display_obj
+
+        ctx.update({
+            'employees': employees, 'date_list': date_list,
+            'attendance_matrix': attendance_matrix, 'filters': self.request.GET,
+            'start_date': start_date, 'end_date': end_date
+        })
+        return ctx
 
 import json
 import collections
@@ -1781,14 +1950,15 @@ class CheckOutView(LoginRequiredMixin, View):
 # ---------------------------------------------------------------------------
 # Holidays — everyone can view, HR/Admin manage
 # ---------------------------------------------------------------------------
+from django.shortcuts import redirect, get_object_or_404
+from django.contrib import messages
+
 class HolidayListView(LoginRequiredMixin, SidebarContextMixin, ListView):
     model = m.Holiday
     template_name = 'hrms/attendance/holiday_list.html'
     context_object_name = 'holidays'
     active_group, active_item = 'attendance', 'holiday'
 
-    def get_queryset(self):
-        return m.Holiday.objects.select_related('calendar__company').order_by('date')
 
 
     def get_queryset(self):
@@ -1802,16 +1972,17 @@ class HolidayListView(LoginRequiredMixin, SidebarContextMixin, ListView):
             qs = qs.filter(name__icontains=query)
         return qs
 
-class HolidayCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
-    model = m.Holiday
-    form_class = f.HolidayForm
-    template_name = 'hrms/attendance/holiday_form.html'
-    success_url = reverse_lazy('hrms:holiday_list')
-    active_group, active_item = 'attendance', 'holiday'
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
 
-    def form_valid(self, form):
-        messages.success(self.request, 'Holiday added.')
-        return super().form_valid(form)
+        # Pass all calendars so the dropdown filter works
+        if self.request.user.is_superuser:
+            ctx['calendars'] = m.HolidayCalendar.objects.all()
+        else:
+            managed_ids = self.request.user.employee_profile.managed_companies.values_list('id', flat=True)
+            ctx['calendars'] = m.HolidayCalendar.objects.filter(company_id__in=managed_ids)
+
+        return ctx
 
 
 class HolidayCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
@@ -1857,7 +2028,6 @@ class HolidayUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
         messages.success(self.request, 'Holiday updated.')
         return super().form_valid(form)
 
-
 class HolidayDeleteView(HRRequiredMixin, SidebarContextMixin, DeleteView):
     model = m.Holiday
     template_name = 'hrms/attendance/holiday_confirm_delete.html'
@@ -1867,11 +2037,6 @@ class HolidayDeleteView(HRRequiredMixin, SidebarContextMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'Holiday deleted.')
         return super().form_valid(form)
-
-
-from django.shortcuts import redirect, get_object_or_404
-from django.contrib import messages
-
 
 class HolidayCalendarManageView(HRRequiredMixin, SidebarContextMixin, TemplateView):
     template_name = 'hrms/attendance/holiday_calendar_manage.html'
@@ -1918,6 +2083,82 @@ class HolidayCalendarManageView(HRRequiredMixin, SidebarContextMixin, TemplateVi
             if form.is_valid():
                 form.save()  # Company is now handled by the form selection
                 messages.success(request, "Template saved successfully.")
+            else:
+                messages.error(request, "Please correct the errors below.")
+                return self.render_to_response(self.get_context_data(form=form))
+
+        return redirect('hrms:holiday_calendar_manage')
+
+
+from django.db import transaction
+
+from django.db import transaction
+
+
+class HolidayCalendarManageView(HRRequiredMixin, SidebarContextMixin, TemplateView):
+    template_name = 'hrms/attendance/holiday_calendar_manage.html'
+    active_group, active_item = 'attendance', 'holiday'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+
+        # 1. Existing Logic: Show calendars for managed companies
+        if self.request.user.is_superuser:
+            ctx['calendars'] = m.HolidayCalendar.objects.all().order_by('company__name', 'name')
+        else:
+            managed_ids = self.request.user.employee_profile.managed_companies.values_list('id', flat=True)
+            ctx['calendars'] = m.HolidayCalendar.objects.filter(company_id__in=managed_ids).order_by('name')
+
+        edit_id = self.request.GET.get('edit')
+        if edit_id:
+            instance = get_object_or_404(m.HolidayCalendar, pk=edit_id)
+            ctx['form'] = f.HolidayCalendarForm(instance=instance, user=self.request.user)
+            ctx['edit_instance'] = instance
+
+            # 2. NEW: Get employees belonging to this template's company
+            ctx['company_employees'] = m.Employee.objects.filter(
+                company=instance.company
+            ).select_related('user').order_by('first_name')
+
+            # IDs of employees currently linked to this template
+            ctx['assigned_ids'] = list(instance.employees.values_list('id', flat=True))
+        else:
+            ctx['form'] = f.HolidayCalendarForm(user=self.request.user)
+
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get('action')
+        pk = request.POST.get('pk')
+
+        if action == 'delete' and pk:
+            instance = get_object_or_404(m.HolidayCalendar, pk=pk)
+            instance.delete()
+            messages.success(request, "Template deleted.")
+
+        elif action == 'save':
+            if pk:
+                instance = get_object_or_404(m.HolidayCalendar, pk=pk)
+                form = f.HolidayCalendarForm(request.POST, instance=instance, user=request.user)
+            else:
+                form = f.HolidayCalendarForm(request.POST, user=request.user)
+
+            if form.is_valid():
+                with transaction.atomic():
+                    instance = form.save()
+
+                    # 3. NEW: Handle Bulk Employee Assignment logic
+                    if pk:
+                        selected_emp_ids = request.POST.getlist('assigned_employees')
+
+                        # Remove this template from employees who were unchecked
+                        m.Employee.objects.filter(holiday_calendar=instance).exclude(id__in=selected_emp_ids).update(
+                            holiday_calendar=None)
+
+                        # Assign this template to the newly checked employees
+                        m.Employee.objects.filter(id__in=selected_emp_ids).update(holiday_calendar=instance)
+
+                messages.success(request, "Template and assignments updated successfully.")
             else:
                 messages.error(request, "Please correct the errors below.")
                 return self.render_to_response(self.get_context_data(form=form))
@@ -2066,7 +2307,8 @@ class LeaveBalanceCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
 
 
 class LeaveBalanceUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
-    model = m.LeaveBalance
+    # model = m.LeaveBalance
+    model = m.EmployeeLeaveBalance
     form_class = f.LeaveBalanceForm
     template_name = 'hrms/leave/leave_balance_form.html'
     success_url = reverse_lazy('hrms:leave_balance')
@@ -2075,7 +2317,9 @@ class LeaveBalanceUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
         # Instead of using the PK of the LeaveBalance, we look it up using the 'pk' from the URL (which will be the Employee ID)
         emp_id = self.kwargs.get('pk')
         # This assumes one LeaveBalance record per employee for the current year,Adjust 'year' logic if you track multiple years
-        return get_object_or_404(m.LeaveBalance, employee_id=emp_id)
+        # return get_object_or_404(m.LeaveBalance, employee_id=emp_id)
+        obj, created = m.EmployeeLeaveBalance.objects.get_or_create(e_name_id=emp_id)
+        return obj
 
     def form_valid(self, form):
         messages.success(self.request, f'Leave balance for {self.object.employee} updated.')
@@ -2269,6 +2513,17 @@ class LeaveBankListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         user = self.request.user
+        active_statuses = [
+            Employee.Status.ACTIVE,
+            Employee.Status.ON_LEAVE,
+            Employee.Status.SUSPENDED
+        ]
+
+        # 2. Start with a base queryset filtering out inactive employees
+        qs = EmployeeLeaveBalance.objects.filter(
+            e_name__status__in=active_statuses
+        ).select_related('e_name', 'e_name__department', 'e_name__designation')
+
         # 1. Superadmin and HR see everyone
         if user.is_superuser or user.groups.filter(name='HR').exists():
             return EmployeeLeaveBalance.objects.all().select_related('e_name')
@@ -2315,7 +2570,9 @@ class LeaveBankListView(LoginRequiredMixin, ListView):
         action = request.POST.get('action')
 
         if action == 'calculate_all':
-            employees = m.Employee.objects.all()
+            employees = Employee.objects.filter(
+                status__in=[Employee.Status.ACTIVE, Employee.Status.ON_LEAVE]
+            )
             for emp in employees:
                 lv.sync_employee_leave_bank(emp)
             return redirect('hrms:leave-bank')
@@ -2349,7 +2606,7 @@ class LeaveBankListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         user = self.request.user
-        qs = m.EmployeeLeaveBalance.objects.all().select_related('e_name', 'e_name__department', 'e_name__designation')
+        qs = m.EmployeeLeaveBalance.objects.exclude(e_name__status='relieved').select_related('e_name', 'e_name__department', 'e_name__designation')
         if not (user.is_superuser or user.groups.filter(name='HR').exists()):
             qs = qs.filter(e_name__user=user)
         return qs
@@ -2817,6 +3074,137 @@ class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
         })
         return ctx
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        emp = self.object
+        month = int(self.kwargs['month'])
+        year = int(self.kwargs['year'])
+        tz = timezone.get_current_timezone()
+        comp = emp.company
+
+        days_in_month = calendar.monthrange(year, month)[1]
+        report_data = []
+        grace_used = 0
+
+        # Prefetch data
+        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
+            employee=emp, attendance_date__year=year, attendance_date__month=month).order_by('attendance_date')}
+
+        holiday_dates = []
+        if emp.holiday_calendar:
+            holiday_dates = m.Holiday.objects.filter(
+                calendar=emp.holiday_calendar, date__year=year, date__month=month
+            ).values_list('date', flat=True)
+
+        leaves = m.LeaveApplication.objects.filter(
+            employee=emp, status='approved',
+            start_date__lte=date(year, month, days_in_month),
+            end_date__gte=date(year, month, 1)
+        ).select_related('leave_type')
+
+        leave_map = {}
+        for l in leaves:
+            curr = l.start_date
+            while curr <= l.end_date:
+                if curr.month == month and curr.year == year:
+                    leave_map[curr] = l.leave_type.code.upper()
+                curr += timedelta(days=1)
+
+        for d in range(1, days_in_month + 1):
+            dt = date(year, month, d)
+
+            # --- SMART LOGIC: FETCH POLICY PER DAY ---
+            # This ensures July shows 10-6 and August shows 9-5 automatically
+            policy = comp.get_policy_for_date(dt)
+            off_start = policy.office_start_time
+            off_end = policy.office_end_time
+            grace_deadline_mins = policy.grace_minutes
+            grace_limit = policy.grace_allowed_count
+            full_threshold = float(policy.full_day_threshold_hours)
+            # ------------------------------------------
+
+            rec = records.get(dt)
+            leave_code = leave_map.get(dt)
+            is_holiday = dt in holiday_dates
+            is_sunday = dt.weekday() == 6
+
+            day_info = {
+                'date': dt, 'in': None, 'out': None, 'hours': 0,
+                'status': 'ABS', 'label': '', 'css': 'mark-abs'
+            }
+
+            if is_holiday or is_sunday:
+                day_info['status'] = 'HOL' if is_holiday else 'SUN'
+                day_info['css'] = 'text-muted border'
+                if rec and rec.check_in:
+                    day_info['label'] = 'Extra Work'
+
+            elif rec and rec.check_in:
+                local_in = timezone.localtime(rec.check_in)
+                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
+                day_info['in'] = local_in
+                day_info['out'] = local_out
+
+                p_in = local_in.time()
+                p_out = local_out.time() if local_out else off_start
+
+                eff_s = max(p_in, off_start)
+                eff_e = min(p_out, off_end)
+                eff_hours = (datetime.combine(dt, eff_e) - datetime.combine(dt, eff_s)).total_seconds() / 3600
+                day_info['hours'] = round(eff_hours, 2)
+
+                grace_time = (datetime.combine(dt, off_start) + timedelta(minutes=grace_deadline_mins)).time()
+
+                punch_status = 'HD'
+                punch_label = ''
+
+                if p_in <= off_start:
+                    if eff_hours >= full_threshold:  # Uses policy threshold
+                        punch_status = 'FD'
+                    else:
+                        punch_status = 'HD'
+                elif p_in <= grace_time:
+                    if local_out and local_out.time() >= off_end:
+                        if grace_used < grace_limit:
+                            grace_used += 1
+                            punch_status = 'FD'
+                            punch_label = f'Grace Strike {grace_used}/{grace_limit}'
+                        else:
+                            punch_status = 'HD'
+                            punch_label = 'Grace Exhausted'
+                    else:
+                        punch_status = 'HD'
+                else:
+                    punch_status = 'HD'
+
+                if punch_status == 'HD' and leave_code:
+                    day_info.update({
+                        'status': 'HD', 'css': 'mark-hd', 'label': f'HD + {leave_code}'
+                    })
+                else:
+                    day_info.update({
+                        'status': punch_status,
+                        'css': 'mark-fd' if punch_status == 'FD' else 'mark-hd',
+                        'label': punch_label
+                    })
+
+            elif leave_code:
+                day_info.update({'status': leave_code,
+                                 'css': 'bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25',
+                                 'label': 'Approved Leave'})
+
+            elif rec and rec.status == 'on_leave':
+                day_info.update(
+                    {'status': 'LEAVE', 'label': rec.remarks or 'Approved Leave', 'css': 'text-primary border'})
+
+            report_data.append(day_info)
+
+        ctx.update({
+            'report': report_data,
+            'month_name': calendar.month_name[month],
+            'year': year,
+        })
+        return ctx
 # ---------------------------------------------------------------------------
 # Loans/Advances & Payroll Extras (Incentives) — HR/Admin manage
 # ---------------------------------------------------------------------------
@@ -4111,7 +4499,7 @@ class FinalizeHiringActionView(HRRequiredMixin, View):
 # ===========================================================================
 # ASSET MANAGEMENT
 # ===========================================================================
-class AssetListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+class AssetListView(CompanyFilterMixin,LoginRequiredMixin, SidebarContextMixin, ListView):
     model = m.Asset
     template_name = 'hrms/asset/asset_list.html'
     context_object_name = 'assets'
@@ -4119,16 +4507,23 @@ class AssetListView(LoginRequiredMixin, SidebarContextMixin, ListView):
     paginate_by = 30
 
     def get_queryset(self):
-        qs = m.Asset.objects.select_related('employee', 'company').order_by('-created_at')
+        # Start with standard relations
+        qs = m.Asset.objects.select_related('employee', 'company')
+
+        # 1. HR/ADMIN LOGIC
         if is_hr_or_above(self.request.user):
             status = self.request.GET.get('status')
             if status:
                 qs = qs.filter(status=status)
-            return qs
+            return qs.order_by('-created_at')
+
+        # 2. EMPLOYEE LOGIC (Restrict strictly to their own assets)
         employee = get_employee_profile(self.request.user)
         if employee is None:
             return m.Asset.objects.none()
-        return m.Asset.objects.select_related('employee', 'company').order_by('asset_type', '-created_at')
+
+        # FIX: We filter the queryset so it ONLY contains assets assigned to this employee
+        return qs.filter(employee=employee).order_by('asset_type', '-created_at')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -4159,6 +4554,80 @@ class AssetListView(LoginRequiredMixin, SidebarContextMixin, ListView):
         return ctx
 
 
+import json
+
+
+import json
+
+class AssetListView(CompanyFilterMixin, LoginRequiredMixin, SidebarContextMixin, ListView):
+    model = m.Asset
+    template_name = 'hrms/asset/asset_list.html'
+    context_object_name = 'assets'
+    active_group, active_item = 'asset', 'asset'
+    paginate_by = 30
+
+    def get_queryset(self):
+        # Optimization: select_related category and employee to avoid N+1 queries
+        qs = m.Asset.objects.select_related('employee', 'company', 'category')
+
+        if is_hr_or_above(self.request.user):
+            status = self.request.GET.get('status')
+            if status:
+                qs = qs.filter(status=status)
+            return qs.order_by('category__name', '-created_at')
+
+        employee = get_employee_profile(self.request.user)
+        if employee is None:
+            return m.Asset.objects.none()
+
+        return qs.filter(employee=employee).order_by('category__name', '-created_at')
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        base_qs = self.get_queryset()
+
+        # 1. Stat Cards using Model Status Choices
+        ctx['total_count'] = base_qs.count()
+        ctx['available_count'] = base_qs.filter(status='available').count()
+        ctx['assigned_count'] = base_qs.filter(status='assigned').count()
+        ctx['repair_count'] = base_qs.filter(status='under_repair').count()
+
+        # 2. CATEGORY-WISE GROUPING
+        # We loop through existing categories to build the structure
+        categories = m.AssetCategory.objects.all()
+        structured_data = []
+
+        for cat in categories:
+            type_qs = base_qs.filter(category=cat)
+            if type_qs.exists():
+                structured_data.append({
+                    'id': cat.id,
+                    'name': cat.name,
+                    'assets': type_qs,
+                    'total': type_qs.count(),
+                    'available': type_qs.filter(status='available').count(),
+                    'assigned': type_qs.filter(status='assigned').count(),
+                })
+
+        # Catch assets that have no category assigned yet
+        uncategorized = base_qs.filter(category__isnull=True)
+        if uncategorized.exists():
+            structured_data.append({
+                'id': 'general',
+                'name': "General Assets",
+                'assets': uncategorized,
+                'total': uncategorized.count(),
+                'available': uncategorized.filter(status='available').count(),
+                'assigned': uncategorized.filter(status='assigned').count(),
+            })
+
+        ctx['structured_assets'] = structured_data
+
+        # 3. For the Create Category Modal to work on this page
+        ctx['category_configs_json'] = json.dumps({
+            str(c.id): c.required_fields for c in categories
+        })
+        return ctx
 class AssetCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
     model = m.Asset
     form_class = f.AssetForm
@@ -4166,10 +4635,49 @@ class AssetCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
     success_url = reverse_lazy('hrms:asset_list')
     active_group, active_item = 'asset', 'asset'
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        # Create a dictionary mapping Category ID to its required_fields string
+        # Example: { "1": "serial_number,device_password", "2": "sim,phone_number" }
+        categories = m.AssetCategory.objects.all()
+        config_map = {str(cat.id): cat.required_fields for cat in categories}
+
+        context['category_configs_json'] = json.dumps(config_map)
+        return context
+
     def form_valid(self, form):
         messages.success(self.request, 'Asset added.')
         return super().form_valid(form)
 
+
+import json
+from django.http import JsonResponse
+
+
+def create_category_ajax(request):
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            name = data.get('name')
+            fields = data.get('fields', '')
+
+            if not name:
+                return JsonResponse({'success': False, 'error': 'Name is required'})
+
+            category = m.AssetCategory.objects.create(
+                name=name,
+                required_fields=fields
+            )
+            return JsonResponse({
+                'success': True,
+                'id': category.id,
+                'name': category.name,
+                'fields': category.required_fields
+            })
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    return JsonResponse({'success': False, 'error': 'Invalid request'}, status=400)
 
 class AssetUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
     model = m.Asset
@@ -4199,6 +4707,16 @@ class AssetDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
     context_object_name = 'asset'
     active_group, active_item = 'asset', 'asset'
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+
+        # If user is HR/Admin, let them see everything
+        if self.request.user.is_staff:
+            return qs
+
+        # If regular employee, only allow access if the asset is linked to their User
+        return qs.filter(employee__user=self.request.user)
+
     def get_object(self, queryset=None):
         obj = super().get_object(queryset)
         user = self.request.user
@@ -4215,7 +4733,9 @@ class AssetDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         # Pass a boolean to the template to handle sensitive UI elements
         ctx['is_hr'] = is_hr_or_above(self.request.user)
-        ctx['history'] = self.object.history.all().select_related('employee')
+        # ctx['history'] = self.object.history.all().select_related('employee')
+        ctx['history'] = self.object.history.all().order_by('-assigned_date')
+
         return ctx
 
 

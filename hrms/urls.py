@@ -100,6 +100,7 @@ urlpatterns = [
     path('attendance/holidays/add/', views.HolidayCreateView.as_view(), name='holiday_add'),
     path('attendance/holidays/<int:pk>/edit/', views.HolidayUpdateView.as_view(), name='holiday_edit'),
     path('attendance/holidays/<int:pk>/delete/', views.HolidayDeleteView.as_view(), name='holiday_delete'),
+
     path('attendance/report/<int:emp_id>/<int:month>/<int:year>/', views.EmployeePunchReportView.as_view(), name='employee_punch_report'),
     path('attendance/calendars/manage/', views.HolidayCalendarManageView.as_view(), name='holiday_calendar_manage'),
     # path('attendance/calendars/<int:calendar_id>/holidays/', views.CalendarHolidayListView.as_view(),
@@ -165,10 +166,10 @@ urlpatterns = [
     # --- Assets ---
     path('assets/', views.AssetListView.as_view(), name='asset_list'),
     path('assets/add/', views.AssetCreateView.as_view(), name='asset_add'),
+    path('ajax/create-category/', views.create_category_ajax, name='create_category_ajax'),
     path('assets/<int:pk>/edit/', views.AssetUpdateView.as_view(), name='asset_edit'),
     path('assets/<int:pk>/return/', views.AssetReturnView.as_view(), name='asset_return'),
     path('assets/<int:pk>/', views.AssetDetailView.as_view(), name='asset_detail'),
-
     # --- Performance ---
     path('performance/', views.PerformanceReviewListView.as_view(), name='performance_list'),
     path('performance/add/', views.PerformanceReviewCreateView.as_view(), name='performance_add'),

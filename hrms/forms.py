@@ -72,12 +72,16 @@ class EmployeeForm(BootstrapModelForm):
         model = m.Employee
         fields = [
             'company', 'department', 'designation', 'employee_code', 'first_name', 'last_name',
-            'email', 'phone', 'gender', 'date_of_birth', 'date_of_joining', 'date_of_confirmation','employment_type', 'status',
+            'email', 'phone', 'gender', 'date_of_birth','father_name', 'mother_name', 'address',
+            'emergency_contact', 'date_of_joining', 'date_of_confirmation','employment_type', 'status',
         ]
         widgets = {
             'date_of_birth': forms.DateInput(attrs={'type': 'date'}),
             'date_of_joining': forms.DateInput(attrs={'type': 'date'}),
             'date_of_confirmation': forms.DateInput(attrs={'type': 'date'}),
+            # Use Textarea for address and emergency contact with custom row heights
+            'address': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Enter full address...'}),
+            'emergency_contact': forms.Textarea(attrs={'rows': 2, 'placeholder': 'Name, Relationship, Phone number'}),
 
         }
 
@@ -171,6 +175,7 @@ class HolidayCalendarForm(forms.ModelForm):
             'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. North India Office'}),
             'is_default': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
+
 class HolidayForm(BootstrapModelForm):
     class Meta:
         model = m.Holiday
@@ -180,7 +185,6 @@ class HolidayForm(BootstrapModelForm):
             'name': forms.TextInput(attrs={'class': 'form-control'}),
             'type': forms.Select(attrs={'class': 'form-select'}),
         }
-
 
 class HolidayCalendarForm(forms.ModelForm):
     class Meta:
@@ -246,6 +250,7 @@ class BulkHolidayForm(forms.ModelForm):
 
         # Display the company name next to the calendar name in the checklist
         self.fields['target_calendars'].label_from_instance = lambda obj: f"{obj.name} ({obj.company.name})"
+
 # ---------------------------------------------------------------------------
 # Leave Management
 # ---------------------------------------------------------------------------
@@ -338,11 +343,11 @@ class LeaveBalanceForm(forms.ModelForm):
         model = EmployeeLeaveBalance
         fields = [
             'bereavement_leave', 'menstrual_leave', 'sick_leave',
-            'earned_leave', 'casual_leave', 'comp_off', 'status'
+            'earned_leave', 'casual_leave', 'comp_off'
         ]
-        widgets = {
-            'status': forms.Select(choices=[('Active', 'Active'), ('Left', 'Left'), ('Terminated', 'Terminated')]),
-        }
+        # widgets = {
+        #     'status': forms.Select(choices=[('Active', 'Active'), ('Left', 'Left'), ('Terminated', 'Terminated')]),
+        # }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -615,28 +620,15 @@ class AssetForm(BootstrapModelForm):
             'purchase_date': forms.DateInput(attrs={'type': 'date'}),
             'assigned_on': forms.DateInput(attrs={'type': 'date'}),
         }
-
-
-from django import forms
-from . import models as m
-
-
 # Assuming BootstrapModelForm is your base class that adds 'form-control' classes
 class AssetForm(BootstrapModelForm):
     class Meta:
         model = m.Asset
         # Included the user's requested fields + device_password
         fields = [
-            'company',
-            'name',
-            'asset_type',
-            'serial_number',
-            'device_password',  # Added this for the login details
-            'employee',
-            'status',
-            'purchase_date',
-            'assigned_on',
-            'remarks'
+            'company', 'category', 'name', 'asset_type', 'serial_number',
+            'sim', 'phone_number', 'device_password', 'employee',
+            'status', 'purchase_date', 'assigned_on', 'remarks'
         ]
 
         widgets = {
@@ -649,6 +641,8 @@ class AssetForm(BootstrapModelForm):
             'name': forms.TextInput(attrs={'placeholder': 'e.g. MacBook Pro / Dell Latitude'}),
             'asset_type': forms.TextInput(attrs={'placeholder': 'e.g. Laptop, Mobile, Tablet'}),
             'serial_number': forms.TextInput(attrs={'placeholder': 'Enter Unique Serial Number'}),
+            'sim': forms.TextInput(attrs={'placeholder': 'SIM Number or Provider'}),
+            'phone_number': forms.TextInput(attrs={'placeholder': 'Phone number associated'}),
             'remarks': forms.Textarea(attrs={'rows': 2, 'placeholder': 'Optional notes about asset condition...'}),
             'company': forms.Select(attrs={'class': 'form-select'}),
             'employee': forms.Select(attrs={'class': 'form-select'}),
@@ -657,9 +651,10 @@ class AssetForm(BootstrapModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['category'].queryset = m.AssetCategory.objects.all()
         # Professional Touch: If status is 'Available', hide assigned_on or make it optional
         self.fields['employee'].empty_label = "--- Select Employee (Leave blank if unassigned) ---"
-        self.fields['asset_type'].help_text = "Enter the category of the device."
+        # self.fields['asset_type'].help_text = "Enter the category of the device."
 
 # ---------------------------------------------------------------------------
 # Performance Reviews

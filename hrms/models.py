@@ -24,7 +24,6 @@ class TimeStampedModel(models.Model):
     class Meta:
         abstract = True
 
-
 # ---------------------------------------------------------------------------
 # 1. ORGANISATION STRUCTURE
 # ---------------------------------------------------------------------------
@@ -42,6 +41,10 @@ class Company(TimeStampedModel):
     office_end_time = models.TimeField(default='18:00')
     grace_minutes = models.PositiveIntegerField(default=15)
     grace_allowed_count = models.PositiveIntegerField(default=3)
+    # ADD THESE 3 FIELDS TO MATCH THE POLICY MODEL:
+    half_day_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=4.0)
+    full_day_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=8.0)
+    overtime_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=9.0)
 
     class Meta:
         verbose_name_plural = 'Companies'
@@ -57,9 +60,7 @@ class Company(TimeStampedModel):
         """
         # Find the most recent policy that started BEFORE or ON the target date
         policy = self.policy_history.filter(effective_from__lte=target_date).order_by('-effective_from').first()
-        if policy:
-            return policy
-        return self # Fallback to current company settings
+        return policy if policy else self
 
     def save(self, *args, **kwargs):
         # We only check for changes if the Company already exists (update mode)
@@ -73,7 +74,10 @@ class Company(TimeStampedModel):
                     old_data.office_start_time != self.office_start_time or
                     old_data.office_end_time != self.office_end_time or
                     old_data.grace_minutes != self.grace_minutes or
-                    old_data.grace_allowed_count != self.grace_allowed_count
+                    old_data.grace_allowed_count != self.grace_allowed_count or
+                    old_data.half_day_threshold_hours != self.half_day_threshold_hours or
+                    old_data.full_day_threshold_hours != self.full_day_threshold_hours or
+                    old_data.overtime_threshold_hours != self.overtime_threshold_hours
             )
 
             # 3. If settings changed, we create a "Snapshot" of the NEW rules
@@ -89,7 +93,9 @@ class Company(TimeStampedModel):
                     office_end_time=self.office_end_time,
                     grace_minutes=self.grace_minutes,
                     grace_allowed_count=self.grace_allowed_count,
-                    # This marks the start of the new rule era
+                    half_day_threshold_hours=self.half_day_threshold_hours,
+                    full_day_threshold_hours=self.full_day_threshold_hours,
+                    overtime_threshold_hours=self.overtime_threshold_hours,
                     effective_from=date.today()
                 )
 
@@ -191,6 +197,15 @@ class Employee(TimeStampedModel):
     phone = models.CharField(max_length=20, blank=True)
     gender = models.CharField(max_length=1, choices=Gender.choices, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
+    father_name = models.CharField(max_length=200, blank=True)
+    mother_name = models.CharField(max_length=200, blank=True)
+    address = models.TextField(blank=True, help_text="Residential/Permanent Address")
+    emergency_contact = models.TextField(
+        blank=True,
+        help_text="Name, relationship, and phone number of person to contact in emergency"
+    )
+
+
     date_of_joining = models.DateField()
     date_of_confirmation = models.DateField(null=True, blank=True)
 
@@ -677,7 +692,7 @@ class AttendancePolicy(TimeStampedModel):
     grace_allowed_count = models.PositiveIntegerField(default=3)
     half_day_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=4)
     full_day_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=8)
-    overtime_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=9)
+    overtime_threshold_hours = models.DecimalField(max_digits=4, decimal_places=2, default=9, null=True,blank=True)
     # This rule was active until the end of this date
     effective_from = models.DateField()
 
@@ -738,6 +753,36 @@ class AttendanceRecord(TimeStampedModel):
 
         super().save(*args, **kwargs)
 
+    # models.py -> AttendanceRecord
+
+    def save(self, *args, **kwargs):
+        # 1. Get the policy (contains thresholds like 8.0 for Full Day)
+        policy = self.employee.company.get_policy_for_date(self.attendance_date)
+
+        if self.check_in and self.check_out:
+            # 2. Calculate GROSS duration (Total time in office)
+            diff = self.check_out - self.check_in
+            gross_hours = Decimal(diff.total_seconds() / 3600).quantize(Decimal('0.01'))
+
+            # 3. Set total_hours to Gross Time so it includes lunch
+            self.total_hours = gross_hours
+
+            # 4. Use Gross Time to determine Status
+            # If they were in the office for 8+ hours total, it's a Full Day
+            if self.total_hours >= policy.full_day_threshold_hours:
+                self.status = self.Status.PRESENT
+                self.is_half_day = False
+            elif self.total_hours >= policy.half_day_threshold_hours:
+                self.status = self.Status.HALF_DAY
+                self.is_half_day = True
+            else:
+                self.status = self.Status.ABSENT
+                self.is_half_day = False
+
+            # 5. Check for Overtime
+            self.is_overtime = self.total_hours >= policy.overtime_threshold_hours
+
+        super().save(*args, **kwargs)
     def __str__(self):
         return f'{self.employee} - {self.attendance_date}'
 
@@ -852,10 +897,8 @@ def auto_create_leave_bank_row(sender, instance, created, **kwargs):
     a row in EmployeeLeaveBalance with 0.0 values.
     """
     if created:
-        EmployeeLeaveBalance.objects.get_or_create(
-            e_name=instance,
-            defaults={'status': instance.status}
-        )
+        EmployeeLeaveBalance.objects.get_or_create(e_name=instance)
+        EmployeeLeaveBalanceLive.objects.get_or_create(e_name=instance)
 
 
 from django.db.models.signals import post_save
@@ -926,7 +969,11 @@ class EmployeeLeaveBalance(models.Model):
 
     # Status can stay here if 'Leave Status' is different from 'Work Status'
     # Otherwise, you can also pull 'status' from the Employee model.
-    status = models.CharField(max_length=100, default="Active")
+    # status = models.CharField(max_length=100, default="Active")
+    @property
+    def work_status(self):
+        """Fetches the live status directly from the Employee model."""
+        return self.e_name.get_status_display()
 
     # Leave Balances
     bereavement_leave = models.FloatField(default=0.0)
@@ -1228,6 +1275,8 @@ class NoticeRead(TimeStampedModel):
 # ---------------------------------------------------------------------------
 class AssetCategory(TimeStampedModel):
     name = models.CharField(max_length=100, unique=True)
+    # e.g., "serial_number,device_password,additional_details"
+    required_fields = models.TextField(blank=True, help_text="Comma separated field names to show in the form")
 
     def __str__(self):
         return self.name
@@ -1244,15 +1293,18 @@ class Asset(TimeStampedModel):
         RETIRED = 'retired', 'Retired'
 
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='assets')
+    category = models.ForeignKey(AssetCategory, on_delete=models.PROTECT, related_name='assets', null=True)
     employee = models.ForeignKey(Employee, on_delete=models.SET_NULL, null=True, blank=True,
                                   related_name='assets')
     name = models.CharField(max_length=150)
     asset_type = models.CharField(max_length=100, blank=True)
     serial_number = models.CharField(max_length=100, blank=True)
+    sim = models.CharField(max_length=100, null=True, blank=True, help_text="SIM card number or provider details")
+    phone_number = models.CharField(max_length=20, null=True, blank=True, help_text="Phone number associated with the SIM/Device")
+
     # NEW FIELDS
     device_password = models.CharField(max_length=255, blank=True, help_text="Login password or PIN for the device")
     additional_details = models.TextField(blank=True, help_text="OS version, RAM, etc.")
-
     purchase_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.AVAILABLE)
     assigned_on = models.DateField(null=True, blank=True)
@@ -1261,21 +1313,6 @@ class Asset(TimeStampedModel):
     def __str__(self):
         return self.name
 
-    def save(self, *args, **kwargs):
-        # Detect if employee is changing to create history
-        if self.pk:
-            old_instance = Asset.objects.get(pk=self.pk)
-            # If a new employee is assigned
-            if old_instance.employee != self.employee and self.employee is not None:
-                self.status = Asset.Status.ASSIGNED
-                self.assigned_on = models.functions.Now()
-                # Create history entry
-                AssetAssignmentHistory.objects.create(
-                    asset=self,
-                    employee=self.employee,
-                    assigned_date=models.functions.Now()
-                )
-        super().save(*args, **kwargs)
 
     def save(self, *args, **kwargs):
         if self.pk:
@@ -1313,7 +1350,47 @@ class Asset(TimeStampedModel):
             AssetAssignmentHistory.objects.create(
                 asset=self, employee=self.employee, is_still_using=True
             )
+    def save(self, *args, **kwargs):
+        # 1. Capture whether this is a brand new record BEFORE saving
+        is_new = self.pk is None
 
+        if not is_new:
+            # 2. This logic runs ONLY for updates (re-assignments)
+            old_asset = Asset.objects.get(pk=self.pk)
+
+            # Check if the employee has changed
+            if old_asset.employee != self.employee:
+                # If there was an old employee, close their history (Return them)
+                if old_asset.employee:
+                    AssetAssignmentHistory.objects.filter(
+                        asset=self,
+                        employee=old_asset.employee,
+                        is_still_using=True
+                    ).update(
+                        returned_date=models.functions.Now(),
+                        is_still_using=False
+                    )
+
+                # If there is a NEW employee assigned during update, start new history
+                if self.employee:
+                    AssetAssignmentHistory.objects.create(
+                        asset=self,
+                        employee=self.employee,
+                        is_still_using=True
+                    )
+
+        # 3. Save the actual Asset to the database
+        # After this line, self.pk will exist even if it was a new record
+        super().save(*args, **kwargs)
+
+        # 4. Handle the very first time an asset is created with an employee
+        # We use the 'is_new' variable we captured at the beginning
+        if is_new and self.employee:
+            AssetAssignmentHistory.objects.create(
+                asset=self,
+                employee=self.employee,
+                is_still_using=True
+            )
 
 class AssetAssignmentHistory(TimeStampedModel):
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='history')

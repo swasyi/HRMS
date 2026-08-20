@@ -1,26 +1,131 @@
 {% extends "hrms/base.html" %}
-{% block title %}{% if object %}Edit{% else %}Add{% endif %} Asset{% endblock %}
-{% block page_title %}{% if object %}Edit{% else %}Add{% endif %} Asset{% endblock %}
-
 {% block content %}
-<div class="card" style="max-width:640px;">
+<div class="card" style="max-width:800px; margin: auto;">
   <div class="card-body">
-    <form method="post">
+    <form method="post" id="assetForm">
       {% csrf_token %}
-      <div class="row g-3">
-        {% for field in form %}
-          <div class="col-md-6">
-            <label class="form-label">{{ field.label }}</label>
-            {{ field }}
-            {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
-          </div>
-        {% endfor %}
+
+      <!-- Top Row: Essential Info (Always Visible) -->
+      <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <label class="form-label fw-bold">Company</label>
+            {{ form.company }}
+        </div>
+        <div class="col-md-6">
+            <label class="form-label fw-bold">Category</label>
+            <div class="input-group">
+                {{ form.category }}
+                <!-- Plus Button to trigger Modal -->
+                <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#categoryModal">
+                    +
+                </button>
+            </div>
+            <small class="text-muted">Select a category or click + to create one</small>
+        </div>
       </div>
+
+      <div id="dynamic-fields-container" style="display: none;">
+          <div class="row g-3">
+            {% for field in form %}
+                {% if field.name != 'company' and field.name != 'category' %}
+                <div class="{% if field.name == 'remarks' or field.name == 'additional_details' %}col-md-12{% else %}col-md-6{% endif %} asset-field-wrapper"
+                     id="wrapper_{{ field.name }}">
+                    <label class="form-label fw-bold">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<div class="form-text small">{{ field.help_text }}</div>{% endif %}
+                </div>
+                {% endif %}
+            {% endfor %}
+          </div>
+      </div>
+
       <div class="mt-4 d-flex gap-2">
-        <button type="submit" class="btn text-white" style="background:var(--accent);">Save</button>
+        <button type="submit" class="btn text-white" style="background:var(--accent);">Save Asset</button>
         <a href="{% url 'hrms:asset_list' %}" class="btn btn-outline-secondary">Cancel</a>
       </div>
     </form>
   </div>
 </div>
+
+<!-- MODAL FOR CREATING CATEGORY -->
+<div class="modal fade" id="categoryModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Create New Category</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+            <label class="form-label fw-bold">Category Name</label>
+            <input type="text" id="new_cat_name" class="form-control" placeholder="e.g. Laptop">
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold">Specific Fields (Comma Separated)</label>
+            <input type="text" id="new_cat_fields" class="form-control" placeholder="serial_number, device_password">
+            <small class="text-muted">Fields like name, employee, and status are added automatically.</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="saveCategoryBtn" class="btn btn-primary">Save Category</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const categorySelect = document.querySelector('select[name="category"]');
+        const dynamicContainer = document.getElementById('dynamic-fields-container');
+        const fieldWrappers = document.querySelectorAll('.asset-field-wrapper');
+        let configs = {{ category_configs_json|safe }};
+
+        const baseFields = ['name', 'employee', 'status', 'purchase_date', 'remarks', 'assigned_on'];
+
+        function toggleFields() {
+            const selectedId = categorySelect.value;
+            const selectedText = categorySelect.options[categorySelect.selectedIndex]?.text || "";
+
+            if (!selectedId) {
+                dynamicContainer.style.display = 'none';
+                return;
+            }
+
+            dynamicContainer.style.display = 'block';
+            const requiredString = configs[selectedId] || "";
+            const requiredArray = requiredString.split(',').map(item => item.trim());
+
+            fieldWrappers.forEach(wrapper => {
+                const fieldName = wrapper.id.replace('wrapper_', '');
+                const label = document.getElementById(`label_${fieldName}`);
+                const help = document.getElementById(`help_${fieldName}`);
+
+                // --- SPECIAL LOGIC FOR SIM CATEGORY LABELS ---
+                if (selectedText.toLowerCase() === 'sim') {
+                    if (fieldName === 'name') label.innerText = "SIM Name / Label (e.g. Airtel 01)";
+                    if (fieldName === 'serial_number') label.innerText = "ICCID / SIM Serial";
+                    if (fieldName === 'sim') label.innerText = "Network Provider";
+                    if (fieldName === 'phone_number') label.innerText = "Assigned Mobile Number";
+                } else {
+                    // Reset to defaults for other categories
+                    if (fieldName === 'name') label.innerText = "Asset Name";
+                    if (fieldName === 'serial_number') label.innerText = "Serial Number";
+                    if (fieldName === 'sim') label.innerText = "SIM Details";
+                }
+
+                // Show/Hide logic
+                if (baseFields.includes(fieldName) || requiredArray.includes(fieldName)) {
+                    wrapper.style.display = 'block';
+                } else {
+                    wrapper.style.display = 'none';
+                }
+            });
+        }
+
+        categorySelect.addEventListener('change', toggleFields);
+        toggleFields();
+    });
+</script>
+
 {% endblock %}
