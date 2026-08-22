@@ -22,11 +22,7 @@ class DesignationAdmin(admin.ModelAdmin):
     list_filter = ('company', 'department')
 
 
-from django.contrib import admin
-from .models import Employee
-
-
-@admin.register(Employee)
+@admin.register(m.Employee)
 class EmployeeAdmin(admin.ModelAdmin):
     # Use filter_horizontal to make the selection much prettier than the box in your screenshot
     filter_horizontal = ('managed_companies',)
@@ -74,6 +70,13 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     list_display = ('employee', 'attendance_date', 'check_in', 'check_out', 'status', 'total_hours')
     list_filter = ('status', 'attendance_date')
     search_fields = ('employee__employee_code', 'employee__first_name')
+
+
+@admin.register(m.AttendancePenalty)
+class AttendancePenaltyAdmin(admin.ModelAdmin):
+    list_display = ('employee', 'penalty_date', 'late_minutes', 'deduction_days', 'deduction_source', 'status')
+    list_filter = ('status', 'penalty_date')
+    search_fields = ('employee__first_name', 'employee__employee_code')
 
 
 admin.site.register(m.GraceUsageTracker)

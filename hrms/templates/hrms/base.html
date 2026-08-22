@@ -37,6 +37,15 @@
           </a>
         </li>
 
+        {% if hrms_is_hr or request.user.employee_profile.is_manager %}
+        <li class="nav-item">
+          <a class="nav-link hrms-toplink {% if active_group == 'manager' %}active{% endif %}"
+             href="{% url 'hrms:manager_dashboard' %}">
+            <i class="bi bi-people-fill"></i> Manager Dashboard
+          </a>
+        </li>
+        {% endif %}
+
         {% if hrms_is_hr %}
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'organisation' %}active{% endif %}"
@@ -106,6 +115,7 @@
               {% else %}
                 <li><a href="{% url 'hrms:my_attendance' %}" class="{% if active_item == 'my_attendance' %}current{% endif %}">My Attendance</a></li>
               {% endif %}
+              <li><a href="{% url 'hrms:attendance_penalties' %}" class="{% if active_item == 'penalties' %}current{% endif %}">Penalties</a></li>
               <li><a href="{% url 'hrms:holiday_list' %}" class="{% if active_item == 'holiday' %}current{% endif %}">Holiday Calendar</a></li>
             </ul>
           </div>
@@ -210,39 +220,53 @@
           <i class="bi bi-list"></i>
         </button>
         <span class="page-title">{% block page_title %}Dashboard{% endblock %}</span>
+      </div>      <!-- Company Selection Navbar -->
+      <div class="d-none d-sm-flex align-items-center">
+        {% if can_switch_company %}
+          <div class="dropdown">
+            <button class="btn btn-sm btn-light border bg-white rounded-pill px-3 py-1 dropdown-toggle fw-semibold shadow-sm d-flex align-items-center gap-2"
+                    type="button" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.82rem;">
+              <i class="bi bi-building-fill text-primary"></i>
+              <span>
+                {% if active_company %}
+                  {{ active_company.name }}
+                {% else %}
+                  All Global Units
+                {% endif %}
+              </span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0 rounded-3 mt-1 py-2" style="min-width: 220px; font-size: 0.84rem;">
+              <li><h6 class="dropdown-header text-uppercase" style="font-size: 0.7rem; letter-spacing: 0.05em;">Switch Active Company</h6></li>
+              <li>
+                <a class="dropdown-item d-flex align-items-center justify-content-between py-2 {% if not active_company_id or active_company_id == 'all' %}active fw-bold{% endif %}"
+                   href="{% url 'hrms:set_active_company' %}?company_id=all">
+                  <span><i class="bi bi-globe2 me-2 text-muted"></i>All Global Units</span>
+                  {% if not active_company_id or active_company_id == 'all' %}
+                    <i class="bi bi-check-lg"></i>
+                  {% endif %}
+                </a>
+              </li>
+              <li><hr class="dropdown-divider my-1"></li>
+              {% for comp in available_companies %}
+                <li>
+                  <a class="dropdown-item d-flex align-items-center justify-content-between py-2 {% if active_company_id == comp.id|stringformat:'s' %}active fw-bold{% endif %}"
+                     href="{% url 'hrms:set_active_company' %}?company_id={{ comp.id }}">
+                    <span><i class="bi bi-building me-2 text-muted"></i>{{ comp.name }}</span>
+                    {% if active_company_id == comp.id|stringformat:'s' %}
+                      <i class="bi bi-check-lg"></i>
+                    {% endif %}
+                  </a>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% elif active_company %}
+          <div class="badge bg-light text-dark border rounded-pill px-3 py-2 fw-semibold d-flex align-items-center gap-2" style="font-size: 0.8rem;">
+            <i class="bi bi-building text-primary"></i>
+            <span>{{ active_company.name }}</span>
+          </div>
+        {% endif %}
       </div>
-<!--adddd new in navbar-->
-<!--    <div class="dropdown">-->
-<!--      <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">-->
-<!--        <i class="bi bi-building-fill me-1"></i>-->
-<!--        {% if active_company %}-->
-<!--            {{ active_company.name }}-->
-<!--        {% else %}-->
-<!--            All Global View-->
-<!--        {% endif %}-->
-<!--      </button>-->
-<!--      <ul class="dropdown-menu shadow border-0">-->
-<!--        <li><h6 class="dropdown-header">Switch Company</h6></li>-->
-
-<!--        {% for comp in available_companies %}-->
-<!--        <li>-->
-<!--            <a class="dropdown-item {% if active_company_id == comp.id|stringformat:'s' %}active{% endif %}"-->
-<!--               href="{% url 'hrms:set_active_company' %}?company_id={{ comp.id }}">-->
-<!--               {{ comp.name }}-->
-<!--            </a>-->
-<!--        </li>-->
-<!--        {% endfor %}-->
-
-<!--        <li><hr class="dropdown-divider"></li>-->
-<!--        <li>-->
-<!--            <a class="dropdown-item {% if active_company_id == 'all' or not active_company_id %}active{% endif %}"-->
-<!--               href="{% url 'hrms:set_active_company' %}?company_id=all">-->
-<!--               <i class="bi bi-globe me-2"></i>All Global Company-->
-<!--            </a>-->
-<!--        </li>-->
-<!--      </ul>-->
-<!--    </div>-->
-
 
       <div class="user-chip d-flex align-items-center gap-2">
         <div class="avatar">{{ request.user.username|slice:":2"|upper }}</div>

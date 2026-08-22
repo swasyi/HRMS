@@ -1631,6 +1631,7 @@ class PaymentThreadDetailView(LoginRequiredMixin,TemplateView):
             Customer: {self.voucher_status.customer.name}
             Invoice: {self.voucher_status.voucher.voucher_number}
 
+
             Please review the issue.
 
             Open Ticket:

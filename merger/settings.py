@@ -89,8 +89,8 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
-                'hrms.context_processors.hrms_role',  # add this
-
+                'hrms.context_processors.hrms_role',
+                'hrms.context_processors.hrms_company_context',
             ],
         },
     },

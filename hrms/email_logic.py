@@ -97,3 +97,57 @@ def send_offer_emails(offer):
         results.append(('manager', manager.email, ok, err))
 
     return results
+
+
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
+
+
+def send_leave_application_email(leave_app):
+    """
+    Sends automated email notification to HR and CC when leave is submitted.
+    Recipient: swasti.obluhc@gmail.com
+    CC: abhijay.obluhc@gmail.com
+    """
+    emp = leave_app.employee
+    to_email = 'swasti.obluhc@gmail.com'
+    cc_emails = ['abhijay.obluhc@gmail.com']
+    subject = f"Leave Application - {emp.full_name} ({leave_app.leave_type.name})"
+
+    context = {
+        'employee_name': emp.full_name,
+        'start_date': leave_app.start_date.strftime('%d %b %Y'),
+        'end_date': leave_app.end_date.strftime('%d %b %Y'),
+        'reason': leave_app.reason or 'Not specified',
+        'leave_type': leave_app.leave_type.name,
+        'total_days': leave_app.total_days,
+        'day_type': leave_app.get_day_type_display(),
+        'application': leave_app,
+    }
+
+    # Plain text format as requested:
+    # "Dear HR, I am [Employee Name], applying for leave from [Start Date] to [End Date]. Reason: [Reason]."
+    text_content = (
+        f"Dear HR,\n\n"
+        f"I am {emp.full_name}, applying for leave from {leave_app.start_date} to {leave_app.end_date}. "
+        f"Reason: {leave_app.reason or 'Not specified'}.\n\n"
+        f"Leave Type: {leave_app.leave_type.name} ({leave_app.total_days} Days, {leave_app.get_day_type_display()})\n"
+        f"Status: {leave_app.get_status_display()}\n\n"
+        f"Regards,\n{emp.full_name}"
+    )
+
+    try:
+        try:
+            html_content = render_to_string('hrms/email/leave_applied.html', context)
+        except Exception:
+            html_content = f"<p>Dear HR,</p><p>I am <strong>{emp.full_name}</strong>, applying for leave from <strong>{leave_app.start_date}</strong> to <strong>{leave_app.end_date}</strong>. Reason: <em>{leave_app.reason or 'Not specified'}</em>.</p><p>Leave Type: {leave_app.leave_type.name} ({leave_app.total_days} Days)</p>"
+
+        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@oblu.com')
+        msg = EmailMultiAlternatives(subject, text_content, from_email, [to_email], cc=cc_emails)
+        msg.attach_alternative(html_content, "text/html")
+        msg.send(fail_silently=True)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+

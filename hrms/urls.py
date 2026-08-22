@@ -103,12 +103,12 @@ urlpatterns = [
 
     path('attendance/report/<int:emp_id>/<int:month>/<int:year>/', views.EmployeePunchReportView.as_view(), name='employee_punch_report'),
     path('attendance/calendars/manage/', views.HolidayCalendarManageView.as_view(), name='holiday_calendar_manage'),
-    # path('attendance/calendars/<int:calendar_id>/holidays/', views.CalendarHolidayListView.as_view(),
-    #      name='calendar_holiday_list'),
-    #
-    # # This one is for adding a new date to that calendar
-    # path('attendance/calendars/<int:calendar_id>/holidays/add/', views.CalendarHolidayCreateView.as_view(),
-    #      name='calendar_holiday_add'),
+    path('attendance/penalties/', views.PenaltyListView.as_view(), name='attendance_penalties'),
+
+    # --- Manager ---
+    path('manager/dashboard/', views.ManagerDashboardView.as_view(), name='manager_dashboard'),
+    path('manager/leave/<int:pk>/approve/', views.ManagerLeaveApproveView.as_view(), name='manager_leave_approve'),
+    path('manager/leave/<int:pk>/reject/', views.ManagerLeaveRejectView.as_view(), name='manager_leave_reject'),
 
     # --- Leave ---
     path('leave/', views.LeaveApplicationListView.as_view(), name='my_leave'),

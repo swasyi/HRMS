@@ -212,6 +212,18 @@ class Employee(TimeStampedModel):
     employment_type = models.CharField(max_length=20, choices=EmploymentType.choices,
                                         default=EmploymentType.FULL_TIME)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    is_manager = models.BooleanField(
+        default=False,
+        help_text="Designates if this employee can act as a reporting manager."
+    )
+    reporting_manager = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='subordinates',
+        help_text="Select direct reporting manager"
+    )
     # NEW: Allows HR to be assigned to multiple companies
     managed_companies = models.ManyToManyField(
         'Company',
@@ -800,6 +812,28 @@ class GraceUsageTracker(TimeStampedModel):
         return f'{self.employee} - {self.month}/{self.year}'
 
 
+class AttendancePenalty(TimeStampedModel):
+    class DeductionStatus(models.TextChoices):
+        APPLIED = 'applied', 'Applied'
+        LWP = 'lwp', 'LWP (No Leave Balance)'
+        WAIVED = 'waived', 'Waived'
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='penalties')
+    attendance_record = models.ForeignKey('AttendanceRecord', on_delete=models.CASCADE, null=True, blank=True, related_name='penalties')
+    penalty_date = models.DateField()
+    reason = models.CharField(max_length=255, default='Late Arrival (Exceeded Grace Period)')
+    late_minutes = models.PositiveIntegerField(default=0)
+    deduction_days = models.DecimalField(max_digits=4, decimal_places=2, default=0.5)
+    deduction_source = models.CharField(max_length=100, default='CL')
+    status = models.CharField(max_length=20, choices=DeductionStatus.choices, default=DeductionStatus.APPLIED)
+
+    class Meta:
+        ordering = ['-penalty_date', '-created_at']
+
+    def __str__(self):
+        return f"Penalty: {self.employee} - {self.penalty_date} ({self.deduction_source})"
+
+
 
 # ---------------------------------------------------------------------------
 # 5. LEAVE MANAGEMENT
@@ -853,6 +887,8 @@ class LeaveBalance(TimeStampedModel):
 class LeaveApplication(TimeStampedModel):
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
+        PENDING_MANAGER = 'pending_manager', 'Pending Manager Approval'
+        PENDING_HR = 'pending_hr', 'Pending HR Approval'
         APPROVED = 'approved', 'Approved'
         REJECTED = 'rejected', 'Rejected'
         CANCELLED = 'cancelled', 'Cancelled'
@@ -1285,6 +1321,13 @@ class AssetCategory(TimeStampedModel):
         verbose_name_plural = "Asset Categories"
 
 
+from django.db import models
+from decimal import Decimal
+from datetime import date
+
+
+# ... (keep existing imports)
+
 class Asset(TimeStampedModel):
     class Status(models.TextChoices):
         AVAILABLE = 'available', 'Available'
@@ -1402,7 +1445,6 @@ class AssetAssignmentHistory(TimeStampedModel):
 
     class Meta:
         ordering = ['-assigned_date']
-
 
 # ---------------------------------------------------------------------------
 # 9. PERFORMANCE (bonus)

@@ -63,25 +63,21 @@ def calculate_total_days(start_date, end_date, day_type='full'):
 
     return Decimal((end_date - start_date).days + 1)
 
+
 def apply_leave(employee, leave_type, start_date, end_date, day_type='full', reason=''):
-    # Pass day_type to the calculator
-    # total_days = calculate_total_days(start_date, end_date, day_type)
     # 1. Force dates for Half Day
     if day_type == 'half':
         end_date = start_date
-        total_days = 0.5
+        total_days = Decimal('0.5')
     else:
-        # Full day calculation logic (e.g., (end - start).days + 1)
-        total_days = (end_date - start_date).days + 1
+        total_days = calculate_total_days(start_date, end_date, day_type)
 
     # 2. INTERN/TRAINEE LOGIC: "Money Deduct" (Switch to LWP)
     if employee.employment_type in ['intern', 'trainee']:
         if leave_type.is_paid:
-            # System automatically switches it to LWP (Leave Without Pay)
             lwp_type = m.LeaveType.objects.filter(code='LWP', company=employee.company).first()
             if lwp_type:
                 leave_type = lwp_type
-
 
     if leave_type.max_consecutive_days and total_days > leave_type.max_consecutive_days:
         raise LeaveError(
@@ -93,20 +89,19 @@ def apply_leave(employee, leave_type, start_date, end_date, day_type='full', rea
             and employee.gender != leave_type.applicable_gender):
         raise LeaveError(f'{leave_type.name} is not applicable to your profile.')
 
-    balance = get_or_create_balance(employee, leave_type, start_date.year)
-    if total_days > balance.available:
-        raise LeaveError(
-            f'Insufficient leave balance: requested {total_days} day(s), '
-            f'only {balance.available} day(s) available for {leave_type.name}.'
-        )
-    balance = None
-    if leave_type.is_paid: # LWP (Unpaid) ke liye balance check skip hoga
+    if leave_type.is_paid:
         balance = get_or_create_balance(employee, leave_type, start_date.year)
         if total_days > balance.available:
             raise LeaveError(f'Insufficient balance: {balance.available} days left for {leave_type.name}.')
 
+    # Routing logic:
+    # If employee has reporting_manager, send to manager first (PENDING_MANAGER).
+    # Otherwise send directly to HR (PENDING_HR).
+    if employee.reporting_manager:
+        initial_status = m.LeaveApplication.Status.PENDING_MANAGER
+    else:
+        initial_status = m.LeaveApplication.Status.PENDING_HR
 
-    # Save the day_type in the database record
     application = m.LeaveApplication.objects.create(
         employee=employee,
         leave_type=leave_type,
@@ -115,90 +110,49 @@ def apply_leave(employee, leave_type, start_date, end_date, day_type='full', rea
         day_type=day_type,
         total_days=total_days,
         reason=reason,
-        status=m.LeaveApplication.Status.PENDING,
+        status=initial_status,
     )
-    if balance:
-        balance.pending += total_days
-        balance.save(update_fields=['pending', 'updated_at'])
-        return application
 
+    # Automated email notification to HR & CC
+    try:
+        from . import email_logic
+        email_logic.send_leave_application_email(application)
+    except Exception:
+        pass
 
-def sync_bank_to_live_balance(bank_instance, is_new, old_bank=None):
-    """Triggered by Bank's save(). Mirror changes to the Live Report."""
-    live, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=bank_instance.e_name)
-
-    fields = ['casual_leave', 'sick_leave', 'earned_leave', 'menstrual_leave', 'bereavement_leave', 'comp_off']
-
-    for field in fields:
-        new_val = getattr(bank_instance, field)
-        if is_new:
-            setattr(live, field, new_val)
-        else:
-            # If manually increased in Bank, increase the Live Balance by the same amount
-            diff = new_val - getattr(old_bank, field)
-            current_live = getattr(live, field)
-            setattr(live, field, current_live + diff)
-    live.save()
-
-
-def approve_leave(application, approver_employee=None):
-    if application.status != m.LeaveApplication.Status.PENDING:
-        raise LeaveError('Only pending applications can be approved.')
-
-    balance = get_or_create_balance(application.employee, application.leave_type, application.start_date.year)
-    balance.pending -= application.total_days
-    balance.used += application.total_days
-    balance.save(update_fields=['pending', 'used', 'updated_at'])
-
-    application.status = m.LeaveApplication.Status.APPROVED
-    application.approved_by = approver_employee
-    application.approved_on = timezone.now()
-    application.save()
     return application
-def approve_leave(application, approver_user):
-    if application.status != m.LeaveApplication.Status.PENDING:
-        raise LeaveError('Only pending applications can be approved.')
 
-    # Logic to deduct from the main bank with CL -> EL priority
-    # msg = adjust_leave_bank(
-    #     application.employee,
-    #     application.total_days,
-    #     action="deduct",
-    #     leave_code=application.leave_type.code
-    # )
 
-    # Standard LeaveBalance table update (Internal tracking)
-    # balance = get_or_create_balance(application.employee, application.leave_type, application.start_date.year)
-    # balance.pending -= application.total_days
-    # balance.used += application.total_days
-    # balance.save()
+def manager_approve_leave(application, approver_user):
+    """
+    Manager approves leave application from their subordinate:
+    Advances status from PENDING_MANAGER to PENDING_HR.
+    """
+    if application.status != m.LeaveApplication.Status.PENDING_MANAGER:
+        raise LeaveError('Only applications pending manager approval can be approved by a manager.')
 
-    application.status = m.LeaveApplication.Status.APPROVED
+    application.status = m.LeaveApplication.Status.PENDING_HR
     application.approved_by = approver_user
     application.approved_on = timezone.now()
-    # application.reason = f"{application.reason} | Bank: {msg}".strip() # Audit trail
-    application.save()
+    application.save(update_fields=['status', 'approved_by', 'approved_on', 'updated_at'])
     return application
-
-
-# leave_logic.py
-
-from datetime import timedelta
-from . import models as m
 
 
 def approve_leave(application, approver_user):
     """
+    HR / SuperAdmin approves leave:
     1. Updates Status to Approved.
-    2. Deducts leaves ONLY from 'Leave Balance' (Live Page).
-    3. Leaves 'Leave Bank' (Permanent Page) untouched.
-    4. Automatically creates Attendance Records.
+    2. Deducts leaves from 'Leave Balance' (EmployeeLeaveBalanceLive).
+    3. Automatically creates Attendance Records as 'ON_LEAVE'.
     """
-    if application.status != m.LeaveApplication.Status.PENDING:
-        return "Only pending applications can be approved."
+    if application.status not in [
+        m.LeaveApplication.Status.PENDING,
+        m.LeaveApplication.Status.PENDING_HR,
+        m.LeaveApplication.Status.PENDING_MANAGER
+    ]:
+        raise LeaveError('Only pending applications can be approved.')
 
-    # --- STEP 1: Deduct from Leave Balance (The Live Report) ---
-    # We call the adjustment function we made earlier
+    # --- STEP 1: Deduct from Leave Balance (Live Report) ---
     msg = adjust_live_balance(
         employee=application.employee,
         amount=application.total_days,
@@ -207,6 +161,7 @@ def approve_leave(application, approver_user):
     )
 
     # --- STEP 2: Create Attendance Records ---
+    from datetime import timedelta
     current_date = application.start_date
     while current_date <= application.end_date:
         m.AttendanceRecord.objects.update_or_create(
@@ -222,6 +177,7 @@ def approve_leave(application, approver_user):
     # --- STEP 3: Update Application Status ---
     application.status = m.LeaveApplication.Status.APPROVED
     application.approved_by = approver_user
+    application.approved_on = timezone.now()
     application.save()
 
     return f"Success: {msg}"
@@ -229,30 +185,79 @@ def approve_leave(application, approver_user):
 
 def reject_leave(application, approver_user, reason=''):
     """
-    1. Updates Status to Rejected.
-    2. If it was already approved, it returns leaves to 'Leave Balance'.
-    3. Resets Attendance records.
+    1. Updates Status to Rejected and records rejection_reason.
+    2. If it was already approved, it refunds leaves to 'Leave Balance'.
+    3. Resets Attendance records to ABSENT if previously ON_LEAVE.
     """
-    # --- STEP 1: Refund Balance (Only if it was previously approved) ---
+    from datetime import timedelta
     if application.status == m.LeaveApplication.Status.APPROVED:
-        adjust_live_report(
+        adjust_live_balance(
             employee=application.employee,
             amount=application.total_days,
             action="refund",
             leave_code=application.leave_type.code
         )
 
-        # Reset Attendance Records to Absent
         m.AttendanceRecord.objects.filter(
             employee=application.employee,
             attendance_date__range=[application.start_date, application.end_date],
             status=m.AttendanceRecord.Status.ON_LEAVE
         ).update(status=m.AttendanceRecord.Status.ABSENT, remarks="Leave Rejected/Cancelled")
 
-    # --- STEP 2: Update Application Status ---
     application.status = m.LeaveApplication.Status.REJECTED
     application.rejection_reason = reason
+    application.approved_by = approver_user
     application.save()
+    return application
+
+
+def apply_late_penalty_deduction(record):
+    """
+    Deducts 0.5 leaves from EmployeeLeaveBalanceLive (Priority: CL first, then EL)
+    when an AttendanceRecord is marked as a Half Day due to late arrival exceeding grace.
+    Logs the penalty in AttendancePenalty.
+    """
+    if not record or not record.employee:
+        return None
+
+    # Check if penalty already logged for this record
+    existing = m.AttendancePenalty.objects.filter(
+        employee=record.employee,
+        penalty_date=record.attendance_date
+    ).first()
+    if existing:
+        return existing
+
+    live_report, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=record.employee)
+    amount = 0.5
+    deduction_source = "LWP"
+    penalty_status = m.AttendancePenalty.DeductionStatus.APPLIED
+
+    # Priority 1: Casual Leave (CL)
+    if live_report.casual_leave >= amount:
+        live_report.casual_leave -= amount
+        live_report.save(update_fields=['casual_leave'])
+        deduction_source = "Deducted 0.5 from CL"
+    # Priority 2: Earned Leave (EL)
+    elif live_report.earned_leave >= amount:
+        live_report.earned_leave -= amount
+        live_report.save(update_fields=['earned_leave'])
+        deduction_source = "Deducted 0.5 from EL"
+    else:
+        deduction_source = "LWP (Insufficient Balance)"
+        penalty_status = m.AttendancePenalty.DeductionStatus.LWP
+
+    penalty = m.AttendancePenalty.objects.create(
+        employee=record.employee,
+        attendance_record=record,
+        penalty_date=record.attendance_date,
+        reason=f"Late Arrival ({record.late_minutes} mins late - Exceeded Grace)",
+        late_minutes=record.late_minutes,
+        deduction_days=Decimal('0.5'),
+        deduction_source=deduction_source,
+        status=penalty_status,
+    )
+    return penalty
 
 
 # leave_logic.py

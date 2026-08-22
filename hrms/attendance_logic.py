@@ -134,6 +134,15 @@ def check_in(employee, at=None):
 
     evaluate_arrival(record, policy)
     record.save()
+
+    # Trigger automatic penalty tracking & leave deduction for late arrival half-days
+    if record.status == m.AttendanceRecord.Status.HALF_DAY and record.late_minutes > 0:
+        try:
+            from . import leave_logic as lv
+            lv.apply_late_penalty_deduction(record)
+        except Exception:
+            pass
+
     return record
 
 

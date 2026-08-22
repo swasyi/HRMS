@@ -1,47 +1,57 @@
-from datetime import date
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.views.generic import TemplateView, UpdateView, ListView, DetailView, FormView
 
-from django.shortcuts import render
-from django.urls import reverse_lazy
+from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse_lazy, reverse
 from django.utils import timezone
-from django.db.models import Q  # <--- Add this
+from django.db.models import Q, Count, Max
 from .forms import UnifiedCandidateForm
 from . import models
 from . import models as m
-from django.utils import timezone # Make sure this is at the top
-from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR
+from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE
 
 
 # mixins.py or views.py
 class CompanyFilterMixin:
-    """Filters querysets based on the session's active_company_id."""
+    """Filters querysets based on the session's active_company_id and user role."""
 
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
+        if not user.is_authenticated:
+            return queryset.none()
+
         active_id = self.request.session.get('active_company_id')
 
-        # 1. If a specific company is selected
+        # 1. If a specific company is selected in session
         if active_id and active_id != 'all':
-            # Handle different models (some link to company, some to employee__company)
             if hasattr(self.model, 'company'):
                 return queryset.filter(company_id=active_id)
             elif hasattr(self.model, 'employee'):
                 return queryset.filter(employee__company_id=active_id)
+            elif hasattr(self.model, 'e_name'):
+                return queryset.filter(e_name__company_id=active_id)
 
-        # 2. If 'Global' or nothing is selected, filter by all managed companies (Security)
-        if not user.is_superuser:
-            profile = get_employee_profile(user)
-            allowed_ids = list(profile.managed_companies.values_list('id', flat=True))
-            allowed_ids.append(profile.company_id)
+        # 2. If 'All' / global view is selected and user is Super Admin
+        if user.is_superuser:
+            return queryset
 
-            if hasattr(self.model, 'company'):
-                return queryset.filter(company_id__in=allowed_ids)
-            elif hasattr(self.model, 'employee'):
-                return queryset.filter(employee__company_id__in=allowed_ids)
+        # 3. Non-Superuser (HR / Manager / Employee) — filter by managed/assigned companies
+        profile = get_employee_profile(user)
+        if profile:
+            first_managed = profile.managed_companies.first() if hasattr(profile, 'managed_companies') else None
+            locked = first_managed or profile.company
+            if locked:
+                if hasattr(self.model, 'company'):
+                    return queryset.filter(company_id=locked.id)
+                elif hasattr(self.model, 'employee'):
+                    return queryset.filter(employee__company_id=locked.id)
+                elif hasattr(self.model, 'e_name'):
+                    return queryset.filter(e_name__company_id=locked.id)
 
         return queryset
 
@@ -52,157 +62,49 @@ class HRMSLoginView(LoginView):
         return reverse_lazy('hrms:dashboard')
 
 def set_active_company(request):
-    if request.method == 'POST':
-        company_id = request.POST.get('company_id')
-        if company_id:
-            request.session['active_company_id'] = company_id
-    return redirect(request.META.get('HTTP_REFERER', 'hrms:dashboard'))
-
-
-def set_active_company(request):
-    company_id = request.GET.get('company_id')  # Get from URL parameter
-
+    """Handles both POST and GET company switching."""
+    company_id = request.POST.get('company_id') or request.GET.get('company_id')
     if company_id == 'all':
         request.session['active_company_id'] = 'all'
     elif company_id:
-        # Security: Optional check here to ensure user has permission
-        # for this specific company_id
-        request.session['active_company_id'] = company_id
-
+        request.session['active_company_id'] = str(company_id)
     return redirect(request.META.get('HTTP_REFERER', 'hrms:dashboard'))
 
 
-
-
 @login_required
 def dashboard(request):
     user = request.user
     role = get_role(user)
-    today = date.today()
-    context = {'active_group': 'dashboard', 'active_item': 'dashboard'}
 
-    if is_hr_or_above(user):
-        # --- 1. Get List of Available Companies for the dropdown ---
-        if user.is_superuser:
-            available_companies = m.Company.objects.all()
-        else:
-            employee_profile = get_employee_profile(user)
-            if employee_profile:
-                # HR sees their primary company + any assigned managed_companies
-                available_companies = m.Company.objects.filter(
-                    Q(id=employee_profile.company_id) |
-                    Q(managed_companies__id=employee_profile.id)
-                ).distinct()
-            else:
-                available_companies = m.Company.objects.none()
-
-        # --- 2. Identify the "Active" Company filter from session ---
-        active_company_id = request.session.get('active_company_id')
-
-        # Default Filters (Global)
-        emp_filter = Q(status=m.Employee.Status.ACTIVE)
-        leave_filter = Q(status=m.LeaveApplication.Status.PENDING)
-        job_filter = Q(is_active=True)
-        attend_filter = Q(attendance_date=today)
-
-        # --- 3. Apply Filtering based on selection or HR restrictions ---
-        if active_company_id and active_company_id != "all":
-            # Filter everything by the selected company
-            emp_filter &= Q(company_id=active_company_id)
-            leave_filter &= Q(employee__company_id=active_company_id)
-            job_filter &= Q(company_id=active_company_id)
-            attend_filter &= Q(employee__company_id=active_company_id)
-
-        elif not user.is_superuser:
-            # If HR hasn't selected a specific company, show data from ALL their assigned companies
-            allowed_ids = list(available_companies.values_list('id', flat=True))
-            emp_filter &= Q(company_id__in=allowed_ids)
-            leave_filter &= Q(employee__company_id__in=allowed_ids)
-            job_filter &= Q(company_id__in=allowed_ids)
-            attend_filter &= Q(employee__company_id__in=allowed_ids)
-
-        # --- 4. Fetch Filtered Data ---
-        active_employees = m.Employee.objects.filter(emp_filter).select_related('designation')
-        attendance_today = m.AttendanceRecord.objects.filter(attend_filter)
-
-        # --- 5. Attendance Breakdown Logic ---
-        # Get IDs of employees who have a record today
-        present_ids = attendance_today.filter(
-            status=m.AttendanceRecord.Status.PRESENT
-        ).values_list('employee_id', flat=True)
-
-        on_leave_ids = attendance_today.filter(
-            status=m.AttendanceRecord.Status.ON_LEAVE
-        ).values_list('employee_id', flat=True)
-
-        # Map IDs to actual Employee Querysets for the template
-        present_list = active_employees.filter(id__in=present_ids)
-        on_leave_list = active_employees.filter(id__in=on_leave_ids)
-
-        # Absent = Active employees who are NOT in the present list AND NOT in the leave list
-        absent_list = active_employees.exclude(id__in=present_ids).exclude(id__in=on_leave_ids)
-
-        context.update({
-            'available_companies': available_companies,
-            'active_company_id': active_company_id,
-            'total_employees': active_employees.count(),
-            'present_today': present_list.count(),
-            'pending_leaves': m.LeaveApplication.objects.filter(leave_filter).count(),
-            'open_jobs': m.JobPosting.objects.filter(job_filter).count(),
-
-            'recent_joiners': active_employees.order_by('-date_of_joining')[:5],
-            'pending_leave_list': m.LeaveApplication.objects.filter(leave_filter).select_related('employee',
-                                                                                                 'leave_type')[:5],
-
-            # Data for the Attendance Tabs in your template
-            'present_employees': present_list,
-            'absent_employees': absent_list,
-            'on_leave_employees': on_leave_list,
-        })
-        template = 'hrms/dashboard_hr.html'
-
+    # 1. Date Filtering (Calendar Support via GET query param)
+    target_date_str = request.GET.get('date')
+    if target_date_str:
+        try:
+            target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            target_date = date.today()
     else:
-        # --- 6. Standard Employee Logic ---
-        employee = get_employee_profile(user)
-        if employee:
-            context.update({
-                'employee': employee,
-                'leave_balances': m.LeaveBalance.objects.filter(employee=employee, year=today.year),
-                'recent_attendance': m.AttendanceRecord.objects.filter(employee=employee).order_by('-attendance_date')[
-                    :7],
-                'recent_notices': m.CompanyNotice.objects.filter(company=employee.company, is_active=True).order_by(
-                    '-notice_date')[:5],
-            })
-        template = 'hrms/dashboard_employee.html'
+        target_date = date.today()
 
-    return render(request, template, context)
-
-
-from datetime import date
-from django.db.models import Q, Count
-from django.utils import timezone
-from django.shortcuts import render
-from django.contrib.auth.decorators import login_required
-
-
-# Assumes your models are imported as 'm'
-# Assumes helper functions: get_role, is_hr_or_above, get_employee_profile exist
-
-@login_required
-def dashboard(request):
-    user = request.user
-    role = get_role(user)
     today = date.today()
-    context = {'active_group': 'dashboard', 'active_item': 'dashboard'}
+    is_today = (target_date == today)
+
+    context = {
+        'active_group': 'dashboard',
+        'active_item': 'dashboard',
+        'selected_date': target_date.strftime('%Y-%m-%d'),
+        'display_date': target_date.strftime('%d %b, %Y'),
+        'is_today': is_today,
+    }
 
     if is_hr_or_above(user):
-        # --- 1. Get List of Available Companies for the dropdown ---
+        # --- 2. Permission-Based Company List ---
         if user.is_superuser:
             available_companies = m.Company.objects.all()
         else:
             employee_profile = get_employee_profile(user)
             if employee_profile:
-                # HR sees their primary company + any assigned managed_companies
+                # HR sees primary company + managed companies
                 available_companies = m.Company.objects.filter(
                     Q(id=employee_profile.company_id) |
                     Q(managed_companies__id=employee_profile.id)
@@ -210,16 +112,14 @@ def dashboard(request):
             else:
                 available_companies = m.Company.objects.none()
 
-        # --- 2. Identify the "Active" Company filter from session ---
         active_company_id = request.session.get('active_company_id')
 
-        # Default Filters (Global)
+        # --- 3. Robust Permission-Based Filters ---
         emp_filter = Q(status=m.Employee.Status.ACTIVE)
         leave_filter = Q(status=m.LeaveApplication.Status.PENDING)
         job_filter = Q(is_active=True)
-        attend_filter = Q(attendance_date=today)
+        attend_filter = Q(attendance_date=target_date)
 
-        # --- 3. Apply Filtering based on selection or HR restrictions ---
         if active_company_id and active_company_id != "all":
             emp_filter &= Q(company_id=active_company_id)
             leave_filter &= Q(employee__company_id=active_company_id)
@@ -232,89 +132,172 @@ def dashboard(request):
             job_filter &= Q(company_id__in=allowed_ids)
             attend_filter &= Q(employee__company_id__in=allowed_ids)
 
-        # --- 4. Fetch Filtered Data ---
-        # We use select_related to get designation in one query
-        active_employees = m.Employee.objects.filter(emp_filter).select_related('designation')
-        attendance_today = m.AttendanceRecord.objects.filter(attend_filter)
+        # --- 4. Fetch Optimized Data ---
+        active_employees = m.Employee.objects.filter(emp_filter).select_related('designation', 'department', 'company')
+        attendance_records = m.AttendanceRecord.objects.filter(attend_filter).select_related('employee')
+        attendance_map = {r.employee_id: r for r in attendance_records}
 
-        # Smart Mapping: Create a dictionary for quick lookup of today's punches
-        attendance_map = {r.employee_id: r for r in attendance_today}
+        # Identify employees with approved leave on target_date
+        on_leave_emp_ids = set(m.LeaveApplication.objects.filter(
+            status=m.LeaveApplication.Status.APPROVED,
+            start_date__lte=target_date,
+            end_date__gte=target_date
+        ).values_list('employee_id', flat=True))
 
-        # --- 5. Attendance Breakdown Logic ---
-        present_ids = attendance_today.filter(
-            status=m.AttendanceRecord.Status.PRESENT
-        ).values_list('employee_id', flat=True)
-
-        on_leave_ids = attendance_today.filter(
-            status=m.AttendanceRecord.Status.ON_LEAVE
-        ).values_list('employee_id', flat=True)
-
-        # Build detailed Present List with Timing Data for the "Solid UI"
+        # --- 5. Categorize Attendance with Grace Period & Live Timing ---
         present_employees_detailed = []
-        present_qs = active_employees.filter(id__in=present_ids)
-        for emp in present_qs:
+        absent_employees = []
+        on_leave_employees = []
+        all_employees_detailed = []
+        currently_working_count = 0
+
+        for emp in active_employees:
             record = attendance_map.get(emp.id)
-            present_employees_detailed.append({
-                'emp': emp,
-                'check_in': record.check_in if record else None,
-                'check_out': record.check_out if record else None,
-                'is_late': record.late_minutes > 0 if record else False,
-            })
+            policy = emp.company.get_policy_for_date(target_date) if emp.company else None
+            grace_minutes = policy.grace_minutes if policy else 15
 
-        # Calculate Absent and On-Leave querysets
-        on_leave_list = active_employees.filter(id__in=on_leave_ids)
-        absent_list = active_employees.exclude(id__in=present_ids).exclude(id__in=on_leave_ids)
+            if record and (record.check_in or record.status in [m.AttendanceRecord.Status.PRESENT, m.AttendanceRecord.Status.HALF_DAY]):
+                # Status checks: Grace vs Late vs On-Time
+                is_grace = False
+                is_late = False
 
-        # Stats for the Power Cards
+                if record.late_minutes > 0:
+                    if record.late_minutes <= grace_minutes:
+                        is_grace = True
+                    else:
+                        is_late = True
+                elif record.check_in and policy and policy.office_start_time:
+                    local_in = timezone.localtime(record.check_in).time()
+                    office_start = policy.office_start_time
+                    if local_in > office_start:
+                        dummy_d = date(2000, 1, 1)
+                        diff_sec = (datetime.combine(dummy_d, local_in) - datetime.combine(dummy_d, office_start)).total_seconds()
+                        diff_m = int(diff_sec / 60)
+                        if diff_m <= grace_minutes:
+                            is_grace = True
+                        else:
+                            is_late = True
+
+                # Check if currently working (checked in, not checked out)
+                is_running = False
+                if record.check_in and not record.check_out:
+                    currently_working_count += 1
+                    if is_today:
+                        is_running = True
+
+                # Total hours display
+                total_hours_display = ""
+                if record.total_hours and record.total_hours > 0:
+                    hrs = int(record.total_hours)
+                    mins = int((record.total_hours - hrs) * 60)
+                    total_hours_display = f"{hrs:02d}h {mins:02d}m"
+                elif record.check_in and record.check_out:
+                    diff_sec = (record.check_out - record.check_in).total_seconds()
+                    hrs = int(diff_sec // 3600)
+                    mins = int((diff_sec % 3600) // 60)
+                    total_hours_display = f"{hrs:02d}h {mins:02d}m"
+
+                emp_item = {
+                    'emp': emp,
+                    'record': record,
+                    'status_category': 'present',
+                    'check_in': record.check_in,
+                    'check_out': record.check_out,
+                    'check_in_iso': record.check_in.isoformat() if record.check_in else '',
+                    'total_hours_display': total_hours_display,
+                    'is_running': is_running,
+                    'is_grace': is_grace,
+                    'is_late': is_late,
+                    'late_minutes': record.late_minutes,
+                }
+                present_employees_detailed.append(emp_item)
+                all_employees_detailed.append(emp_item)
+
+            elif emp.id in on_leave_emp_ids or (record and record.status == m.AttendanceRecord.Status.ON_LEAVE):
+                emp_item = {
+                    'emp': emp,
+                    'record': record,
+                    'status_category': 'on_leave',
+                    'check_in': None,
+                    'check_out': None,
+                    'check_in_iso': '',
+                    'total_hours_display': '--',
+                    'is_running': False,
+                    'is_grace': False,
+                    'is_late': False,
+                    'late_minutes': 0,
+                }
+                on_leave_employees.append(emp_item)
+                all_employees_detailed.append(emp_item)
+
+            else:
+                emp_item = {
+                    'emp': emp,
+                    'record': record,
+                    'status_category': 'absent',
+                    'check_in': None,
+                    'check_out': None,
+                    'check_in_iso': '',
+                    'total_hours_display': '--',
+                    'is_running': False,
+                    'is_grace': False,
+                    'is_late': False,
+                    'late_minutes': 0,
+                }
+                absent_employees.append(emp_item)
+                all_employees_detailed.append(emp_item)
+
+        # Total counts
         total_count = active_employees.count()
-        attendance_pct = round((present_qs.count() / total_count) * 100) if total_count > 0 else 0
+        present_count = len(present_employees_detailed)
+        time_off_count = len(on_leave_employees)
+        absent_count = len(absent_employees)
+        attendance_pct = round((present_count / total_count) * 100) if total_count > 0 else 0
 
-        # --- 6. Hiring & Celebrations (Sidebar Info) ---
-        # Get jobs and count applications for each
+        # Sidebar data
         open_jobs_list = m.JobPosting.objects.filter(job_filter).annotate(
             app_count=Count('applications')
-        ).order_by('-created_at')[:3]
+        ).order_by('-created_at')[:4]
 
-        # Upcoming Birthdays this month
         upcoming_birthdays = active_employees.filter(
-            date_of_birth__month=today.month
-        ).order_by('date_of_birth')[:3]
+            date_of_birth__month=target_date.month
+        ).order_by('date_of_birth')[:4]
 
         context.update({
             'available_companies': available_companies,
             'active_company_id': active_company_id,
             'total_employees': total_count,
-            'present_today': present_qs.count(),
+            'currently_working': currently_working_count,
+            'on_break_count': 0,
+            'time_off_count': time_off_count,
+            'pending_biometrics': 0,
+            'present_today': present_count,
+            'absent_count': absent_count,
             'attendance_percentage': attendance_pct,
             'pending_leaves': m.LeaveApplication.objects.filter(leave_filter).count(),
             'open_jobs': m.JobPosting.objects.filter(job_filter).count(),
 
-            'recent_joiners': active_employees.order_by('-date_of_joining')[:5],
-            'pending_leave_list': m.LeaveApplication.objects.filter(leave_filter).select_related('employee',
-                                                                                                 'leave_type')[:5],
-
-            # Logic for the custom tabs
+            # Tab data
+            'all_employees_detailed': all_employees_detailed,
             'present_employees_detailed': present_employees_detailed,
-            'absent_employees': absent_list,
-            'on_leave_employees': on_leave_list,
+            'absent_employees': absent_employees,
+            'on_leave_employees': on_leave_employees,
 
-            # Sidebar info
+            # Sidebar
             'upcoming_birthdays': upcoming_birthdays,
             'open_jobs_list': open_jobs_list,
         })
         template = 'hrms/dashboard_hr.html'
 
     else:
-        # --- 7. Standard Employee Logic ---
+        # Standard Employee Logic
         employee = get_employee_profile(user)
         if employee:
             context.update({
                 'employee': employee,
                 'leave_balances': m.LeaveBalance.objects.filter(employee=employee, year=today.year),
-                'recent_attendance': m.AttendanceRecord.objects.filter(employee=employee).order_by('-attendance_date')[
-                    :7],
-                'recent_notices': m.CompanyNotice.objects.filter(company=employee.company, is_active=True).order_by(
-                    '-notice_date')[:5],
+                'recent_attendance': m.AttendanceRecord.objects.filter(employee=employee).order_by('-attendance_date')[:7],
+                'recent_notices': m.CompanyNotice.objects.filter(company=employee.company, is_active=True).order_by('-notice_date')[:5],
             })
         template = 'hrms/dashboard_employee.html'
 
@@ -516,7 +499,7 @@ class DesignationDeleteView(HRRequiredMixin, SidebarContextMixin, DeleteView):
 from django.db.models import Q, Count
 
 
-class EmployeeListView(CompanyFilterMixin,HRRequiredMixin, SidebarContextMixin, ListView):
+class EmployeeListView(CompanyFilterMixin, HRRequiredMixin, SidebarContextMixin, ListView):
     model = m.Employee
     template_name = 'hrms/employee/employee_list.html'
     context_object_name = 'employees'
@@ -524,8 +507,9 @@ class EmployeeListView(CompanyFilterMixin,HRRequiredMixin, SidebarContextMixin, 
     paginate_by = 65
 
     def get_queryset(self):
-        # Optimization: select_related is crucial for performance
-        qs = m.Employee.objects.select_related('company', 'department', 'designation')
+        # CompanyFilterMixin handles multi-tenancy / active_company_id filtering
+        qs = super().get_queryset().select_related('company', 'department', 'designation')
+
         q = self.request.GET.get('q', '').strip()
         status = self.request.GET.get('status', '').strip()
 
@@ -536,24 +520,37 @@ class EmployeeListView(CompanyFilterMixin,HRRequiredMixin, SidebarContextMixin, 
             )
         if status:
             qs = qs.filter(status=status)
+
         return qs.order_by('employee_code')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        # Base queryset for stats (ignoring pagination)
-        base_qs = m.Employee.objects.all()
 
-        # 1. Total Departments
-        ctx['dept_count'] = m.Department.objects.count()
+        # Base company-filtered employee queryset for stats (ignoring search filters & pagination)
+        base_emp_qs = super().get_queryset()
+        user = self.request.user
+        active_company_id = self.request.session.get('active_company_id')
 
-        # 2. Total Active
-        ctx['active_count'] = base_qs.filter(status='active').count()
+        # Calculate Department count based on active company
+        if active_company_id and active_company_id != 'all':
+            dept_count = m.Department.objects.filter(company_id=active_company_id).count()
+        elif not user.is_superuser:
+            profile = get_employee_profile(user)
+            if profile:
+                first_managed = profile.managed_companies.first() if hasattr(profile, 'managed_companies') else None
+                locked = first_managed or profile.company
+                dept_count = m.Department.objects.filter(company=locked).count() if locked else 0
+            else:
+                dept_count = 0
+        else:
+            dept_count = m.Department.objects.count()
 
-        # 3. Total "Exited" (Relieved or Suspended)
-        ctx['exited_count'] = base_qs.filter(status__in=['relieved', 'suspended']).count()
-
-        # 4. Total On Leave
-        ctx['leave_count'] = base_qs.filter(status='on_leave').count()
+        # Stats Cards Data (Reflects selected company)
+        ctx['total_count'] = base_emp_qs.count()
+        ctx['active_count'] = base_emp_qs.filter(status=m.Employee.Status.ACTIVE).count()
+        ctx['dept_count'] = dept_count
+        ctx['exited_count'] = base_emp_qs.filter(status__in=[m.Employee.Status.RELIEVED, m.Employee.Status.SUSPENDED]).count()
+        ctx['leave_count'] = base_emp_qs.filter(status=m.Employee.Status.ON_LEAVE).count()
 
         ctx['q'] = self.request.GET.get('q', '')
         ctx['status'] = self.request.GET.get('status', '')
@@ -2329,75 +2326,116 @@ class LeaveBalanceUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
 # ---------------------------------------------------------------------------
 # Leave Applications — employee applies for their own; HR sees all + approves
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Leave Applications — employee applies for their own; HR sees all + approves
+# ---------------------------------------------------------------------------
 class LeaveApplicationListView(LoginRequiredMixin, SidebarContextMixin, ListView):
     model = m.LeaveApplication
     template_name = 'hrms/leave/leave_application_list.html'
     context_object_name = 'applications'
     active_group, active_item = 'leave', 'my_leave'
-    paginate_by = 30
-
-    def get_queryset(self):
-        qs = m.LeaveApplication.objects.select_related('employee', 'leave_type')
-        if is_hr_or_above(self.request.user):
-            status = self.request.GET.get('status')
-            employee_id = self.request.GET.get('employee')
-            if status:
-                qs = qs.filter(status=status)
-            if employee_id:
-                qs = qs.filter(employee_id=employee_id)
-            return qs
-        employee = get_employee_profile(self.request.user)
-        if employee is None:
-            return m.LeaveApplication.objects.none()
-        return qs.filter(employee=employee)
+    paginate_by = 15
 
     def get_queryset(self):
         qs = m.LeaveApplication.objects.select_related(
-            'employee', 'employee__designation', 'leave_type', 'approved_by'
+            'employee', 'employee__designation', 'employee__department', 'leave_type', 'approved_by'
         ).order_by('-applied_on')
 
-        # 1. Role-based filtering
-        if not is_hr_or_above(self.request.user):
-            employee = get_employee_profile(self.request.user)
-            if employee is None: return m.LeaveApplication.objects.none()
-            qs = qs.filter(employee=employee)
+        user = self.request.user
+        emp = get_employee_profile(user)
+
+        # 1. Role-based visibility
+        if not is_hr_or_above(user):
+            if emp is None:
+                return m.LeaveApplication.objects.none()
+            if emp.is_manager:
+                # Manager can see their own leaves AND subordinate leaves
+                qs = qs.filter(Q(employee=emp) | Q(employee__reporting_manager=emp))
+            else:
+                qs = qs.filter(employee=emp)
 
         # 2. Extract Filter Parameters
         status = self.request.GET.get('status')
         employee_id = self.request.GET.get('employee')
         start_date = self.request.GET.get('start_date')
         end_date = self.request.GET.get('end_date')
+        sales_filter = self.request.GET.get('sales')
+        department_id = self.request.GET.get('department')
 
         # 3. Apply Filters
         if status:
             qs = qs.filter(status=status)
-        if employee_id and is_hr_or_above(self.request.user):
+        if employee_id and (is_hr_or_above(user) or (emp and emp.is_manager)):
             qs = qs.filter(employee_id=employee_id)
         if start_date:
             qs = qs.filter(start_date__gte=start_date)
         if end_date:
             qs = qs.filter(end_date__lte=end_date)
+        if sales_filter == '1':
+            qs = qs.filter(employee__department__name__icontains='sales')
+        elif department_id:
+            qs = qs.filter(employee__department_id=department_id)
 
         return qs
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        user_is_hr = is_hr_or_above(self.request.user)
+        user = self.request.user
+        user_is_hr = is_hr_or_above(user)
+        emp = get_employee_profile(user)
         ctx['is_hr'] = user_is_hr
+        ctx['is_manager'] = (emp and emp.is_manager) if emp else False
+        ctx['current_employee'] = emp
 
-        # Stats for the top cards (Solid UI requirement)
+        # Base QS for full stats
         base_qs = self.get_queryset()
+
         ctx['stats'] = {
-            'pending': base_qs.filter(status='pending').count(),
-            'approved': base_qs.filter(status='approved').count(),
-            'rejected': base_qs.filter(status='rejected').count(),
+            'total': base_qs.count(),
+            'pending_manager': base_qs.filter(status=m.LeaveApplication.Status.PENDING_MANAGER).count(),
+            'pending_hr': base_qs.filter(status__in=[m.LeaveApplication.Status.PENDING_HR, m.LeaveApplication.Status.PENDING]).count(),
+            'approved': base_qs.filter(status=m.LeaveApplication.Status.APPROVED).count(),
+            'rejected': base_qs.filter(status=m.LeaveApplication.Status.REJECTED).count(),
+            'sales': base_qs.filter(employee__department__name__icontains='sales').count(),
         }
 
-        if user_is_hr:
-            ctx['employees'] = m.Employee.objects.order_by('first_name')
+        # Calculate live remaining balances formatted as CL (Total/Remaining) e.g. CL (10/3)
+        field_map = {
+            'CL': 'casual_leave', 'EL': 'earned_leave', 'SL': 'sick_leave',
+            'ML': 'menstrual_leave', 'MTL': 'menstrual_leave',
+            'BL': 'bereavement_leave', 'CO': 'comp_off'
+        }
+
+        # Cache balance instances for current page employees
+        page_employees = {app.employee_id: app.employee for app in ctx['applications']}
+        emp_banks = {b.e_name_id: b for b in m.EmployeeLeaveBalance.objects.filter(e_name_id__in=page_employees.keys())}
+        emp_lives = {l.e_name_id: l for l in m.EmployeeLeaveBalanceLive.objects.filter(e_name_id__in=page_employees.keys())}
+
+        for app in ctx['applications']:
+            code = (app.leave_type.code or '').upper()
+            field_name = field_map.get(code)
+            bank = emp_banks.get(app.employee_id)
+            live = emp_lives.get(app.employee_id)
+
+            if field_name and bank and live:
+                tot = getattr(bank, field_name, 0.0)
+                rem = getattr(live, field_name, 0.0)
+                tot_str = str(int(tot)) if float(tot).is_integer() else f"{tot:.1f}"
+                rem_str = str(int(rem)) if float(rem).is_integer() else f"{rem:.1f}"
+                app.balance_formatted = f"{code} ({tot_str}/{rem_str})"
+            else:
+                app.balance_formatted = app.leave_type.name
+
+        if user_is_hr or (emp and emp.is_manager):
+            if user_is_hr:
+                ctx['employees'] = m.Employee.objects.filter(status='active').order_by('first_name')
+            else:
+                ctx['employees'] = m.Employee.objects.filter(reporting_manager=emp, status='active').order_by('first_name')
             ctx['status_choices'] = m.LeaveApplication.Status.choices
+            ctx['departments'] = m.Department.objects.all()
             ctx['filters'] = self.request.GET
             ctx['reject_form'] = f.LeaveRejectForm()
+
         return ctx
 
 
@@ -2429,16 +2467,15 @@ class LeaveApplicationCreateView(LoginRequiredMixin, SidebarContextMixin, View):
                 return redirect('hrms:dashboard')
 
             try:
-                # PASS THE DAY_TYPE HERE
                 lv.apply_leave(
                     employee=employee,
                     leave_type=form.cleaned_data['leave_type'],
-                    day_type=form.cleaned_data['day_type'],  # <--- ADD THIS
+                    day_type=form.cleaned_data['day_type'],
                     start_date=form.cleaned_data['start_date'],
                     end_date=form.cleaned_data['end_date'],
                     reason=form.cleaned_data.get('reason', ''),
                 )
-                messages.success(request, 'Leave application submitted.')
+                messages.success(request, 'Leave application submitted successfully.')
                 return redirect('hrms:my_leave')
             except lv.LeaveError as e:
                 form.add_error(None, str(e))
@@ -2446,42 +2483,210 @@ class LeaveApplicationCreateView(LoginRequiredMixin, SidebarContextMixin, View):
             'form': form, 'active_group': self.active_group, 'active_item': self.active_item,
         })
 
+
 class LeaveApproveView(HRRequiredMixin, View):
-    """Admin/HR only — enforced by HRRequiredMixin, matching the prompt's
-    'Only Admins should be able to change the status to Approved.'"""
+    """HR/SuperAdmin approves leave -> updates status to approved and deducts leave balance."""
     def post(self, request, pk):
         application = get_object_or_404(m.LeaveApplication, pk=pk)
-        # approver = get_employee_profile(request.user)
         try:
             lv.approve_leave(application, approver_user=request.user)
             messages.success(request, f'Leave approved for {application.employee.full_name}.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
-        return redirect('hrms:my_leave')
+        return redirect(request.META.get('HTTP_REFERER', 'hrms:my_leave'))
 
 
 class LeaveRejectView(HRRequiredMixin, View):
+    """HR/SuperAdmin rejects leave -> updates status to rejected with rejection reason."""
     def post(self, request, pk):
         application = get_object_or_404(m.LeaveApplication, pk=pk)
-        # approver = get_employee_profile(request.user)
-        reason = request.POST.get('rejection_reason', '')
+        reason = request.POST.get('rejection_reason', '').strip()
         try:
             lv.reject_leave(application, approver_user=request.user, reason=reason)
             messages.success(request, f'Leave rejected for {application.employee.full_name}.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
-        return redirect('hrms:my_leave')
-class LeaveRejectView(HRRequiredMixin, View):
+        return redirect(request.META.get('HTTP_REFERER', 'hrms:my_leave'))
+
+
+class ManagerDashboardView(LoginRequiredMixin, SidebarContextMixin, TemplateView):
+    """Dashboard specifically for reporting managers and HR to view team leaves & attendance."""
+    template_name = 'hrms/manager/manager_dashboard.html'
+    active_group, active_item = 'manager', 'manager_dashboard'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        emp = get_employee_profile(user)
+        user_is_hr = is_hr_or_above(user)
+
+        # Get subordinates
+        if user_is_hr:
+            subordinates = m.Employee.objects.filter(status='active').select_related('department', 'designation', 'company')
+        elif emp and emp.is_manager:
+            subordinates = m.Employee.objects.filter(reporting_manager=emp, status='active').select_related('department', 'designation', 'company')
+        else:
+            subordinates = m.Employee.objects.none()
+
+        ctx['subordinates'] = subordinates
+        ctx['subordinate_count'] = subordinates.count()
+
+        # Subordinates' pending leaves
+        if user_is_hr:
+            pending_leaves = m.LeaveApplication.objects.filter(
+                status__in=[m.LeaveApplication.Status.PENDING_MANAGER, m.LeaveApplication.Status.PENDING_HR, m.LeaveApplication.Status.PENDING]
+            ).select_related('employee', 'leave_type')
+        elif emp:
+            pending_leaves = m.LeaveApplication.objects.filter(
+                employee__reporting_manager=emp,
+                status=m.LeaveApplication.Status.PENDING_MANAGER
+            ).select_related('employee', 'leave_type')
+        else:
+            pending_leaves = m.LeaveApplication.objects.none()
+
+        ctx['pending_leaves'] = pending_leaves
+
+        # Today's team attendance
+        today = timezone.localdate()
+        today_attendance = m.AttendanceRecord.objects.filter(
+            employee__in=subordinates,
+            attendance_date=today
+        ).select_related('employee')
+        today_att_map = {att.employee_id: att for att in today_attendance}
+
+        # Build attendance status for each subordinate today
+        team_today_list = []
+        for sub in subordinates:
+            att = today_att_map.get(sub.id)
+            team_today_list.append({
+                'employee': sub,
+                'record': att,
+                'status': att.get_status_display() if att else 'Not Checked In',
+                'check_in': att.check_in if att else None,
+                'check_out': att.check_out if att else None,
+                'late_minutes': att.late_minutes if att else 0,
+                'is_half_day': att.is_half_day if att else False,
+            })
+        ctx['team_today_list'] = team_today_list
+
+        # Team monthly summary
+        month_start = today.replace(day=1)
+        month_records = m.AttendanceRecord.objects.filter(
+            employee__in=subordinates,
+            attendance_date__gte=month_start,
+            attendance_date__lte=today
+        )
+        ctx['team_stats'] = {
+            'present': month_records.filter(status=m.AttendanceRecord.Status.PRESENT).count(),
+            'half_day': month_records.filter(status=m.AttendanceRecord.Status.HALF_DAY).count(),
+            'on_leave': month_records.filter(status=m.AttendanceRecord.Status.ON_LEAVE).count(),
+            'absent': month_records.filter(status=m.AttendanceRecord.Status.ABSENT).count(),
+        }
+
+        ctx['reject_form'] = f.LeaveRejectForm()
+        return ctx
+
+
+class ManagerLeaveApproveView(LoginRequiredMixin, View):
+    """Manager approves subordinate leave -> forwards to HR (status: PENDING_HR)."""
     def post(self, request, pk):
         application = get_object_or_404(m.LeaveApplication, pk=pk)
-        reason = request.POST.get('rejection_reason', '')
+        emp = get_employee_profile(request.user)
+        is_hr = is_hr_or_above(request.user)
+
+        # Check authorization
+        if not is_hr and (not emp or application.employee.reporting_manager != emp):
+            messages.error(request, "You are not authorized to approve this leave request.")
+            return redirect('hrms:my_leave')
+
         try:
-            # Just pass request.user
-            lv.reject_leave(application, approver_user=request.user, reason=reason)
-            messages.success(request, f'Leave rejected.')
+            lv.manager_approve_leave(application, approver_user=request.user)
+            messages.success(request, f'Leave for {application.employee.full_name} approved and escalated to HR.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
-        return redirect('hrms:my_leave')
+        return redirect(request.META.get('HTTP_REFERER', 'hrms:my_leave'))
+
+
+class ManagerLeaveRejectView(LoginRequiredMixin, View):
+    """Manager rejects subordinate leave with reason."""
+    def post(self, request, pk):
+        application = get_object_or_404(m.LeaveApplication, pk=pk)
+        emp = get_employee_profile(request.user)
+        is_hr = is_hr_or_above(request.user)
+
+        if not is_hr and (not emp or application.employee.reporting_manager != emp):
+            messages.error(request, "You are not authorized to reject this leave request.")
+            return redirect('hrms:my_leave')
+
+        reason = request.POST.get('rejection_reason', '').strip()
+        try:
+            lv.reject_leave(application, approver_user=request.user, reason=reason)
+            messages.success(request, f'Leave for {application.employee.full_name} rejected.')
+        except lv.LeaveError as e:
+            messages.error(request, str(e))
+        return redirect(request.META.get('HTTP_REFERER', 'hrms:my_leave'))
+
+
+class PenaltyListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    """Penalties page for tracking late arrival penalties and automatic leave deductions."""
+    model = m.AttendancePenalty
+    template_name = 'hrms/attendance/penalty_list.html'
+    context_object_name = 'penalties'
+    active_group, active_item = 'attendance', 'penalties'
+    paginate_by = 20
+
+    def get_queryset(self):
+        qs = m.AttendancePenalty.objects.select_related(
+            'employee', 'employee__department', 'employee__designation', 'attendance_record'
+        ).order_by('-penalty_date', '-created_at')
+
+        user = self.request.user
+        emp = get_employee_profile(user)
+        if not is_hr_or_above(user):
+            if emp is None:
+                return m.AttendancePenalty.objects.none()
+            if emp.is_manager:
+                qs = qs.filter(Q(employee=emp) | Q(employee__reporting_manager=emp))
+            else:
+                qs = qs.filter(employee=emp)
+
+        employee_id = self.request.GET.get('employee')
+        start_date = self.request.GET.get('start_date')
+        end_date = self.request.GET.get('end_date')
+        department_id = self.request.GET.get('department')
+
+        if employee_id:
+            qs = qs.filter(employee_id=employee_id)
+        if start_date:
+            qs = qs.filter(penalty_date__gte=start_date)
+        if end_date:
+            qs = qs.filter(penalty_date__lte=end_date)
+        if department_id:
+            qs = qs.filter(employee__department_id=department_id)
+
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        user_is_hr = is_hr_or_above(user)
+        emp = get_employee_profile(user)
+        ctx['is_hr'] = user_is_hr
+
+        base_qs = self.get_queryset()
+        ctx['stats'] = {
+            'total_penalties': base_qs.count(),
+            'total_days_deducted': sum(p.deduction_days for p in base_qs),
+            'total_late_minutes': sum(p.late_minutes for p in base_qs),
+        }
+
+        if user_is_hr:
+            ctx['employees'] = m.Employee.objects.filter(status='active').order_by('first_name')
+        elif emp and emp.is_manager:
+            ctx['employees'] = m.Employee.objects.filter(reporting_manager=emp, status='active').order_by('first_name')
+        ctx['departments'] = m.Department.objects.all()
+        ctx['filters'] = self.request.GET
+        return ctx
 
 
 class LeaveCancelView(LoginRequiredMixin, View):

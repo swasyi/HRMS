@@ -1,223 +1,825 @@
 {% extends "hrms/base.html" %}
+{% load static %}
+
 {% block extra_css %}
 <style>
-    .stat-card { border: none; border-radius: 15px; transition: transform 0.3s; }
-    .stat-card:hover { transform: translateY(-5px); }
-    .glass-tab { background: rgba(255, 255, 255, 0.9); border-radius: 12px; }
-    .avatar-sm { width: 32px; height: 32px; border-radius: 50%; background: #e2e8f0; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
-    .punch-pill { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; font-family: monospace; }
+    /* Attendo Modern Theme Enhancements */
+    .attendo-card {
+        background: #ffffff;
+        border-radius: 14px;
+        border: 1px solid #e7ecf3;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .attendo-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08) !important;
+    }
+    .stat-link {
+        text-decoration: none;
+        color: inherit;
+        display: block;
+    }
+    .icon-box {
+        width: 46px;
+        height: 46px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.35rem;
+    }
+    .icon-box-primary { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+    .icon-box-success { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+    .icon-box-warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
+    .icon-box-purple  { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
+    .icon-box-rose    { background: rgba(244, 63, 94, 0.1);  color: #f43f5e; }
+
+    /* Mini summary indicators */
+    .summary-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 16px;
+        border-radius: 10px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        font-weight: 500;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+    .summary-pill:hover {
+        background: #f1f5f9;
+    }
+    .dot-indicator {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        margin-right: 8px;
+        display: inline-block;
+    }
+    .dot-blue   { background-color: #2563eb; }
+    .dot-red    { background-color: #ef4444; }
+    .dot-purple { background-color: #8b5cf6; }
+
+    /* Custom Table Styling */
+    .attendance-table th {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 700;
+        color: #64748b;
+        background-color: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        padding-top: 12px;
+        padding-bottom: 12px;
+    }
+    .attendance-table td {
+        padding-top: 14px;
+        padding-bottom: 14px;
+        vertical-align: middle;
+        font-size: 0.86rem;
+    }
+    .emp-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+        color: #3730a3;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }
+    .punch-badge {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.76rem;
+        padding: 4px 10px;
+        border-radius: 8px;
+    }
+
+    /* Live running clock */
+    .live-clock-badge {
+        background: #ecfdf5;
+        color: #065f46;
+        border: 1px solid #a7f3d0;
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.78rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: ui-monospace, monospace;
+    }
+    .pulse-dot {
+        width: 7px;
+        height: 7px;
+        background-color: #10b981;
+        border-radius: 50%;
+        display: inline-block;
+        box-shadow: 0 0 0 rgba(16, 185, 129, 0.4);
+        animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    /* Tab navigation buttons */
+    .tab-pills-custom .nav-link {
+        border-radius: 8px;
+        padding: 6px 16px;
+        font-size: 0.84rem;
+        font-weight: 600;
+        color: #64748b;
+        border: none;
+        background: transparent;
+        transition: all 0.2s ease;
+    }
+    .tab-pills-custom .nav-link.active {
+        background-color: #2563eb;
+        color: #ffffff;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+    }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid py-4">
+<div class="container-fluid py-3 px-3 px-md-4">
 
-    <!-- Top Bar: Logic Sync -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <!-- TOP BAR: Title, Live Date Filter & Company Switcher -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
         <div>
-            <h1 class="h3 mb-0 fw-bold">HR Command Center</h1>
-            <p class="text-muted small mb-0">Managing {{ total_employees }} talent(s) across selected units.</p>
+            <div class="d-flex align-items-center gap-2">
+                <h1 class="h4 mb-0 fw-bold text-dark">HR Command Center</h1>
+                {% if is_today %}
+                    <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2" style="font-size:0.7rem;">Live Today</span>
+                {% else %}
+                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2" style="font-size:0.7rem;">Historical</span>
+                {% endif %}
+            </div>
+            <p class="text-muted small mb-0 mt-1">
+                Showing analytics for <span class="fw-semibold text-primary">{{ display_date }}</span>
+                {% if active_company_id and active_company_id != "all" %}
+                    • Filtered by unit
+                {% else %}
+                    • All global units
+                {% endif %}
+            </p>
         </div>
-        <form action="{% url 'hrms:set_active_company' %}" method="POST" class="bg-white p-2 rounded-3 shadow-sm border">
-            {% csrf_token %}
-            <div class="input-group input-group-sm">
-                <span class="input-group-text bg-transparent border-0"><i class="bi bi-building"></i></span>
-                <select name="company_id" class="form-select border-0 fw-bold" onchange="this.form.submit()" style="min-width: 200px;">
-                    <option value="all">All Global Units</option>
+
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <!-- Calendar Date Picker -->
+            <form method="GET" class="d-flex align-items-center bg-white p-1 rounded-3 border shadow-sm" id="dateFilterForm">
+                <span class="px-2 text-muted"><i class="bi bi-calendar-event"></i></span>
+                <input type="date" name="date" value="{{ selected_date }}"
+                       class="form-control form-control-sm border-0 fw-semibold text-dark"
+                       style="width: 140px;"
+                       onchange="document.getElementById('dateFilterForm').submit();">
+                {% if not is_today %}
+                    <a href="{% url 'hrms:dashboard' %}" class="btn btn-sm btn-light border-0 text-primary px-2" title="Reset to today">
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                    </a>
+                {% endif %}
+            </form>
+
+            <!-- Company Switcher -->
+            <form action="{% url 'hrms:set_active_company' %}" method="POST" class="d-flex align-items-center bg-white p-1 rounded-3 border shadow-sm">
+                {% csrf_token %}
+                <span class="px-2 text-muted"><i class="bi bi-building"></i></span>
+                <select name="company_id" class="form-select form-select-sm border-0 fw-semibold text-dark" onchange="this.form.submit()" style="min-width: 170px;">
+                    <option value="all" {% if not active_company_id or active_company_id == 'all' %}selected{% endif %}>All Global Units</option>
                     {% for comp in available_companies %}
                         <option value="{{ comp.id }}" {% if active_company_id == comp.id|stringformat:"s" %}selected{% endif %}>{{ comp.name }}</option>
                     {% endfor %}
                 </select>
-            </div>
-        </form>
+            </form>
+        </div>
     </div>
 
-    <!-- Power Cards -->
+    <!-- 5 ATTENDO POWER METRIC CARDS (DEEP LINKED) -->
     <div class="row g-3 mb-4">
-        <div class="col-md-3">
-            <div class="card stat-card shadow-sm bg-white border-start border-primary border-4">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between">
+        <!-- Card 1: Total Employees -->
+        <div class="col-6 col-md-4 col-xl">
+            <a href="{% url 'hrms:employee_list' %}" class="stat-link">
+                <div class="card attendo-card shadow-sm h-100 p-3">
+                    <div class="d-flex align-items-center justify-content-between">
                         <div>
-                            <p class="text-muted small fw-bold mb-1">HEADCOUNT</p>
-                            <h2 class="mb-0 fw-bold">{{ total_employees }}</h2>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Total Employees</span>
+                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_employees }}</h2>
                         </div>
-                        <div class="text-primary h1"><i class="bi bi-people-fill"></i></div>
+                        <div class="icon-box icon-box-primary">
+                            <i class="bi bi-people-fill"></i>
+                        </div>
                     </div>
+                    <div class="mt-2 pt-1 small text-primary fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
+                        <span>View Directory</span> <i class="bi bi-arrow-right-short"></i>
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <!-- Card 2: Currently Working -->
+        <div class="col-6 col-md-4 col-xl">
+            <a href="{% url 'hrms:attendance_records' %}" class="stat-link">
+                <div class="card attendo-card shadow-sm h-100 p-3">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Currently Working</span>
+                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ currently_working }}</h2>
+                        </div>
+                        <div class="icon-box icon-box-success">
+                            <i class="bi bi-person-check-fill"></i>
+                        </div>
+                    </div>
+                    <div class="mt-2 pt-1 small text-success fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
+                        <span>Active on Clock</span> <i class="bi bi-arrow-right-short"></i>
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <!-- Card 3: On Break -->
+        <div class="col-6 col-md-4 col-xl">
+            <div class="card attendo-card shadow-sm h-100 p-3">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">On Break</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ on_break_count }}</h2>
+                    </div>
+                    <div class="icon-box icon-box-warning">
+                        <i class="bi bi-cup-hot-fill"></i>
+                    </div>
+                </div>
+                <div class="mt-2 pt-1 small text-muted fw-medium" style="font-size: 0.75rem;">
+                    <span>Resting</span>
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
-            <div class="card stat-card shadow-sm bg-white border-start border-success border-4">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between">
+
+        <!-- Card 4: Time Off / Leave Requests -->
+        <div class="col-6 col-md-6 col-xl">
+            <a href="{% url 'hrms:leave_balance' %}" class="stat-link">
+                <div class="card attendo-card shadow-sm h-100 p-3">
+                    <div class="d-flex align-items-center justify-content-between">
                         <div>
-                            <p class="text-muted small fw-bold mb-1">ATTENDANCE</p>
-                            <h2 class="mb-0 fw-bold">{{ attendance_percentage }}%</h2>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Time Off</span>
+                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ time_off_count }}</h2>
                         </div>
-                        <div class="text-success h1"><i class="bi bi-calendar-check"></i></div>
+                        <div class="icon-box icon-box-purple">
+                            <i class="bi bi-umbrella-fill"></i>
+                        </div>
+                    </div>
+                    <div class="mt-2 pt-1 small text-purple fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem; color: #8b5cf6;">
+                        <span>{{ pending_leaves }} Pending Approvals</span> <i class="bi bi-arrow-right-short"></i>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
-        <div class="col-md-3">
-            <div class="card stat-card shadow-sm bg-white border-start border-warning border-4">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between">
+
+        <!-- Card 5: Pending Biometrics -->
+        <div class="col-12 col-md-6 col-xl">
+            <a href="{% url 'hrms:attendance_records' %}" class="stat-link">
+                <div class="card attendo-card shadow-sm h-100 p-3">
+                    <div class="d-flex align-items-center justify-content-between">
                         <div>
-                            <p class="text-muted small fw-bold mb-1">LEAVE REQUESTS</p>
-                            <h2 class="mb-0 fw-bold">{{ pending_leaves }}</h2>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Pending Biometrics</span>
+                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ pending_biometrics }}</h2>
                         </div>
-                        <div class="text-warning h1"><i class="bi bi-door-open"></i></div>
+                        <div class="icon-box icon-box-rose">
+                            <i class="bi bi-fingerprint"></i>
+                        </div>
+                    </div>
+                    <div class="mt-2 pt-1 small text-danger fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
+                        <span>Hardware Sync</span> <i class="bi bi-arrow-right-short"></i>
                     </div>
                 </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card stat-card shadow-sm bg-white border-start border-info border-4">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between">
-                        <div>
-                            <p class="text-muted small fw-bold mb-1">OPEN ROLES</p>
-                            <h2 class="mb-0 fw-bold">{{ open_jobs }}</h2>
-                        </div>
-                        <div class="text-info h1"><i class="bi bi-briefcase"></i></div>
-                    </div>
-                </div>
-            </div>
+            </a>
         </div>
     </div>
 
+    <!-- MAIN TWO-COLUMN LAYOUT -->
     <div class="row g-4">
-        <!-- Main Panel: Attendance Detail -->
-        <div class="col-lg-8">
-            <div class="card shadow-sm border-0 rounded-4 overflow-hidden">
-                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0 fw-bold">Live Attendance Feed</h5>
-                    <div class="dropdown">
-                        <button class="btn btn-light btn-sm rounded-pill" data-bs-toggle="dropdown"><i class="bi bi-three-dots"></i></button>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{% url 'hrms:attendance_records' %}">View Full Logs</a></li>
-                        </ul>
+
+        <!-- LEFT COLUMN: Quick Attendance Summary & Tabbed Feed -->
+        <div class="col-lg-8 col-xl-9">
+            <div class="card attendo-card shadow-sm border-0 overflow-hidden">
+
+                <!-- Header Bar with Title, Summary Pills & Search -->
+                <div class="card-header bg-white py-3 px-3 px-md-4 border-bottom">
+                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                        <div>
+                            <h5 class="mb-0 fw-bold text-dark">Quick Attendance Summary</h5>
+                            <span class="text-muted small">Live punch monitoring for {{ display_date }}</span>
+                        </div>
+
+                        <!-- Search Bar -->
+                        <div class="position-relative" style="min-width: 250px;">
+                            <i class="bi bi-search position-absolute text-muted" style="top: 8px; left: 12px;"></i>
+                            <input type="text" id="employeeSearchInput"
+                                   class="form-control form-control-sm rounded-pill ps-4 pe-3 bg-light border-0"
+                                   placeholder="Search employee, ID or designation...">
+                        </div>
+                    </div>
+
+                    <!-- Mini Status Breakdown Pills -->
+                    <div class="d-flex flex-wrap gap-2 mt-3 pt-2 border-top">
+                        <div class="summary-pill" onclick="switchTab('tab-btn-present')">
+                            <span class="dot-indicator dot-blue"></span>
+                            <span class="fw-bold text-dark me-1">{{ present_today }}</span> Checked In
+                        </div>
+                        <div class="summary-pill" onclick="switchTab('tab-btn-absent')">
+                            <span class="dot-indicator dot-red"></span>
+                            <span class="fw-bold text-dark me-1">{{ absent_count }}</span> Not in Yet
+                        </div>
+                        <div class="summary-pill" onclick="switchTab('tab-btn-onleave')">
+                            <span class="dot-indicator dot-purple"></span>
+                            <span class="fw-bold text-dark me-1">{{ time_off_count }}</span> Time Off
+                        </div>
                     </div>
                 </div>
-                <div class="card-body p-0">
-                    <ul class="nav nav-pills nav-justified bg-light m-3 p-1 rounded-pill" id="attendanceTab" role="tablist">
-                        <li class="nav-item">
-                            <button class="nav-link active rounded-pill py-2" data-bs-toggle="tab" data-bs-target="#present" type="button">
-                                Present ({{ present_today }})
+
+                <!-- Custom Tab Navigation -->
+                <div class="bg-light px-3 px-md-4 py-2 border-bottom">
+                    <ul class="nav tab-pills-custom gap-2" id="attendanceTab" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="tab-btn-all" data-bs-toggle="tab" data-bs-target="#tab-content-all" type="button" role="tab">
+                                All <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ total_employees }}</span>
                             </button>
                         </li>
-                        <li class="nav-item">
-                            <button class="nav-link text-danger rounded-pill py-2" data-bs-toggle="tab" data-bs-target="#absent" type="button">
-                                Absent ({{ absent_employees.count }})
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-btn-present" data-bs-toggle="tab" data-bs-target="#tab-content-present" type="button" role="tab">
+                                Present <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ present_today }}</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-btn-absent" data-bs-toggle="tab" data-bs-target="#tab-content-absent" type="button" role="tab">
+                                Absent <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ absent_count }}</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-btn-onleave" data-bs-toggle="tab" data-bs-target="#tab-content-onleave" type="button" role="tab">
+                                On Leave <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ time_off_count }}</span>
                             </button>
                         </li>
                     </ul>
+                </div>
 
-                    <div class="tab-content p-3">
-                        <div class="tab-pane fade show active" id="present">
+                <!-- Tab Contents: High Density Attendance Tables -->
+                <div class="card-body p-0">
+                    <div class="tab-content" id="attendanceTabContent">
+
+                        <!-- TAB 1: ALL EMPLOYEES -->
+                        <div class="tab-pane fade show active" id="tab-content-all" role="tabpanel">
                             <div class="table-responsive">
-                                <table class="table table-hover align-middle">
-                                    <thead class="small text-muted text-uppercase">
+                                <table class="table attendance-table table-hover mb-0 align-middle">
+                                    <thead>
                                         <tr>
-                                            <th>Employee</th>
-                                            <th>Check-In</th>
-                                            <th>Check-Out</th>
-                                            <th>Status</th>
+                                            <th class="ps-4">Employee</th>
+                                            <th>Roles</th>
+                                            <th>First Punch</th>
+                                            <th>Last Punch</th>
+                                            <th>Total Working Hours</th>
+                                            <th class="pe-4 text-end">Status</th>
                                         </tr>
                                     </thead>
-                                    <tbody>
-                                        {% for data in present_employees_detailed %}
-                                        <tr>
-                                            <td>
-                                                <div class="d-flex align-items-center">
-                                                    <div class="avatar-sm me-2">{{ data.emp.first_name|first }}</div>
+                                    <tbody id="allTableBody">
+                                        {% for item in all_employees_detailed %}
+                                        <tr class="table-row-item"
+                                            data-name="{{ item.emp.full_name|lower }}"
+                                            data-code="{{ item.emp.employee_code|lower }}"
+                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
+                                            data-category="{{ item.status_category }}">
+                                            <td class="ps-4">
+                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
+                                                    <div class="emp-avatar">{{ item.emp.first_name|first|upper }}</div>
                                                     <div>
-                                                        <div class="fw-bold small">{{ data.emp.full_name }}</div>
-                                                        <div class="text-muted" style="font-size: 0.7rem;">{{ data.emp.designation }}</div>
+                                                        <div class="fw-bold text-dark small hover-underline">{{ item.emp.full_name }}</div>
+                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
                                                     </div>
-                                                </div>
+                                                </a>
                                             </td>
-                                            <td><span class="punch-pill bg-success-subtle text-success border border-success">{{ data.check_in|date:"h:i A" }}</span></td>
-                                            <td><span class="punch-pill bg-light text-muted border">{{ data.check_out|date:"h:i A"|default:"--" }}</span></td>
                                             <td>
-                                                {% if data.is_late %}
-                                                <span class="badge bg-danger-subtle text-danger rounded-pill px-2" style="font-size: 0.6rem;">LATE</span>
+                                                <div class="fw-medium text-dark small">{{ item.emp.designation.title|default:"--" }}</div>
+                                                <div class="text-muted" style="font-size: 0.7rem;">{{ item.emp.department.name|default:item.emp.company.name }}</div>
+                                            </td>
+                                            <td>
+                                                {% if item.check_in %}
+                                                    <span class="punch-badge bg-success-subtle text-success border border-success-subtle fw-semibold">
+                                                        {{ item.check_in|date:"h:i A" }}
+                                                    </span>
                                                 {% else %}
-                                                <span class="badge bg-success-subtle text-success rounded-pill px-2" style="font-size: 0.6rem;">ON-TIME</span>
+                                                    <span class="text-muted small">--</span>
                                                 {% endif %}
                                             </td>
+                                            <td>
+                                                {% if item.check_out %}
+                                                    <span class="punch-badge bg-light text-dark border">
+                                                        {{ item.check_out|date:"h:i A" }}
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted small">--</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if item.is_running %}
+                                                    <span class="live-clock-badge" data-checkin="{{ item.check_in_iso }}">
+                                                        <span class="pulse-dot"></span>
+                                                        <span class="live-timer-text">Calculating...</span>
+                                                    </span>
+                                                {% elif item.total_hours_display and item.total_hours_display != '--' %}
+                                                    <span class="fw-semibold text-dark small">{{ item.total_hours_display }}</span>
+                                                {% else %}
+                                                    <span class="text-muted small">--</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="pe-4 text-end">
+                                                {% if item.status_category == 'present' %}
+                                                    {% if item.is_grace %}
+                                                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                            <i class="bi bi-exclamation-triangle-fill me-1"></i>Grace Period
+                                                        </span>
+                                                    {% elif item.is_late %}
+                                                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                            <i class="bi bi-clock-history me-1"></i>Late ({{ item.late_minutes }}m)
+                                                        </span>
+                                                    {% else %}
+                                                        <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                            <i class="bi bi-check-circle-fill me-1"></i>On-Time
+                                                        </span>
+                                                    {% endif %}
+                                                {% elif item.status_category == 'on_leave' %}
+                                                    <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                        <i class="bi bi-airplane me-1"></i>On Leave
+                                                    </span>
+                                                {% else %}
+                                                    <span class="badge bg-secondary-subtle text-secondary border rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                        Not In Yet
+                                                    </span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="6" class="text-center text-muted py-4">No employee records found.</td>
                                         </tr>
                                         {% endfor %}
                                     </tbody>
                                 </table>
                             </div>
                         </div>
-                        <div class="tab-pane fade" id="absent">
-                            <div class="row row-cols-1 row-cols-md-2 g-2">
-                                {% for emp in absent_employees %}
-                                <div class="col">
-                                    <div class="p-2 border rounded-3 d-flex align-items-center justify-content-between">
-                                        <span class="small fw-medium">{{ emp.full_name }}</span>
-                                        <a href="#" class="btn btn-outline-primary btn-sm border-0"><i class="bi bi-chat-dots"></i></a>
-                                    </div>
-                                </div>
-                                {% endfor %}
+
+                        <!-- TAB 2: PRESENT EMPLOYEES -->
+                        <div class="tab-pane fade" id="tab-content-present" role="tabpanel">
+                            <div class="table-responsive">
+                                <table class="table attendance-table table-hover mb-0 align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th class="ps-4">Employee</th>
+                                            <th>Roles</th>
+                                            <th>First Punch</th>
+                                            <th>Last Punch</th>
+                                            <th>Total Working Hours</th>
+                                            <th class="pe-4 text-end">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in present_employees_detailed %}
+                                        <tr class="table-row-item"
+                                            data-name="{{ item.emp.full_name|lower }}"
+                                            data-code="{{ item.emp.employee_code|lower }}"
+                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
+                                            data-category="present">
+                                            <td class="ps-4">
+                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
+                                                    <div class="emp-avatar">{{ item.emp.first_name|first|upper }}</div>
+                                                    <div>
+                                                        <div class="fw-bold text-dark small hover-underline">{{ item.emp.full_name }}</div>
+                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
+                                                    </div>
+                                                </a>
+                                            </td>
+                                            <td>
+                                                <div class="fw-medium text-dark small">{{ item.emp.designation.title|default:"--" }}</div>
+                                                <div class="text-muted" style="font-size: 0.7rem;">{{ item.emp.department.name|default:item.emp.company.name }}</div>
+                                            </td>
+                                            <td>
+                                                <span class="punch-badge bg-success-subtle text-success border border-success-subtle fw-semibold">
+                                                    {{ item.check_in|date:"h:i A" }}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                {% if item.check_out %}
+                                                    <span class="punch-badge bg-light text-dark border">
+                                                        {{ item.check_out|date:"h:i A" }}
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted small">--</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if item.is_running %}
+                                                    <span class="live-clock-badge" data-checkin="{{ item.check_in_iso }}">
+                                                        <span class="pulse-dot"></span>
+                                                        <span class="live-timer-text">Calculating...</span>
+                                                    </span>
+                                                {% elif item.total_hours_display %}
+                                                    <span class="fw-semibold text-dark small">{{ item.total_hours_display }}</span>
+                                                {% else %}
+                                                    <span class="text-muted small">--</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="pe-4 text-end">
+                                                {% if item.is_grace %}
+                                                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                        <i class="bi bi-exclamation-triangle-fill me-1"></i>Grace Period
+                                                    </span>
+                                                {% elif item.is_late %}
+                                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                        <i class="bi bi-clock-history me-1"></i>Late ({{ item.late_minutes }}m)
+                                                    </span>
+                                                {% else %}
+                                                    <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                        <i class="bi bi-check-circle-fill me-1"></i>On-Time
+                                                    </span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="6" class="text-center text-muted py-4">No checked-in employees for this date.</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
+
+                        <!-- TAB 3: ABSENT EMPLOYEES -->
+                        <div class="tab-pane fade" id="tab-content-absent" role="tabpanel">
+                            <div class="table-responsive">
+                                <table class="table attendance-table table-hover mb-0 align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th class="ps-4">Employee</th>
+                                            <th>Roles</th>
+                                            <th>Designation</th>
+                                            <th class="pe-4 text-end">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in absent_employees %}
+                                        <tr class="table-row-item"
+                                            data-name="{{ item.emp.full_name|lower }}"
+                                            data-code="{{ item.emp.employee_code|lower }}"
+                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
+                                            data-category="absent">
+                                            <td class="ps-4">
+                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
+                                                    <div class="emp-avatar bg-danger-subtle text-danger">{{ item.emp.first_name|first|upper }}</div>
+                                                    <div>
+                                                        <div class="fw-bold text-dark small">{{ item.emp.full_name }}</div>
+                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
+                                                    </div>
+                                                </a>
+                                            </td>
+                                            <td>
+                                                <div class="fw-medium text-dark small">{{ item.emp.department.name|default:item.emp.company.name }}</div>
+                                            </td>
+                                            <td>
+                                                <div class="text-muted small">{{ item.emp.designation.title|default:"--" }}</div>
+                                            </td>
+                                            <td class="pe-4 text-end">
+                                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                    Not In Yet
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted py-4">No absent employees today!</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- TAB 4: ON LEAVE -->
+                        <div class="tab-pane fade" id="tab-content-onleave" role="tabpanel">
+                            <div class="table-responsive">
+                                <table class="table attendance-table table-hover mb-0 align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th class="ps-4">Employee</th>
+                                            <th>Department</th>
+                                            <th>Designation</th>
+                                            <th class="pe-4 text-end">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in on_leave_employees %}
+                                        <tr class="table-row-item"
+                                            data-name="{{ item.emp.full_name|lower }}"
+                                            data-code="{{ item.emp.employee_code|lower }}"
+                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
+                                            data-category="on_leave">
+                                            <td class="ps-4">
+                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
+                                                    <div class="emp-avatar bg-info-subtle text-info">{{ item.emp.first_name|first|upper }}</div>
+                                                    <div>
+                                                        <div class="fw-bold text-dark small">{{ item.emp.full_name }}</div>
+                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
+                                                    </div>
+                                                </a>
+                                            </td>
+                                            <td>
+                                                <div class="fw-medium text-dark small">{{ item.emp.department.name|default:item.emp.company.name }}</div>
+                                            </td>
+                                            <td>
+                                                <div class="text-muted small">{{ item.emp.designation.title|default:"--" }}</div>
+                                            </td>
+                                            <td class="pe-4 text-end">
+                                                <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
+                                                    <i class="bi bi-umbrella me-1"></i>Approved Leave
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted py-4">No employees on leave for this date.</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
+
             </div>
         </div>
 
-        <!-- Sidebar Panel -->
-        <div class="col-lg-4">
-            <!-- Quick Actions -->
-            <div class="card shadow-sm border-0 rounded-4 mb-4 bg-dark text-white">
-                <div class="card-body">
-                    <h6 class="fw-bold mb-3">Quick Actions</h6>
-                    <div class="d-grid gap-2">
-                        <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary btn-sm rounded-3 text-start"><i class="bi bi-person-plus me-2"></i> Add New Employee</a>
-                        <a href="{% url 'hrms:leave_apply' %}" class="btn btn-outline-light btn-sm rounded-3 text-start"><i class="bi bi-pencil-square me-2"></i> Post Notice</a>
-                        <a href="{% url 'hrms:payroll_process' %}" class="btn btn-outline-light btn-sm rounded-3 text-start"><i class="bi bi-currency-dollar me-2"></i> Run Payroll Run</a>
-                    </div>
+        <!-- RIGHT COLUMN: Quick Actions, Celebrations & Active Jobs -->
+        <div class="col-lg-4 col-xl-3">
+
+            <!-- Quick Action Buttons -->
+            <div class="card attendo-card shadow-sm bg-dark text-white p-3 mb-4 border-0" style="background: linear-gradient(145deg, #0f172a, #1e293b) !important;">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <h6 class="fw-bold mb-0 text-white"><i class="bi bi-lightning-charge-fill text-warning me-2"></i>Quick Actions</h6>
+                    <span class="badge bg-white bg-opacity-10 text-white rounded-pill px-2" style="font-size: 0.65rem;">Fast Ops</span>
+                </div>
+                <div class="d-grid gap-2">
+                    <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary btn-sm rounded-3 text-start py-2 fw-medium shadow-sm">
+                        <i class="bi bi-person-plus-fill me-2"></i> Add New Employee
+                    </a>
+                    <a href="{% url 'hrms:notice_list' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
+                        <i class="bi bi-megaphone-fill me-2"></i> Post Notice / Memo
+                    </a>
+                    <a href="{% url 'hrms:payroll_process' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
+                        <i class="bi bi-cash-stack me-2"></i> Run Payroll Run
+                    </a>
+                    <a href="{% url 'hrms:attendance_records' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
+                        <i class="bi bi-file-earmark-spreadsheet me-2"></i> Full Attendance Logs
+                    </a>
                 </div>
             </div>
 
-            <!-- Celebrations -->
-            <div class="card shadow-sm border-0 rounded-4 overflow-hidden mb-4">
-                <div class="card-header bg-white fw-bold"><i class="bi bi-balloon-fill text-danger me-2"></i>Celebrations</div>
+            <!-- Celebrations (Birthdays This Month) -->
+            <div class="card attendo-card shadow-sm mb-4 border-0">
+                <div class="card-header bg-white py-3 px-3 border-bottom d-flex align-items-center justify-content-between">
+                    <h6 class="fw-bold mb-0 text-dark">
+                        <i class="bi bi-cake2-fill text-danger me-2"></i>Celebrations
+                    </h6>
+                    <span class="badge bg-danger-subtle text-danger rounded-pill px-2" style="font-size: 0.7rem;">This Month</span>
+                </div>
                 <div class="card-body p-0">
                     {% for emp in upcoming_birthdays %}
-                    <div class="d-flex align-items-center p-3 border-bottom">
-                        <div class="avatar-sm bg-danger-subtle text-danger me-3"><i class="bi bi-cake"></i></div>
-                        <div>
-                            <div class="fw-bold small">{{ emp.full_name }}</div>
-                            <div class="text-muted" style="font-size: 0.75rem;">Birthday: {{ emp.date_of_birth|date:"d M" }}</div>
+                    <div class="d-flex align-items-center justify-content-between p-3 border-bottom">
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="emp-avatar bg-danger-subtle text-danger" style="width:32px; height:32px; font-size:0.75rem;">
+                                <i class="bi bi-gift-fill"></i>
+                            </div>
+                            <div>
+                                <a href="{% url 'hrms:employee_detail' emp.pk %}" class="fw-bold small text-dark text-decoration-none d-block">
+                                    {{ emp.full_name }}
+                                </a>
+                                <span class="text-muted" style="font-size: 0.7rem;">{{ emp.designation.title|default:"Team Member" }}</span>
+                            </div>
                         </div>
+                        <span class="badge bg-light text-dark border rounded-pill px-2" style="font-size: 0.72rem;">
+                            {{ emp.date_of_birth|date:"d M" }}
+                        </span>
                     </div>
                     {% empty %}
-                    <p class="text-center text-muted p-3 mb-0 small">No birthdays this month.</p>
+                    <div class="text-center text-muted p-4 small">
+                        <i class="bi bi-balloon h4 d-block mb-1 text-muted opacity-50"></i>
+                        No birthdays this month.
+                    </div>
                     {% endfor %}
                 </div>
             </div>
 
-            <!-- Hiring Pipeline -->
-            <div class="card shadow-sm border-0 rounded-4">
-                <div class="card-header bg-white fw-bold">Active Jobs</div>
+            <!-- Active Jobs (Hiring Pipeline) -->
+            <div class="card attendo-card shadow-sm border-0">
+                <div class="card-header bg-white py-3 px-3 border-bottom d-flex align-items-center justify-content-between">
+                    <h6 class="fw-bold mb-0 text-dark">
+                        <i class="bi bi-briefcase-fill text-primary me-2"></i>Active Jobs
+                    </h6>
+                    <a href="{% url 'hrms:jobposting_list' %}" class="small text-primary text-decoration-none fw-semibold" style="font-size: 0.75rem;">
+                        View All
+                    </a>
+                </div>
                 <div class="list-group list-group-flush">
                     {% for job in open_jobs_list %}
-                    <div class="list-group-item border-0 px-3">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <span class="small fw-bold">{{ job.title }}</span>
-                            <span class="badge bg-light text-dark border">{{ job.applications.count }} Apps</span>
+                    <a href="{% url 'hrms:jobposting_list' %}" class="list-group-item list-group-item-action border-0 px-3 py-2 d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="small fw-bold text-dark">{{ job.title }}</div>
+                            <div class="text-muted" style="font-size: 0.7rem;">{{ job.company.name }}</div>
                         </div>
-                    </div>
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-2" style="font-size: 0.7rem;">
+                            {{ job.app_count }} Apps
+                        </span>
+                    </a>
+                    {% empty %}
+                    <div class="text-center text-muted p-3 small">No active job postings.</div>
                     {% endfor %}
                 </div>
             </div>
+
         </div>
+
     </div>
+
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // 1. Tab Switcher Helper (Used by Mini Summary Pills)
+    function switchTab(tabButtonId) {
+        const btn = document.getElementById(tabButtonId);
+        if (btn) {
+            const trigger = new bootstrap.Tab(btn);
+            trigger.show();
+        }
+    }
+
+    // 2. Real-Time Client-Side Table Search (Filters across name, ID code & designation)
+    const searchInput = document.getElementById('employeeSearchInput');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            const query = this.value.trim().toLowerCase();
+            const rows = document.querySelectorAll('.table-row-item');
+
+            rows.forEach(row => {
+                const name = row.getAttribute('data-name') || '';
+                const code = row.getAttribute('data-code') || '';
+                const desig = row.getAttribute('data-desig') || '';
+
+                if (name.includes(query) || code.includes(query) || desig.includes(query)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+    }
+
+    // 3. Live Running Clock (Calculates elapsed hours & minutes from ISO check-in time)
+    function updateLiveWorkingClocks() {
+        const liveBadges = document.querySelectorAll('.live-clock-badge');
+        const now = new Date();
+
+        liveBadges.forEach(badge => {
+            const checkinIso = badge.getAttribute('data-checkin');
+            if (!checkinIso) return;
+
+            const checkinTime = new Date(checkinIso);
+            const diffMs = now - checkinTime;
+
+            if (diffMs > 0) {
+                const totalSeconds = Math.floor(diffMs / 1000);
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+                const hrsStr = hours.toString().padStart(2, '0');
+                const minsStr = minutes.toString().padStart(2, '0');
+
+                const textSpan = badge.querySelector('.live-timer-text');
+                if (textSpan) {
+                    textSpan.textContent = `${hrsStr}h ${minsStr}m`;
+                }
+            }
+        });
+    }
+
+    // Initial update and periodic interval update every 30 seconds
+    updateLiveWorkingClocks();
+    setInterval(updateLiveWorkingClocks, 30000);
+</script>
 {% endblock %}

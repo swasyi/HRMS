@@ -72,27 +72,26 @@ class EmployeeForm(BootstrapModelForm):
         model = m.Employee
         fields = [
             'company', 'department', 'designation', 'employee_code', 'first_name', 'last_name',
-            'email', 'phone', 'gender', 'date_of_birth','father_name', 'mother_name', 'address',
-            'emergency_contact', 'date_of_joining', 'date_of_confirmation','employment_type', 'status',
+            'email', 'phone', 'gender', 'date_of_birth', 'father_name', 'mother_name', 'address',
+            'emergency_contact', 'date_of_joining', 'date_of_confirmation', 'employment_type', 'status',
+            'is_manager', 'reporting_manager',
         ]
         widgets = {
             'date_of_birth': forms.DateInput(attrs={'type': 'date'}),
             'date_of_joining': forms.DateInput(attrs={'type': 'date'}),
             'date_of_confirmation': forms.DateInput(attrs={'type': 'date'}),
-            # Use Textarea for address and emergency contact with custom row heights
             'address': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Enter full address...'}),
             'emergency_contact': forms.Textarea(attrs={'rows': 2, 'placeholder': 'Name, Relationship, Phone number'}),
-
         }
 
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-    #     # Make it read-only so users know it's handled by the system
-    #     if 'employee_code' in self.fields:
-    #         self.fields['employee_code'].widget.attrs['readonly'] = True
-    #         self.fields['employee_code'].required = False
-    #         self.fields['employee_code'].initial = "Auto-generated"
-    #
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Filter reporting_manager to only show employees where is_manager=True
+        mgr_qs = m.Employee.objects.filter(is_manager=True)
+        if self.instance and self.instance.pk:
+            mgr_qs = mgr_qs.exclude(pk=self.instance.pk)
+        self.fields['reporting_manager'].queryset = mgr_qs
+        self.fields['reporting_manager'].label_from_instance = lambda obj: f"{obj.full_name} ({obj.employee_code})"
 
 class EmployeeBankDetailForm(BootstrapModelForm):
     class Meta:

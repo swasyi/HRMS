@@ -40,29 +40,39 @@
     <!-- Header Section -->
     <div class="d-flex justify-content-between align-items-center mb-4 page-header">
         <div>
-            <h2 class="fw-bold mb-0">Employee Directory</h2>
-            <p class="text-muted small mb-0">Browse and manage all registered staff profiles.</p>
+            <div class="d-flex align-items-center gap-2">
+                <h2 class="fw-bold mb-0">Employee Directory</h2>
+                {% if active_company %}
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-1" style="font-size: 0.75rem;">
+                        <i class="bi bi-building me-1"></i>{{ active_company.name }}
+                    </span>
+                {% else %}
+                    <span class="badge bg-light text-muted border rounded-pill px-3 py-1" style="font-size: 0.75rem;">
+                        <i class="bi bi-globe2 me-1"></i>All Global Units
+                    </span>
+                {% endif %}
+            </div>
+            <p class="text-muted small mb-0 mt-1">Browse and manage registered staff profiles for the active company.</p>
         </div>
         <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary rounded-pill px-4 shadow-sm add-btn">
             <i class="bi bi-person-plus-fill me-2"></i> Add Employee
         </a>
     </div>
 
-    <!-- Quick Stats (Responsive Grid) -->
-<!-- Quick Stats (Solid UI 🔥) -->
-<div class="row g-3 mb-4">
-    <!-- Total Staff -->
-    <div class="col-6 col-md-3">
-        <div class="card stat-card shadow-sm p-3 border-0" style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%); color: white;">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <div class="small opacity-75 fw-bold text-uppercase">Total Staff</div>
-                    <div class="h2 mb-0 fw-bold">{{ employees.paginator.count|default:employees.count }}</div>
+    <!-- Quick Stats (Solid UI 🔥) -->
+    <div class="row g-3 mb-4">
+        <!-- Total Staff -->
+        <div class="col-6 col-md-3">
+            <div class="card stat-card shadow-sm p-3 border-0" style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%); color: white;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="small opacity-75 fw-bold text-uppercase">Total Staff</div>
+                        <div class="h2 mb-0 fw-bold">{{ total_count }}</div>
+                    </div>
+                    <div class="p-2 rounded-3" style="background: rgba(255,255,255,0.2);"><i class="bi bi-people h4 mb-0"></i></div>
                 </div>
-                <div class="p-2 rounded-3" style="background: rgba(255,255,255,0.2);"><i class="bi bi-people h4 mb-0"></i></div>
             </div>
         </div>
-    </div>
 
     <!-- Active Staff -->
     <div class="col-6 col-md-3">
