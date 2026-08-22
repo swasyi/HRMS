@@ -2,7 +2,7 @@
 {% block content %}
 <div class="card" style="max-width:800px; margin: auto;">
   <div class="card-body">
-    <form method="post" id="assetForm">
+    <form method="post" id="assetForm" enctype="multipart/form-data">
       {% csrf_token %}
 
       <!-- Top Row: Essential Info (Always Visible) -->
@@ -28,9 +28,9 @@
           <div class="row g-3">
             {% for field in form %}
                 {% if field.name != 'company' and field.name != 'category' %}
-                <div class="{% if field.name == 'remarks' or field.name == 'additional_details' %}col-md-12{% else %}col-md-6{% endif %} asset-field-wrapper"
+                <div class="{% if field.name == 'remarks' or field.name == 'additional_details' or field.name == 'invoice_document' %}col-md-12{% else %}col-md-6{% endif %} asset-field-wrapper"
                      id="wrapper_{{ field.name }}">
-                    <label class="form-label fw-bold">{{ field.label }}</label>
+                    <label class="form-label fw-bold" id="label_{{ field.name }}">{{ field.label }}</label>
                     {{ field }}
                     {% if field.help_text %}<div class="form-text small">{{ field.help_text }}</div>{% endif %}
                 </div>
@@ -81,7 +81,10 @@
         const fieldWrappers = document.querySelectorAll('.asset-field-wrapper');
         let configs = {{ category_configs_json|safe }};
 
-        const baseFields = ['name', 'employee', 'status', 'purchase_date', 'remarks', 'assigned_on'];
+        const baseFields = [
+            'name', 'employee', 'status', 'purchase_date', 'remarks', 'assigned_on',
+            'warranty_expiry', 'vendor_name', 'vendor_contact', 'invoice_document', 'additional_details'
+        ];
 
         function toggleFields() {
             const selectedId = categorySelect.value;

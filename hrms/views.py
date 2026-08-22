@@ -564,32 +564,46 @@ class EmployeeDetailView(EmployeeSelfOrHRMixin, SidebarContextMixin, DetailView)
     active_group, active_item = 'employee', 'employee_list'
 
     def get_queryset(self):
-        # Prefetching everything in one go for speed
         return m.Employee.objects.select_related(
-            'company', 'department', 'designation', 'bank_detail'
+            'company', 'department', 'designation', 'bank_detail', 'holiday_calendar'
         ).prefetch_related(
             'documents', 'notices', 'assigned_leaves', 'live_balances', 'salaries'
         )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-
-        # 1. Get current year
+        emp = self.object
         current_year = date.today().year
 
-        # 2. Fetch actual balances from the LeaveBalance model (the source for your Ledger)
+        # 1. Leave Balances & Bank
+        ctx['leave_bank'] = m.EmployeeLeaveBalance.objects.filter(e_name=emp).first()
+        ctx['leave_live'] = m.EmployeeLeaveBalanceLive.objects.filter(e_name=emp).first()
+        ctx['recent_leaves'] = emp.leave_applications.select_related('leave_type').order_by('-applied_on')[:10]
+
         balances = m.LeaveBalance.objects.filter(
-            employee=self.object,
-            year=current_year
+            employee=emp, year=current_year
         ).select_related('leave_type')
+        ctx['leave_map'] = {b.leave_type.code.upper(): b.available for b in balances}
 
-        # 3. Create a mapping for the template (e.g., {'CL': 7.5, 'SL': 0.0, ...})
-        # This makes it easy to fetch values in the HTML
-        leave_dict = {b.leave_type.code.upper(): b.available for b in balances}
-        ctx['leave_map'] = leave_dict
+        # 2. Assets & Custody
+        ctx['assigned_assets'] = m.Asset.objects.filter(employee=emp).select_related('category')
+        ctx['asset_history'] = m.AssetAssignmentHistory.objects.filter(employee=emp).select_related('asset').order_by('-assigned_date')
 
-        # Get latest active salary
-        ctx['current_salary'] = self.object.salaries.filter(is_active=True).first()
+        # 3. Attendance & Penalties Summary
+        today = timezone.localdate()
+        ctx['recent_attendance'] = emp.attendance_records.order_by('-attendance_date')[:15]
+        ctx['recent_penalties'] = emp.penalties.order_by('-penalty_date')[:10]
+        ctx['grace_usage'] = m.GraceUsageTracker.objects.filter(employee=emp, month=today.month, year=today.year).first()
+
+        # 4. Performance Reviews
+        ctx['performance_reviews'] = emp.performance_reviews.select_related('reviewer').order_by('-review_date')
+
+        # 5. Salary & Documents
+        ctx['current_salary'] = emp.salaries.filter(is_active=True).first()
+        ctx['documents'] = emp.documents.all()
+
+        # 6. Role check
+        ctx['is_hr'] = is_hr_or_above(self.request.user)
 
         return ctx
 
@@ -3901,6 +3915,17 @@ class PaySlipPDFView(LoginRequiredMixin, View):
             if employee is None or payslip.employee_id != employee.id:
                 raise PermissionDenied("You can only view your own payslips.")
 
+        # Module E: Silent download audit logging
+        try:
+            ip_addr = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
+            m.PayslipDownloadLog.objects.create(
+                payslip=payslip,
+                downloaded_by=request.user,
+                ip_address=ip_addr[:45] if ip_addr else ''
+            )
+        except Exception:
+            pass
+
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.units import mm
@@ -4945,57 +4970,43 @@ class AssetDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
 
 
 class AssetReturnView(HRRequiredMixin, View):
-    """Quick action: unassign an asset and mark it Available again."""
-    def post(self, request, pk):
-        asset = get_object_or_404(m.Asset, pk=pk)
-        asset.employee = None
-        asset.status = m.Asset.Status.AVAILABLE
-        asset.assigned_on = None
-        asset.save()
-        messages.success(request, f'{asset.name} returned and marked available.')
-        return redirect('hrms:asset_list')
-
-# -------
-# hrms/views.py
-
-# hrms/views.py
-
-class AssetReturnView(HRRequiredMixin, View):
+    """Unassign an asset, record return condition and remarks in custody history, and set Available."""
     def post(self, request, pk):
         asset = get_object_or_404(m.Asset, pk=pk)
 
         if asset.employee:
-            asset.employee = None  # Removing the user
-            asset.status = m.Asset.Status.AVAILABLE
-            asset.assigned_on = None
-            asset.save()  # This triggers the history closing logic we wrote in models.py
+            good_cond_raw = request.POST.get('returned_in_good_condition', 'yes')
+            is_good = (good_cond_raw == 'yes' or good_cond_raw is True or good_cond_raw == 'True')
+            remarks = (request.POST.get('return_remarks') or '').strip()
 
-            messages.success(request, "Asset returned successfully. History updated.")
+            if not is_good and not remarks:
+                messages.error(request, "Return remarks are mandatory when an asset is returned in damaged/non-good condition.")
+                return redirect('hrms:asset_detail', pk=pk)
 
-        return redirect('hrms:asset_list')
-
-    # Inside class AssetReturnView
-    def post(self, request, pk):
-        asset = get_object_or_404(m.Asset, pk=pk)
-
-        if asset.employee:
+            # Update latest active history
             m.AssetAssignmentHistory.objects.filter(
                 asset=asset,
                 employee=asset.employee,
                 is_still_using=True
             ).update(
-                returned_date=timezone.now().date(),  # Sets the date
-                is_still_using=False  # Closes the record
+                returned_date=timezone.localdate(),
+                is_still_using=False,
+                returned_in_good_condition=is_good,
+                return_remarks=remarks,
             )
-            # ------------------------------
 
+            prev_emp = asset.employee.full_name
             asset.employee = None
             asset.status = m.Asset.Status.AVAILABLE
             asset.assigned_on = None
             asset.save()
 
-            messages.success(request, "Asset returned successfully. History updated.")
-        return redirect('hrms:asset_list')
+            messages.success(request, f"Asset '{asset.name}' successfully returned from {prev_emp} and marked Available.")
+        else:
+            messages.info(request, "Asset is already unassigned.")
+
+        return redirect('hrms:asset_detail', pk=pk)
+
 
 
 
@@ -5077,3 +5088,693 @@ class PerformanceAcknowledgeView(LoginRequiredMixin, View):
             review.save(update_fields=['status', 'updated_at'])
             messages.success(request, 'Review acknowledged.')
         return redirect('hrms:performance_detail', pk=pk)
+
+
+
+# ===========================================================================
+# MODULE D: ATTENDANCE MATRIX & REGULARIZATION WORKFLOW
+# ===========================================================================
+class AttendanceMatrixView(HRRequiredMixin, SidebarContextMixin, TemplateView):
+    """
+    Advanced Attendance Matrix with frozen left columns (ID, Name, Designation)
+    and horizontal date grid. Displays live punches, grace counts, leave tags,
+    and audit flags for manually edited punches.
+    """
+    template_name = 'hrms/attendance/attendance_matrix.html'
+    active_group, active_item = 'attendance', 'attendance_matrix'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        today = timezone.localdate()
+
+        # 1. Month / Year & Date Range Setup
+        month_str = self.request.GET.get('month')
+        year_str = self.request.GET.get('year')
+        try:
+            sel_month = int(month_str) if month_str else today.month
+            sel_year = int(year_str) if year_str else today.year
+        except ValueError:
+            sel_month, sel_year = today.month, today.year
+
+        import calendar
+        num_days = calendar.monthrange(sel_year, sel_month)[1]
+        date_list = [date(sel_year, sel_month, d) for d in range(1, num_days + 1)]
+        start_date, end_date = date_list[0], date_list[-1]
+
+        # 2. Filter Employees
+        employees = m.Employee.objects.filter(status=m.Employee.Status.ACTIVE).select_related(
+            'department', 'designation', 'company', 'holiday_calendar'
+        ).order_by('employee_code')
+
+        dept_id = self.request.GET.get('department')
+        if dept_id:
+            employees = employees.filter(department_id=dept_id)
+
+        emp_id = self.request.GET.get('employee')
+        if emp_id:
+            employees = employees.filter(id=emp_id)
+
+        # 3. Pre-fetch Attendance, Leaves, Holidays, Penalties
+        records = m.AttendanceRecord.objects.filter(
+            attendance_date__range=[start_date, end_date]
+        ).select_related('edited_by')
+
+        leaves = m.LeaveApplication.objects.filter(
+            status=m.LeaveApplication.Status.APPROVED,
+            start_date__lte=end_date,
+            end_date__gte=start_date
+        ).select_related('leave_type')
+
+        holidays = m.Holiday.objects.filter(date__range=[start_date, end_date])
+        holiday_lookup = collections.defaultdict(dict)
+        for h in holidays:
+            holiday_lookup[h.calendar_id][h.date] = h.name
+
+        # Lookups by [employee_id][date]
+        att_lookup = collections.defaultdict(dict)
+        for r in records:
+            att_lookup[r.employee_id][r.attendance_date] = r
+
+        leave_lookup = collections.defaultdict(dict)
+        for l in leaves:
+            curr = max(l.start_date, start_date)
+            while curr <= min(l.end_date, end_date):
+                leave_lookup[l.employee_id][curr] = l.leave_type.code
+                curr += timedelta(days=1)
+
+        # 4. Build Matrix Matrix Map
+        matrix_rows = []
+        stats = {'total_present': 0, 'total_half_day': 0, 'total_on_leave': 0, 'total_absent': 0, 'total_holidays': 0}
+
+        for emp in employees:
+            row_cells = []
+            emp_stats = {'present': 0, 'half_day': 0, 'on_leave': 0, 'absent': 0, 'holiday': 0}
+            grace_tracker = 0
+
+            for day in date_list:
+                policy = emp.company.get_policy_for_date(day) if emp.company else None
+                grace_mins = policy.grace_minutes if policy else 15
+                grace_limit = policy.grace_allowed_count if policy else 3
+                off_start = policy.office_start_time if policy else None
+                off_end = policy.office_end_time if policy else None
+
+                rec = att_lookup[emp.id].get(day)
+                leave_code = leave_lookup[emp.id].get(day)
+                holiday_name = holiday_lookup[emp.holiday_calendar_id].get(day) if emp.holiday_calendar_id else None
+
+                cell = {
+                    'date': day,
+                    'status': 'absent',
+                    'badge': 'A',
+                    'badge_class': 'bg-danger-subtle text-danger border-danger-subtle',
+                    'label': 'Absent',
+                    'record_id': rec.id if rec else None,
+                    'check_in': None,
+                    'check_out': None,
+                    'is_edited': bool(rec and rec.edited_by),
+                    'edit_tooltip': f"Edited by {rec.edited_by.username} on {rec.edited_on.strftime('%d %b %H:%M') if rec and rec.edited_on else ''}: {rec.edit_reason}" if (rec and rec.edited_by) else '',
+                }
+
+                if rec and rec.check_in:
+                    cell['check_in'] = timezone.localtime(rec.check_in).strftime('%H:%M') if rec.check_in else None
+                    cell['check_out'] = timezone.localtime(rec.check_out).strftime('%H:%M') if rec.check_out else None
+
+                    if rec.status == m.AttendanceRecord.Status.PRESENT:
+                        if rec.late_minutes > 0 and rec.late_minutes <= grace_mins:
+                            grace_tracker += 1
+                            cell['status'] = 'grace'
+                            cell['badge'] = f'G{grace_tracker}'
+                            cell['badge_class'] = 'bg-warning-subtle text-warning border-warning-subtle'
+                            cell['label'] = f'Grace #{grace_tracker}'
+                        else:
+                            cell['status'] = 'present'
+                            cell['badge'] = 'P'
+                            cell['badge_class'] = 'bg-success-subtle text-success border-success-subtle'
+                            cell['label'] = 'Present'
+                        emp_stats['present'] += 1
+                        stats['total_present'] += 1
+
+                    elif rec.status == m.AttendanceRecord.Status.HALF_DAY:
+                        cell['status'] = 'half_day'
+                        cell['badge'] = 'HD'
+                        cell['badge_class'] = 'bg-info-subtle text-info border-info-subtle'
+                        cell['label'] = 'Half Day'
+                        emp_stats['half_day'] += 1
+                        stats['total_half_day'] += 1
+                    else:
+                        cell['status'] = 'absent'
+                        cell['badge'] = 'A'
+                        cell['badge_class'] = 'bg-danger-subtle text-danger border-danger-subtle'
+                        cell['label'] = 'Absent'
+                        emp_stats['absent'] += 1
+                        stats['total_absent'] += 1
+
+                elif leave_code:
+                    cell['status'] = 'on_leave'
+                    cell['badge'] = leave_code
+                    cell['badge_class'] = 'bg-primary-subtle text-primary border-primary-subtle'
+                    cell['label'] = f'Leave ({leave_code})'
+                    emp_stats['on_leave'] += 1
+                    stats['total_on_leave'] += 1
+
+                elif holiday_name:
+                    cell['status'] = 'holiday'
+                    cell['badge'] = 'H'
+                    cell['badge_class'] = 'bg-secondary-subtle text-secondary border-secondary-subtle'
+                    cell['label'] = holiday_name
+                    emp_stats['holiday'] += 1
+                    stats['total_holidays'] += 1
+
+                elif day.weekday() == 6:  # Sunday
+                    cell['status'] = 'week_off'
+                    cell['badge'] = 'OFF'
+                    cell['badge_class'] = 'bg-light text-muted border'
+                    cell['label'] = 'Sunday'
+
+                elif day > today:
+                    cell['status'] = 'future'
+                    cell['badge'] = '-'
+                    cell['badge_class'] = 'bg-transparent text-muted'
+                    cell['label'] = 'Future'
+
+                else:
+                    emp_stats['absent'] += 1
+                    stats['total_absent'] += 1
+
+                row_cells.append(cell)
+
+            matrix_rows.append({
+                'employee': emp,
+                'cells': row_cells,
+                'stats': emp_stats,
+            })
+
+        ctx['matrix_rows'] = matrix_rows
+        ctx['date_list'] = date_list
+        ctx['sel_month'] = sel_month
+        ctx['sel_year'] = sel_year
+        ctx['month_name'] = calendar.month_name[sel_month]
+        ctx['months_choices'] = [(i, calendar.month_name[i]) for i in range(1, 13)]
+        ctx['year_choices'] = [sel_year - 1, sel_year, sel_year + 1]
+        ctx['departments'] = m.Department.objects.all()
+        ctx['employees_list'] = m.Employee.objects.filter(status='active').order_by('first_name')
+        ctx['stats'] = stats
+        ctx['filters'] = self.request.GET
+        return ctx
+
+
+@login_required
+def manual_punch_edit_ajax(request):
+    """AJAX endpoint for HR/SuperAdmin to edit punch records with mandatory audit reason."""
+    if not is_hr_or_above(request.user):
+        return JsonResponse({'success': False, 'error': 'Permission denied.'}, status=403)
+
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'POST required.'}, status=400)
+
+    try:
+        data = json.loads(request.body)
+        record_id = data.get('record_id')
+        emp_id = data.get('employee_id')
+        date_str = data.get('date')
+        check_in_str = data.get('check_in')
+        check_out_str = data.get('check_out')
+        status_val = data.get('status')
+        edit_reason = (data.get('edit_reason') or '').strip()
+
+        if not edit_reason:
+            return JsonResponse({'success': False, 'error': 'A reason for manual edit is mandatory.'}, status=400)
+
+        tz = timezone.get_current_timezone()
+
+        if record_id:
+            record = get_object_or_404(m.AttendanceRecord, pk=record_id)
+        else:
+            if not emp_id or not date_str:
+                return JsonResponse({'success': False, 'error': 'Employee and Date required.'}, status=400)
+            att_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            record, _ = m.AttendanceRecord.objects.get_or_create(
+                employee_id=emp_id, attendance_date=att_date
+            )
+
+        if check_in_str:
+            d_str = record.attendance_date.strftime('%Y-%m-%d')
+            full_in = f"{d_str} {check_in_str}"
+            record.check_in = timezone.make_aware(datetime.strptime(full_in, '%Y-%m-%d %H:%M'), tz)
+
+        if check_out_str:
+            d_str = record.attendance_date.strftime('%Y-%m-%d')
+            full_out = f"{d_str} {check_out_str}"
+            record.check_out = timezone.make_aware(datetime.strptime(full_out, '%Y-%m-%d %H:%M'), tz)
+
+        if status_val:
+            record.status = status_val
+
+        record.edited_by = request.user
+        record.edited_on = timezone.now()
+        record.edit_reason = edit_reason
+        record.save()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Punch updated successfully with audit trail.',
+            'record_id': record.id,
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+# ===========================================================================
+# PUNCH REGULARIZATION WORKFLOW
+# ===========================================================================
+class PunchRegularizationListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    model = m.PunchRegularizationRequest
+    template_name = 'hrms/attendance/regularization_list.html'
+    context_object_name = 'requests'
+    active_group, active_item = 'attendance', 'regularization'
+    paginate_by = 20
+
+    def get_queryset(self):
+        qs = m.PunchRegularizationRequest.objects.select_related('employee', 'employee__department', 'reviewed_by').order_by('-created_at')
+        user = self.request.user
+        if not is_hr_or_above(user):
+            emp = get_employee_profile(user)
+            if not emp:
+                return m.PunchRegularizationRequest.objects.none()
+            if emp.is_manager:
+                qs = qs.filter(Q(employee=emp) | Q(employee__reporting_manager=emp))
+            else:
+                qs = qs.filter(employee=emp)
+
+        status = self.request.GET.get('status')
+        if status:
+            qs = qs.filter(status=status)
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        ctx['is_hr'] = is_hr_or_above(user)
+        ctx['apply_form'] = f.PunchRegularizationRequestForm()
+        ctx['review_form'] = f.PunchRegularizationReviewForm()
+        return ctx
+
+
+class PunchRegularizationCreateView(LoginRequiredMixin, SidebarContextMixin, CreateView):
+    model = m.PunchRegularizationRequest
+    form_class = f.PunchRegularizationRequestForm
+    template_name = 'hrms/attendance/regularization_form.html'
+    success_url = reverse_lazy('hrms:regularization_list')
+    active_group, active_item = 'attendance', 'regularization'
+
+    def form_valid(self, form):
+        emp = get_employee_profile(self.request.user)
+        if not emp:
+            messages.error(self.request, "Your account is not linked to an employee profile.")
+            return redirect('hrms:dashboard')
+        form.instance.employee = emp
+        messages.success(self.request, "Punch regularization request submitted successfully.")
+        return super().form_valid(form)
+
+
+class PunchRegularizationReviewView(HRRequiredMixin, View):
+    """HR Review view for regularization with mandatory rejection remarks."""
+    def post(self, request, pk):
+        reg_req = get_object_or_404(m.PunchRegularizationRequest, pk=pk)
+        action = request.POST.get('status')
+        rejection_reason = (request.POST.get('rejection_reason') or '').strip()
+
+        if action == 'rejected':
+            if not rejection_reason:
+                messages.error(request, "A rejection reason is mandatory when rejecting a regularization request.")
+                return redirect('hrms:regularization_list')
+            reg_req.status = m.PunchRegularizationRequest.Status.REJECTED
+            reg_req.rejection_reason = rejection_reason
+            reg_req.reviewed_by = request.user
+            reg_req.reviewed_on = timezone.now()
+            reg_req.save()
+            messages.success(request, f"Regularization request rejected for {reg_req.employee.full_name}.")
+
+        elif action == 'approved':
+            # Create or update AttendanceRecord
+            rec, _ = m.AttendanceRecord.objects.get_or_create(
+                employee=reg_req.employee,
+                attendance_date=reg_req.attendance_date,
+            )
+            if reg_req.requested_check_in:
+                rec.check_in = reg_req.requested_check_in
+            if reg_req.requested_check_out:
+                rec.check_out = reg_req.requested_check_out
+
+            rec.status = m.AttendanceRecord.Status.PRESENT
+            rec.edited_by = request.user
+            rec.edited_on = timezone.now()
+            rec.edit_reason = f"Regularization approved: {reg_req.reason}"
+            rec.save()
+
+            reg_req.status = m.PunchRegularizationRequest.Status.APPROVED
+            reg_req.reviewed_by = request.user
+            reg_req.reviewed_on = timezone.now()
+            reg_req.save()
+            messages.success(request, f"Regularization approved and punch updated for {reg_req.employee.full_name}.")
+
+        return redirect('hrms:regularization_list')
+
+
+# ===========================================================================
+# MODULE F: POLICIES, NOTICES & ACKNOWLEDGMENT QUIZ
+# ===========================================================================
+class PolicyListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    """Employee Policies Library view with categories and acknowledgment tracking."""
+    model = m.Policy
+    template_name = 'hrms/policy/policy_library.html'
+    context_object_name = 'policies'
+    active_group, active_item = 'policy', 'policy'
+
+    def get_queryset(self):
+        qs = m.Policy.objects.filter(is_active=True).select_related('company').order_by('-created_at')
+        category = self.request.GET.get('category')
+        q = self.request.GET.get('q')
+        if category:
+            qs = qs.filter(category=category)
+        if q:
+            qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        emp = get_employee_profile(user)
+        ctx['is_hr'] = is_hr_or_above(user)
+        ctx['categories'] = m.Policy.Category.choices
+        ctx['active_cat'] = self.request.GET.get('category', '')
+
+        # Build acknowledgment mapping for this employee
+        if emp:
+            acks = m.PolicyAcknowledgement.objects.filter(employee=emp)
+            ctx['ack_map'] = {a.policy_id: a for a in acks}
+        else:
+            ctx['ack_map'] = {}
+
+        return ctx
+
+
+class PolicyManagementView(HRRequiredMixin, SidebarContextMixin, TemplateView):
+    """HR Compliance dashboard tracking acknowledgment percentage per policy."""
+    template_name = 'hrms/policy/policy_management.html'
+    active_group, active_item = 'policy', 'policy_manage'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        policies = m.Policy.objects.all().order_by('-created_at')
+        total_active_employees = m.Employee.objects.filter(status=m.Employee.Status.ACTIVE).count()
+
+        policy_stats = []
+        for pol in policies:
+            acks = pol.acknowledgements.select_related('employee').all()
+            ack_count = acks.count()
+            pct = round((ack_count / total_active_employees * 100), 1) if total_active_employees else 0
+            policy_stats.append({
+                'policy': pol,
+                'total_employees': total_active_employees,
+                'ack_count': ack_count,
+                'percentage': pct,
+                'acknowledgements': acks,
+                'has_quiz': pol.has_quiz,
+            })
+
+        ctx['policy_stats'] = policy_stats
+        ctx['total_policies'] = policies.count()
+        ctx['total_employees'] = total_active_employees
+        return ctx
+
+
+class PolicyCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
+    model = m.Policy
+    form_class = f.PolicyForm
+    template_name = 'hrms/policy/policy_form.html'
+    success_url = reverse_lazy('hrms:policy_manage')
+    active_group, active_item = 'policy', 'policy_manage'
+
+    def form_valid(self, form):
+        quiz_json = self.request.POST.get('quiz_data_json')
+        if quiz_json:
+            try:
+                form.instance.quiz_data = json.loads(quiz_json)
+            except Exception:
+                pass
+        messages.success(self.request, "Policy created successfully.")
+        return super().form_valid(form)
+
+
+class PolicyUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
+    model = m.Policy
+    form_class = f.PolicyForm
+    template_name = 'hrms/policy/policy_form.html'
+    success_url = reverse_lazy('hrms:policy_manage')
+    active_group, active_item = 'policy', 'policy_manage'
+
+    def form_valid(self, form):
+        quiz_json = self.request.POST.get('quiz_data_json')
+        if quiz_json:
+            try:
+                form.instance.quiz_data = json.loads(quiz_json)
+            except Exception:
+                pass
+        messages.success(self.request, "Policy updated successfully.")
+        return super().form_valid(form)
+
+
+class PolicyDeleteView(HRRequiredMixin, SidebarContextMixin, DeleteView):
+    model = m.Policy
+    template_name = 'hrms/policy/policy_confirm_delete.html'
+    success_url = reverse_lazy('hrms:policy_manage')
+    active_group, active_item = 'policy', 'policy_manage'
+
+    def form_valid(self, form):
+        messages.success(self.request, "Policy deleted.")
+        return super().form_valid(form)
+
+
+class PolicyDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
+    """
+    Employee Policy Stepper View:
+    1. Read / Download Document
+    2. Summary Quiz Questionnaire (if questions exist)
+    3. Final Compliance Acknowledgment
+    """
+    model = m.Policy
+    template_name = 'hrms/policy/policy_quiz.html'
+    context_object_name = 'policy'
+    active_group, active_item = 'policy', 'policy'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        emp = get_employee_profile(self.request.user)
+        ack = m.PolicyAcknowledgement.objects.filter(policy=self.object, employee=emp).first() if emp else None
+        ctx['acknowledgement'] = ack
+        ctx['is_acknowledged'] = bool(ack and ack.is_locked)
+        ctx['is_hr'] = is_hr_or_above(self.request.user)
+        return ctx
+
+    def post(self, request, pk):
+        policy = get_object_or_404(m.Policy, pk=pk)
+        emp = get_employee_profile(request.user)
+        if not emp:
+            messages.error(request, "Your login is not linked to an employee record.")
+            return redirect('hrms:policy_list')
+
+        # Check existing acknowledgment
+        ack, created = m.PolicyAcknowledgement.objects.get_or_create(policy=policy, employee=emp)
+        if ack.is_locked:
+            messages.info(request, "You have already acknowledged this policy.")
+            return redirect('hrms:policy_detail', pk=pk)
+
+        # 1. Validate acknowledgment checkbox
+        confirmed = request.POST.get('acknowledge_checkbox')
+        if not confirmed:
+            messages.error(request, "You must check the acknowledgment statement checkbox to proceed.")
+            return redirect('hrms:policy_detail', pk=pk)
+
+        # 2. Score Quiz if policy has questions
+        score = Decimal('100.0')
+        passed = True
+        responses = []
+
+        if policy.quiz_data and len(policy.quiz_data) > 0:
+            total_q = len(policy.quiz_data)
+            correct_count = 0
+
+            for idx, q_item in enumerate(policy.quiz_data):
+                user_ans = request.POST.get(f'question_{idx}')
+                correct_ans = str(q_item.get('correct', ''))
+                is_correct = (str(user_ans).strip().lower() == correct_ans.strip().lower())
+                if is_correct:
+                    correct_count += 1
+                responses.append({
+                    'question_index': idx,
+                    'user_answer': user_ans,
+                    'correct': is_correct
+                })
+
+            score = Decimal(round((correct_count / total_q * 100), 2))
+            if score < Decimal('80.0'):
+                passed = False
+                messages.error(
+                    request,
+                    f"You scored {score}%. You need at least 80% to pass the Summary Quiz. Please review the policy and re-attempt."
+                )
+                return redirect('hrms:policy_detail', pk=pk)
+
+        # 3. Save Acknowledgment
+        ack.quiz_responses = responses
+        ack.quiz_score = score
+        ack.quiz_passed = passed
+        ack.is_locked = True
+        ack.acknowledgment_text = request.POST.get('ack_statement', 'I acknowledge that I have read and fully understand all terms and conditions of this policy.')
+        ack.save()
+
+        messages.success(request, f"Policy '{policy.title}' acknowledged successfully! Quiz Score: {score}%.")
+        return redirect('hrms:policy_detail', pk=pk)
+
+
+# --- Company Notices ---
+class CompanyNoticeListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    model = m.CompanyNotice
+    template_name = 'hrms/notice/notice_list.html'
+    context_object_name = 'notices'
+    active_group, active_item = 'policy', 'notice'
+
+    def get_queryset(self):
+        return m.CompanyNotice.objects.filter(is_active=True).order_by('-notice_date')
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['is_hr'] = is_hr_or_above(self.request.user)
+        return ctx
+
+
+class CompanyNoticeCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
+    model = m.CompanyNotice
+    form_class = f.CompanyNoticeForm
+    template_name = 'hrms/notice/notice_form.html'
+    success_url = reverse_lazy('hrms:notice_list')
+    active_group, active_item = 'policy', 'notice'
+
+    def form_valid(self, form):
+        messages.success(self.request, "Notice posted.")
+        return super().form_valid(form)
+
+
+class CompanyNoticeDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
+    model = m.CompanyNotice
+    template_name = 'hrms/notice/notice_detail.html'
+    context_object_name = 'notice'
+    active_group, active_item = 'policy', 'notice'
+
+    def get(self, request, *args, **kwargs):
+        res = super().get(request, *args, **kwargs)
+        # Mark as read
+        emp = get_employee_profile(request.user)
+        if emp:
+            m.NoticeRead.objects.get_or_create(notice=self.object, employee=emp)
+        return res
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['is_hr'] = is_hr_or_above(self.request.user)
+        ctx['read_count'] = self.object.reads.count()
+        return ctx
+
+
+class CompanyNoticeUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
+    model = m.CompanyNotice
+    form_class = f.CompanyNoticeForm
+    template_name = 'hrms/notice/notice_form.html'
+    success_url = reverse_lazy('hrms:notice_list')
+    active_group, active_item = 'policy', 'notice'
+
+    def form_valid(self, form):
+        messages.success(self.request, "Notice updated.")
+        return super().form_valid(form)
+
+
+class CompanyNoticeDeleteView(HRRequiredMixin, SidebarContextMixin, DeleteView):
+    model = m.CompanyNotice
+    template_name = 'hrms/notice/notice_confirm_delete.html'
+    success_url = reverse_lazy('hrms:notice_list')
+    active_group, active_item = 'policy', 'notice'
+
+    def form_valid(self, form):
+        messages.success(self.request, "Notice deleted.")
+        return super().form_valid(form)
+
+
+# ===========================================================================
+# MODULE C: LEAVE DETAIL & REAPPLY VIEWS
+# ===========================================================================
+class LeaveDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
+    """
+    Visual Timeline Stepper & Full Audit Log for Leave Application.
+    """
+    model = m.LeaveApplication
+    template_name = 'hrms/leave/leave_detail.html'
+    context_object_name = 'application'
+    active_group, active_item = 'leave', 'my_leave'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        app = self.object
+        user = self.request.user
+        emp = get_employee_profile(user)
+        ctx['is_hr'] = is_hr_or_above(user)
+        ctx['is_manager'] = (emp and emp.is_manager)
+        ctx['approval_logs'] = app.approval_logs.select_related('performed_by').all()
+        ctx['reapplications'] = app.reapplications.all()
+        ctx['reject_form'] = f.LeaveRejectForm()
+        return ctx
+
+
+class LeaveReapplyView(LoginRequiredMixin, SidebarContextMixin, FormView):
+    """Allows an employee to re-apply for a rejected leave application with updated reason."""
+    template_name = 'hrms/leave/leave_reapply.html'
+    form_class = f.LeaveApplicationForm
+    active_group, active_item = 'leave', 'my_leave'
+
+    def dispatch(self, request, *args, **kwargs):
+        self.original_app = get_object_or_404(m.LeaveApplication, pk=kwargs['pk'])
+        emp = get_employee_profile(request.user)
+        if not is_hr_or_above(request.user) and (not emp or self.original_app.employee != emp):
+            raise PermissionDenied("You can only re-apply for your own rejected leaves.")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        return {
+            'leave_type': self.original_app.leave_type,
+            'day_type': self.original_app.day_type,
+            'start_date': self.original_app.start_date,
+            'end_date': self.original_app.end_date,
+            'relationship': self.original_app.relationship,
+            'leave_stage': self.original_app.leave_stage,
+            'reason': f"Re-applying for #{self.original_app.pk}: ",
+        }
+
+    def form_valid(self, form):
+        emp = self.original_app.employee
+        try:
+            new_app = lv.reapply_leave(
+                original_application=self.original_app,
+                employee=emp,
+                reason=form.cleaned_data.get('reason', ''),
+                start_date=form.cleaned_data['start_date'],
+                end_date=form.cleaned_data['end_date'],
+                day_type=form.cleaned_data['day_type'],
+                supporting_document=form.cleaned_data.get('supporting_document'),
+                relationship=form.cleaned_data.get('relationship', ''),
+                leave_stage=form.cleaned_data.get('leave_stage', ''),
+            )
+            messages.success(self.request, f"Re-application #{new_app.pk} submitted successfully.")
+            return redirect('hrms:leave_detail', pk=new_app.pk)
+        except lv.LeaveError as e:
+            form.add_error(None, str(e))
+            return self.form_invalid(form)

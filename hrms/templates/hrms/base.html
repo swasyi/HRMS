@@ -110,11 +110,13 @@
           <div class="collapse {% if active_group == 'attendance' %}show{% endif %}" id="navAttendance">
             <ul class="nav flex-column hrms-sublist">
               {% if hrms_is_hr %}
+                <li><a href="{% url 'hrms:attendance_matrix' %}" class="{% if active_item == 'attendance_matrix' %}current{% endif %}">Attendance Matrix</a></li>
                 <li><a href="{% url 'hrms:attendance_records' %}" class="{% if active_item == 'attendance_records' %}current{% endif %}">All Records</a></li>
                 <li><a href="{% url 'hrms:attendance_policy' %}" class="{% if active_item == 'attendance_policy' %}current{% endif %}">Policy Settings</a></li>
               {% else %}
                 <li><a href="{% url 'hrms:my_attendance' %}" class="{% if active_item == 'my_attendance' %}current{% endif %}">My Attendance</a></li>
               {% endif %}
+              <li><a href="{% url 'hrms:regularization_list' %}" class="{% if active_item == 'regularization' %}current{% endif %}">Regularization</a></li>
               <li><a href="{% url 'hrms:attendance_penalties' %}" class="{% if active_item == 'penalties' %}current{% endif %}">Penalties</a></li>
               <li><a href="{% url 'hrms:holiday_list' %}" class="{% if active_item == 'holiday' %}current{% endif %}">Holiday Calendar</a></li>
             </ul>
@@ -134,9 +136,7 @@
               {% if hrms_is_hr %}
                 <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
               {% endif %}
-                      <!-- ADD THIS LINE BELOW -->
               <li><a href="{% url 'hrms:leave-bank' %}" class="{% if active_item == 'leave_bank' %}current{% endif %}">Leave Bank (Admin)</a></li>
-
             </ul>
           </div>
         </li>
@@ -169,7 +169,10 @@
           </a>
           <div class="collapse {% if active_group == 'policy' %}show{% endif %}" id="navPolicy">
             <ul class="nav flex-column hrms-sublist">
-              <li><a href="{% url 'hrms:policy_list' %}" class="{% if active_item == 'policy' %}current{% endif %}">Policies</a></li>
+              <li><a href="{% url 'hrms:policy_list' %}" class="{% if active_item == 'policy' %}current{% endif %}">Policy Library</a></li>
+              {% if hrms_is_hr %}
+                <li><a href="{% url 'hrms:policy_manage' %}" class="{% if active_item == 'policy_manage' %}current{% endif %}">Policy Compliance (HR)</a></li>
+              {% endif %}
               <li><a href="{% url 'hrms:notice_list' %}" class="{% if active_item == 'notice' %}current{% endif %}">Company Notices</a></li>
             </ul>
           </div>

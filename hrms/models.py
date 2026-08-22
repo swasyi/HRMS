@@ -735,6 +735,13 @@ class AttendanceRecord(TimeStampedModel):
     is_half_day = models.BooleanField(default=False)
     is_overtime = models.BooleanField(default=False)
     remarks = models.CharField(max_length=255, blank=True)
+    # Module D: Audit trail for manual punch edits
+    edited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='attendance_edits', help_text='User who last manually edited this record'
+    )
+    edited_on = models.DateTimeField(null=True, blank=True, help_text='When the record was last manually edited')
+    edit_reason = models.CharField(max_length=255, blank=True, help_text='Reason for the manual edit')
 
     class Meta:
         unique_together = ('employee', 'attendance_date')
@@ -817,6 +824,7 @@ class AttendancePenalty(TimeStampedModel):
         APPLIED = 'applied', 'Applied'
         LWP = 'lwp', 'LWP (No Leave Balance)'
         WAIVED = 'waived', 'Waived'
+        INTERN_SALARY = 'intern_salary', 'Intern Salary Deduction'
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='penalties')
     attendance_record = models.ForeignKey('AttendanceRecord', on_delete=models.CASCADE, null=True, blank=True, related_name='penalties')
@@ -826,6 +834,16 @@ class AttendancePenalty(TimeStampedModel):
     deduction_days = models.DecimalField(max_digits=4, decimal_places=2, default=0.5)
     deduction_source = models.CharField(max_length=100, default='CL')
     status = models.CharField(max_length=20, choices=DeductionStatus.choices, default=DeductionStatus.APPLIED)
+    # Intern penalty fields
+    is_intern_penalty = models.BooleanField(default=False, help_text='True if this penalty is a direct salary deduction for an intern')
+    salary_deduction_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text='For interns: the monetary amount deducted (half-day salary)'
+    )
+    employment_type_snapshot = models.CharField(
+        max_length=20, blank=True,
+        help_text='Employment type at time of penalty (full_time, intern, etc)'
+    )
 
     class Meta:
         ordering = ['-penalty_date', '-created_at']
@@ -844,6 +862,10 @@ class LeaveType(TimeStampedModel):
         MALE = 'M', 'Male'
         FEMALE = 'F', 'Female'
 
+    class AllocationMode(models.TextChoices):
+        ANNUAL = 'annual', 'Annual (Lump Sum)'
+        MONTHLY_ACCRUED = 'monthly_accrued', 'Monthly Accrued'
+
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='leave_types')
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=20)
@@ -856,6 +878,21 @@ class LeaveType(TimeStampedModel):
     requires_document = models.BooleanField(default=False)
     applicable_gender = models.CharField(max_length=5, choices=Gender.choices, default=Gender.ALL)
     description = models.TextField(blank=True)
+    # Module B enhancements
+    allocation_mode = models.CharField(
+        max_length=20, choices=AllocationMode.choices, default=AllocationMode.ANNUAL,
+        help_text='Annual: full allocation at start. Monthly: accrued each month (CL/EL).'
+    )
+    min_consecutive_days = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text='Minimum consecutive days required (e.g., SL requires 2 days minimum).'
+    )
+    requires_relationship = models.BooleanField(
+        default=False, help_text='If True, employee must specify relationship (e.g., Bereavement Leave).'
+    )
+    requires_stage = models.BooleanField(
+        default=False, help_text='If True, employee must specify Pre-Natal/Post-Natal stage (Maternity/Paternity).'
+    )
 
     class Meta:
         unique_together = ('company', 'code')
@@ -892,11 +929,23 @@ class LeaveApplication(TimeStampedModel):
         APPROVED = 'approved', 'Approved'
         REJECTED = 'rejected', 'Rejected'
         CANCELLED = 'cancelled', 'Cancelled'
+
     class DayType(models.TextChoices):
         FULL_DAY = 'full', 'Full Day'
         HALF_DAY = 'half', 'Half Day'
 
-    # ... other fields ...
+    class Relationship(models.TextChoices):
+        MOTHER = 'mother', 'Mother'
+        FATHER = 'father', 'Father'
+        GRANDPARENT = 'grandparent', 'Grandparent'
+        SIBLING = 'sibling', 'Sibling'
+        SPOUSE = 'spouse', 'Spouse'
+        OTHER = 'other', 'Other'
+
+    class LeaveStage(models.TextChoices):
+        PRE_NATAL = 'pre_natal', 'Pre-Natal Leave'
+        POST_NATAL = 'post_natal', 'Post-Natal Leave'
+
     day_type = models.CharField(max_length=10, choices=DayType.choices, default=DayType.FULL_DAY)
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='leave_applications')
@@ -907,10 +956,43 @@ class LeaveApplication(TimeStampedModel):
     reason = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     applied_on = models.DateTimeField(auto_now_add=True)
-    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL, null=True, blank=True,
-                                     related_name='leave_approvals')
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='leave_approvals'
+    )
     approved_on = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.CharField(max_length=255, blank=True)
+
+    # Module B: Document & specialized leave fields
+    supporting_document = models.FileField(
+        upload_to='leave/documents/', null=True, blank=True,
+        help_text='Medical certificate (SL), proof for Maternity/Paternity/Bereavement'
+    )
+    relationship = models.CharField(
+        max_length=20, choices=Relationship.choices, blank=True,
+        help_text='Required for Bereavement Leave — specify relation to deceased'
+    )
+    leave_stage = models.CharField(
+        max_length=20, choices=LeaveStage.choices, blank=True,
+        help_text='Required for Maternity/Paternity — Pre-Natal or Post-Natal'
+    )
+
+    # Module C: Multi-tier approval tracking
+    manager_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='manager_leave_approvals',
+        help_text='The reporting manager who approved at Level 1'
+    )
+    manager_approved_on = models.DateTimeField(null=True, blank=True)
+    parent_application = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='reapplications',
+        help_text='Links to the rejected application this re-application is based on'
+    )
+    sla_deadline = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Expected deadline for approval review (for SLA tracking)'
+    )
 
     class Meta:
         ordering = ['-applied_on']
@@ -1255,13 +1337,27 @@ class PayrollExtra(TimeStampedModel):
 # 7. POLICIES & COMPANY NOTICES
 # ---------------------------------------------------------------------------
 class Policy(TimeStampedModel):
+    class Category(models.TextChoices):
+        HR_POLICY = 'hr_policy', 'HR Policy'
+        IT_POLICY = 'it_policy', 'IT Policy'
+        SAFETY = 'safety', 'Safety & Compliance'
+        FINANCE = 'finance', 'Finance'
+        OTHER = 'other', 'Other'
+
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='policies')
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    category = models.CharField(max_length=20, choices=Category.choices, default=Category.HR_POLICY)
     effective_from = models.DateField()
     effective_to = models.DateField(null=True, blank=True)
     document = models.FileField(upload_to='policies/', blank=True, null=True)
     is_active = models.BooleanField(default=True)
+    is_mandatory = models.BooleanField(default=True, help_text='Must be acknowledged by all employees')
+    quiz_data = models.JSONField(
+        default=list, blank=True,
+        help_text='Quiz questions: [{"question": "...", "type": "mcq"|"true_false", '
+                  '"options": [...], "correct": index_or_bool}]'
+    )
 
     class Meta:
         verbose_name_plural = 'Policies'
@@ -1269,11 +1365,41 @@ class Policy(TimeStampedModel):
     def __str__(self):
         return self.title
 
+    @property
+    def has_quiz(self):
+        return bool(self.quiz_data)
+
+    @property
+    def quiz_question_count(self):
+        return len(self.quiz_data) if self.quiz_data else 0
+
+    def get_file_extension(self):
+        if self.document:
+            return self.document.name.rsplit('.', 1)[-1].lower() if '.' in self.document.name else ''
+        return ''
+
 
 class PolicyAcknowledgement(TimeStampedModel):
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name='acknowledgements')
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='policy_acknowledgements')
     acknowledged_on = models.DateTimeField(auto_now_add=True)
+    # Quiz tracking
+    quiz_responses = models.JSONField(
+        default=list, blank=True, help_text='Employee quiz answers'
+    )
+    quiz_score = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Percentage score on the quiz'
+    )
+    quiz_passed = models.BooleanField(default=False)
+    is_locked = models.BooleanField(
+        default=False,
+        help_text='Once acknowledged, record is locked and cannot be changed'
+    )
+    acknowledgment_text = models.TextField(
+        blank=True, default='I acknowledge that I have read and fully understand '
+        'all terms and conditions of this policy/notice.'
+    )
 
     class Meta:
         unique_together = ('policy', 'employee')
@@ -1283,11 +1409,19 @@ class PolicyAcknowledgement(TimeStampedModel):
 
 
 class CompanyNotice(TimeStampedModel):
+    class Category(models.TextChoices):
+        GENERAL = 'general', 'General'
+        URGENT = 'urgent', 'Urgent'
+        EVENT = 'event', 'Event'
+        UPDATE = 'update', 'Policy Update'
+
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='notices')
     title = models.CharField(max_length=200)
     message = models.TextField()
+    category = models.CharField(max_length=20, choices=Category.choices, default=Category.GENERAL)
     notice_date = models.DateField()
     expiry_date = models.DateField(null=True, blank=True)
+    document = models.FileField(upload_to='notices/', null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
@@ -1321,12 +1455,7 @@ class AssetCategory(TimeStampedModel):
         verbose_name_plural = "Asset Categories"
 
 
-from django.db import models
-from decimal import Decimal
-from datetime import date
 
-
-# ... (keep existing imports)
 
 class Asset(TimeStampedModel):
     class Status(models.TextChoices):
@@ -1345,65 +1474,30 @@ class Asset(TimeStampedModel):
     sim = models.CharField(max_length=100, null=True, blank=True, help_text="SIM card number or provider details")
     phone_number = models.CharField(max_length=20, null=True, blank=True, help_text="Phone number associated with the SIM/Device")
 
-    # NEW FIELDS
     device_password = models.CharField(max_length=255, blank=True, help_text="Login password or PIN for the device")
     additional_details = models.TextField(blank=True, help_text="OS version, RAM, etc.")
     purchase_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.AVAILABLE)
     assigned_on = models.DateField(null=True, blank=True)
     remarks = models.CharField(max_length=255, blank=True)
+    # Module G: Asset lifecycle fields
+    warranty_expiry = models.DateField(null=True, blank=True, help_text='Warranty expiry date')
+    vendor_name = models.CharField(max_length=200, blank=True, help_text='Vendor/Supplier name')
+    vendor_contact = models.CharField(max_length=100, blank=True, help_text='Vendor phone or email')
+    invoice_document = models.FileField(upload_to='assets/invoices/', null=True, blank=True, help_text='Purchase invoice PDF/Image')
 
     def __str__(self):
         return self.name
 
 
     def save(self, *args, **kwargs):
-        if self.pk:
-            # 1. Get the current state from the database
-            old_asset = Asset.objects.get(pk=self.pk)
-
-            # 2. Check if the employee has changed
-            if old_asset.employee != self.employee:
-
-                # If there was an old employee, close their history (Return them)
-                if old_asset.employee:
-                    AssetAssignmentHistory.objects.filter(
-                        asset=self,
-                        employee=old_asset.employee,
-                        is_still_using=True
-                    ).update(
-                        returned_date=models.functions.Now(),
-                        is_still_using=False
-                    )
-
-                # If there is a NEW employee assigned, start new history
-                if self.employee:
-                    AssetAssignmentHistory.objects.create(
-                        asset=self,
-                        employee=self.employee,
-                        # No need to pass assigned_date if you added auto_now_add=True
-                        is_still_using=True
-                    )
-
-        # Finally, save the actual Asset
-        super().save(*args, **kwargs)
-
-        # Handle the very first time an asset is created with an employee
-        if not self.pk and self.employee:
-            AssetAssignmentHistory.objects.create(
-                asset=self, employee=self.employee, is_still_using=True
-            )
-    def save(self, *args, **kwargs):
-        # 1. Capture whether this is a brand new record BEFORE saving
+        # Capture whether this is a brand new record BEFORE saving
         is_new = self.pk is None
 
         if not is_new:
-            # 2. This logic runs ONLY for updates (re-assignments)
             old_asset = Asset.objects.get(pk=self.pk)
-
-            # Check if the employee has changed
             if old_asset.employee != self.employee:
-                # If there was an old employee, close their history (Return them)
+                # Close old assignment history
                 if old_asset.employee:
                     AssetAssignmentHistory.objects.filter(
                         asset=self,
@@ -1413,8 +1507,7 @@ class Asset(TimeStampedModel):
                         returned_date=models.functions.Now(),
                         is_still_using=False
                     )
-
-                # If there is a NEW employee assigned during update, start new history
+                # Start new assignment history
                 if self.employee:
                     AssetAssignmentHistory.objects.create(
                         asset=self,
@@ -1422,12 +1515,9 @@ class Asset(TimeStampedModel):
                         is_still_using=True
                     )
 
-        # 3. Save the actual Asset to the database
-        # After this line, self.pk will exist even if it was a new record
         super().save(*args, **kwargs)
 
-        # 4. Handle the very first time an asset is created with an employee
-        # We use the 'is_new' variable we captured at the beginning
+        # Handle first-time creation with an assigned employee
         if is_new and self.employee:
             AssetAssignmentHistory.objects.create(
                 asset=self,
@@ -1441,7 +1531,14 @@ class AssetAssignmentHistory(TimeStampedModel):
     assigned_date = models.DateField(auto_now_add=True)
     returned_date = models.DateField(null=True, blank=True)
     is_still_using = models.BooleanField(default=True)
-
+    # Module G: Return condition tracking
+    returned_in_good_condition = models.BooleanField(
+        null=True, blank=True, help_text='Was the asset returned in good condition?'
+    )
+    return_remarks = models.TextField(
+        blank=True, help_text='Mandatory remarks if not returned in good condition'
+    )
+    assignment_notes = models.TextField(blank=True, help_text='Notes at time of assignment')
 
     class Meta:
         ordering = ['-assigned_date']
@@ -1468,3 +1565,106 @@ class PerformanceReview(TimeStampedModel):
 
     def __str__(self):
         return f'{self.employee} review ({self.review_period_from} - {self.review_period_to})'
+
+
+# ---------------------------------------------------------------------------
+# 10. MONTHLY LEAVE ACCRUAL (Module B)
+# ---------------------------------------------------------------------------
+class MonthlyLeaveAccrual(TimeStampedModel):
+    """Tracks monthly leave credits for CL/EL accrual-based allocation."""
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='monthly_accruals')
+    leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, related_name='monthly_accruals')
+    month = models.PositiveSmallIntegerField()  # 1-12
+    year = models.PositiveSmallIntegerField()
+    accrued_amount = models.DecimalField(max_digits=5, decimal_places=2, help_text='Amount credited this month (annual/12)')
+    is_credited = models.BooleanField(default=False)
+    credited_on = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('employee', 'leave_type', 'month', 'year')
+        ordering = ['-year', '-month']
+
+    def __str__(self):
+        return f'{self.employee} - {self.leave_type.code} ({self.month}/{self.year})'
+
+
+# ---------------------------------------------------------------------------
+# 11. LEAVE APPROVAL AUDIT LOG (Module C)
+# ---------------------------------------------------------------------------
+class LeaveApprovalLog(TimeStampedModel):
+    """Complete audit trail for every leave application action."""
+    class Action(models.TextChoices):
+        APPLIED = 'applied', 'Applied'
+        MANAGER_APPROVED = 'manager_approved', 'Manager Approved'
+        MANAGER_REJECTED = 'manager_rejected', 'Manager Rejected'
+        HR_APPROVED = 'hr_approved', 'HR Approved'
+        HR_REJECTED = 'hr_rejected', 'HR Rejected'
+        CANCELLED = 'cancelled', 'Cancelled'
+        REAPPLIED = 'reapplied', 'Re-Applied'
+
+    application = models.ForeignKey(LeaveApplication, on_delete=models.CASCADE, related_name='approval_logs')
+    action = models.CharField(max_length=30, choices=Action.choices)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='leave_audit_actions'
+    )
+    remarks = models.TextField(blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f'{self.application} — {self.get_action_display()} at {self.timestamp}'
+
+
+# ---------------------------------------------------------------------------
+# 12. PUNCH REGULARIZATION (Module D)
+# ---------------------------------------------------------------------------
+class PunchRegularizationRequest(TimeStampedModel):
+    """Employee requests to regularize a missed or incorrect punch."""
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='regularization_requests')
+    attendance_date = models.DateField()
+    requested_check_in = models.DateTimeField(null=True, blank=True)
+    requested_check_out = models.DateTimeField(null=True, blank=True)
+    reason = models.TextField()
+    proof_document = models.FileField(upload_to='regularization/', null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='regularization_reviews'
+    )
+    rejection_reason = models.CharField(max_length=255, blank=True)
+    reviewed_on = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('employee', 'attendance_date')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.employee} regularization for {self.attendance_date}'
+
+
+# ---------------------------------------------------------------------------
+# 13. PAYSLIP DOWNLOAD AUDIT (Module E)
+# ---------------------------------------------------------------------------
+class PayslipDownloadLog(TimeStampedModel):
+    """Silent audit log for payslip downloads — notifies HR/Superadmin."""
+    payslip = models.ForeignKey(PaySlip, on_delete=models.CASCADE, related_name='download_logs')
+    downloaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='payslip_downloads'
+    )
+    downloaded_at = models.DateTimeField(auto_now_add=True)
+    ip_address = models.CharField(max_length=45, blank=True)
+
+    class Meta:
+        ordering = ['-downloaded_at']
+
+    def __str__(self):
+        return f'{self.downloaded_by} downloaded {self.payslip} at {self.downloaded_at}'

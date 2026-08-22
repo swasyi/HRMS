@@ -127,10 +127,13 @@
     </div>
 
     <!-- 2. NAVIGATION -->
-    <ul class="nav nav-enterprise shadow-sm" id="pills-tab" role="tablist">
+    <ul class="nav nav-enterprise shadow-sm flex-wrap" id="pills-tab" role="tablist">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#overview">General Info</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#salary-finance">Finance & Bank</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#leave-records">Leave Balance</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#salary-finance">Finance &amp; Bank</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#leave-records">Leave Bank</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#assets-tab">Assets ({{ assigned_assets|length }})</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#attendance-summary">Attendance &amp; Penalties</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#performance-tab">Performance</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#document-vault">Documents</button></li>
     </ul>
 
@@ -336,6 +339,194 @@
         </div>
     </div>
 </div>
+        <!-- ASSETS TAB -->
+        <div class="tab-pane fade" id="assets-tab">
+            <div class="row g-4">
+                <div class="col-lg-6">
+                    <div class="card card-advanced p-4 h-100">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0 text-dark"><i class="bi bi-laptop me-2 text-primary"></i>Currently Assigned Assets</h5>
+                            <span class="badge bg-primary rounded-pill px-3">{{ assigned_assets|length }} Active</span>
+                        </div>
+                        <div class="d-flex flex-column gap-3">
+                            {% for asset in assigned_assets %}
+                                <div class="p-3 bg-light rounded-4 border d-flex align-items-center justify-content-between">
+                                    <div>
+                                        <div class="fw-bold text-dark">{{ asset.name }}</div>
+                                        <div class="small text-muted">
+                                            SN: {{ asset.serial_number|default:"—" }} • {{ asset.category.name|default:"General" }}
+                                        </div>
+                                        <div class="small text-primary">Issued: {{ asset.assigned_on|date:"d M Y"|default:"—" }}</div>
+                                    </div>
+                                    <a href="{% url 'hrms:asset_detail' asset.id %}" class="btn btn-outline-primary btn-sm rounded-pill px-3">
+                                        View Specs
+                                    </a>
+                                </div>
+                            {% empty %}
+                                <div class="text-center py-4 text-muted small">No assets currently assigned.</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-6">
+                    <div class="card card-advanced p-4 h-100">
+                        <h5 class="fw-bold mb-3 text-dark"><i class="bi bi-clock-history me-2 text-muted"></i>Asset Custody History</h5>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0" style="font-size: 0.82rem;">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Asset</th>
+                                        <th>Issued</th>
+                                        <th>Returned</th>
+                                        <th>Condition</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for hist in asset_history %}
+                                        <tr>
+                                            <td class="fw-semibold">{{ hist.asset.name }}</td>
+                                            <td>{{ hist.assigned_date|date:"d M Y" }}</td>
+                                            <td>{{ hist.returned_date|date:"d M Y"|default:"Active" }}</td>
+                                            <td>
+                                                {% if hist.is_still_using %}
+                                                    <span class="badge bg-primary">In Use</span>
+                                                {% elif hist.returned_in_good_condition == True %}
+                                                    <span class="badge bg-success">Good</span>
+                                                {% elif hist.returned_in_good_condition == False %}
+                                                    <span class="badge bg-danger" data-bs-toggle="tooltip" title="{{ hist.return_remarks }}">Damaged</span>
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr><td colspan="4" class="text-center py-3 text-muted">No past custody records.</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ATTENDANCE & PENALTIES SUMMARY TAB -->
+        <div class="tab-pane fade" id="attendance-summary">
+            <div class="row g-4">
+                <div class="col-lg-7">
+                    <div class="card card-advanced p-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0 text-dark"><i class="bi bi-clock me-2 text-primary"></i>Recent Attendance Punches</h5>
+                            <a href="{% url 'hrms:attendance_matrix' %}?employee={{ employee.id }}" class="text-primary small fw-bold text-decoration-none">
+                                View Matrix <i class="bi bi-arrow-right"></i>
+                            </a>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.82rem;">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Check-In</th>
+                                        <th>Check-Out</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for att in recent_attendance %}
+                                        <tr>
+                                            <td class="fw-semibold">{{ att.attendance_date|date:"d M Y (D)" }}</td>
+                                            <td>{{ att.check_in|date:"H:i"|default:"—" }}</td>
+                                            <td>{{ att.check_out|date:"H:i"|default:"—" }}</td>
+                                            <td>
+                                                <span class="badge {% if att.status == 'present' %}bg-success-subtle text-success border border-success-subtle{% elif att.status == 'half_day' %}bg-warning-subtle text-warning border border-warning-subtle{% else %}bg-danger-subtle text-danger border border-danger-subtle{% endif %}">
+                                                    {{ att.get_status_display }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr><td colspan="4" class="text-center py-3 text-muted">No attendance logs available.</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-5">
+                    <!-- Grace & Penalty Tracker Card -->
+                    <div class="card card-advanced p-4 mb-4">
+                        <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-speedometer2 text-warning me-2"></i>Grace &amp; Penalty Tracker</h6>
+                        <div class="p-3 bg-light rounded-3 border mb-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="small text-muted">Grace Used This Month:</span>
+                                <span class="fw-bold text-dark fs-6">{{ grace_usage.usage_count|default:"0" }} / 3 Allowed</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="small text-muted">Total Active Penalties:</span>
+                            <span class="badge bg-danger rounded-pill px-3">{{ recent_penalties|length }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Recent Penalties -->
+                    <div class="card card-advanced p-4">
+                        <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-exclamation-triangle text-danger me-2"></i>Penalty History</h6>
+                        <div class="d-flex flex-column gap-2">
+                            {% for pen in recent_penalties %}
+                                <div class="p-2 rounded-3 bg-light border small">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="fw-bold text-danger">{{ pen.deduction_days }} Day Deduction</span>
+                                        <span class="text-muted">{{ pen.penalty_date|date:"d M Y" }}</span>
+                                    </div>
+                                    <div class="text-muted" style="font-size: 0.72rem;">{{ pen.reason }}</div>
+                                </div>
+                            {% empty %}
+                                <div class="text-center py-3 text-muted small">No penalties recorded.</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PERFORMANCE REVIEWS TAB -->
+        <div class="tab-pane fade" id="performance-tab">
+            <div class="card card-advanced p-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h5 class="fw-bold mb-0 text-dark"><i class="bi bi-graph-up-arrow me-2 text-primary"></i>Performance Evaluations</h5>
+                    {% if is_hr %}
+                        <a href="{% url 'hrms:performance_add' %}" class="btn btn-primary btn-sm rounded-pill px-3">
+                            <i class="bi bi-plus-circle me-1"></i>New Review
+                        </a>
+                    {% endif %}
+                </div>
+                <div class="d-flex flex-column gap-3">
+                    {% for rev in performance_reviews %}
+                        <div class="p-3 bg-light rounded-4 border">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div>
+                                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-1 fw-bold">
+                                        Period: {{ rev.review_period_from|date:"M Y" }} - {{ rev.review_period_to|date:"M Y" }}
+                                    </span>
+                                    <span class="badge bg-light text-dark border ms-2">Rating: {{ rev.rating }}/5</span>
+                                </div>
+                                <span class="badge {% if rev.status == 'acknowledged' %}bg-success{% else %}bg-warning text-dark{% endif %} rounded-pill px-3">
+                                    {{ rev.get_status_display }}
+                                </span>
+                            </div>
+                            <p class="text-muted small mb-2">{{ rev.comments|truncatewords:30 }}</p>
+                            <a href="{% url 'hrms:performance_detail' rev.id %}" class="small text-primary fw-semibold text-decoration-none">
+                                View Full Review <i class="bi bi-arrow-right"></i>
+                            </a>
+                        </div>
+                    {% empty %}
+                        <div class="text-center py-4 text-muted small">No performance evaluations found for this employee.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
         <!-- DOCUMENTS TAB -->
         <div class="tab-pane fade" id="document-vault">
             <div class="card card-advanced">

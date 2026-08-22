@@ -1,17 +1,17 @@
-import pandas as pd
 import re
 from datetime import datetime, timedelta
+import pandas as pd
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import Q
+from hrms import leave_logic as lv
 from hrms import models as m
-from hrms import leave_logic as lv  # Import centralized leave logic
 
 
 class Command(BaseCommand):
-    help = 'Imports punches and auto-manages leaves for permanent employees based on grace and work duration.'
+    help = 'Imports all punches and manages auto-leaves for the full month.'
 
     def add_arguments(self, parser):
-        # Path to the monthly Excel file
         parser.add_argument('file_path', type=str, help='Path to the excel file')
 
     def handle(self, *args, **options):
@@ -19,11 +19,10 @@ class Command(BaseCommand):
         self.stdout.write(f"Processing file: {file_path}")
 
         try:
-            # Load Excel and clean white spaces from headers
             df = pd.read_excel(file_path)
             df.columns = [str(col).replace('\n', ' ').strip() for col in df.columns]
 
-            # 1. MAP DATE COLUMNS
+            # 1. Map Date Columns (DD-MM-YYYY or D-M-YYYY)
             date_map = {}
             date_pattern = r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})'
             for col in df.columns:
@@ -37,46 +36,61 @@ class Command(BaseCommand):
                         continue
 
             if not date_map:
-                self.stdout.write(self.style.ERROR("No date columns (DD-MM-YYYY) found in headers!"))
+                self.stdout.write(self.style.ERROR("No valid date columns (DD-MM-YYYY) found in headers!"))
                 return
 
-            # Constants for processing
             LEAVE_CODES = ['CL', 'EL', 'SL', 'BL', 'MTL', 'CO', 'LWP', 'UL']
             success_punches = 0
             success_leaves = 0
+            skipped_employees = []
 
             with transaction.atomic():
                 for _, row in df.iterrows():
-                    emp_code = str(row.iloc[0]).strip()
-                    if not emp_code or emp_code.lower() in ['nan', 'none', 'employee']:
+                    # Identify Employee ID column or fallback to first column
+                    raw_id = row.get('Employee ID', row.iloc[0])
+                    emp_code = str(raw_id).strip()
+                    emp_name = str(row.get('Employee Name', row.iloc[1] if len(row) > 1 else '')).strip()
+
+                    if not emp_code or emp_code.lower() in ['nan', 'none', 'employee', 'employee id', '']:
                         continue
 
-                    try:
-                        employee = m.Employee.objects.get(employee_code=emp_code)
-                    except m.Employee.DoesNotExist:
+                    # Resilient Employee Matching (matches code, stripped zeros, or full name)
+                    employee = None
+                    clean_code = emp_code.lstrip('0')
+
+                    employee = m.Employee.objects.filter(
+                        Q(employee_code__iexact=emp_code) |
+                        Q(employee_code__iexact=clean_code) |
+                        Q(employee_code__endswith=emp_code)
+                    ).first()
+
+                    if not employee and emp_name and emp_name.lower() not in ['nan', 'none']:
+                        employee = m.Employee.objects.filter(
+                            Q(first_name__icontains=emp_name) |
+                            Q(user__first_name__icontains=emp_name)
+                        ).first()
+
+                    if not employee:
+                        skipped_employees.append(f"{emp_code} ({emp_name})")
                         continue
 
-                    # --- RESET GRACE TRACKER FOR EVERY EMPLOYEE PER MONTH ---
                     grace_used_this_month = 0
 
                     for col_name, att_date in date_map.items():
-                        cell_value = str(row[col_name]).strip().upper()
+                        cell_raw = str(row[col_name]).strip()
+                        cell_value = cell_raw.replace('\n', ' ').replace('\r', ' ').upper().strip()
 
-                        # Skip Week-offs or empty cells
                         if not cell_value or cell_value in ['NAN', '', '-', 'WO', 'NA']:
                             continue
 
-                        # --- CASE A: MANUAL LEAVE CODES IN EXCEL ---
+                        # Case A: Explicit Manual Leave Code
                         if any(code in cell_value for code in LEAVE_CODES):
                             code_to_use = 'LWP' if 'UL' in cell_value else cell_value
-
-                            # Filter out paid leaves for non-permanent staff
                             if employee.employment_type in ['intern', 'trainee'] and code_to_use != 'LWP':
                                 continue
 
                             l_type = m.LeaveType.objects.filter(code=code_to_use, company=employee.company).first()
                             if l_type:
-                                # Determine if cell also contains a punch (Half-Day scenario)
                                 is_combined = ':' in cell_value
                                 m.LeaveApplication.objects.update_or_create(
                                     employee=employee, start_date=att_date, end_date=att_date,
@@ -90,13 +104,11 @@ class Command(BaseCommand):
                                 )
                                 success_leaves += 1
                                 if not is_combined:
-                                    continue  # Skip punch logic for full day leave
+                                    continue
 
-                        # --- CASE B: EXPLICIT ABSENT ---
-                        if cell_value in ['A', 'ABSENT']:
-
+                        # Case B: Explicit Absent
+                        if cell_value in ['A', 'ABS', 'ABSENT']:
                             if employee.employment_type == 'full_time':
-                                # Don't mark Absent! Instead, try to apply 1.0 Full Day Leave
                                 if not m.LeaveApplication.objects.filter(employee=employee,
                                                                          start_date=att_date).exists():
                                     cl_type = m.LeaveType.objects.filter(code='CL', company=employee.company).first()
@@ -105,83 +117,82 @@ class Command(BaseCommand):
                                                        reason="Auto-convert Absent to Leave")
                                         success_leaves += 1
                             else:
-                                # Interns/Trainees stay Absent (Money Deduct)
                                 m.AttendanceRecord.objects.update_or_create(
                                     employee=employee, attendance_date=att_date,
                                     defaults={'status': m.AttendanceRecord.Status.ABSENT, 'remarks': 'Marked Absent'}
                                 )
                             continue
 
-                        # --- CASE C: PUNCH TIMES & SMART AUTO-LEAVE ---
-                        punches = cell_value.split()
-                        if len(punches) >= 2:
+                        # Case C: Check-In & Check-Out Time Extraction
+                        time_matches = re.findall(r'(\d{1,2}:\d{2}\s*(?:AM|PM))', cell_value, re.IGNORECASE)
+                        if time_matches:
+                            cin_dt = None
+                            cout_dt = None
+
                             try:
-                                in_t = f"{punches[0]} {punches[1]}"
-                                cin_dt = datetime.strptime(f"{att_date} {in_t}", '%Y-%m-%d %I:%M %p')
+                                cin_dt = datetime.strptime(f"{att_date} {time_matches[0].strip()}", '%Y-%m-%d %I:%M %p')
+                                if len(time_matches) >= 2:
+                                    cout_dt = datetime.strptime(f"{att_date} {time_matches[1].strip()}",
+                                                                '%Y-%m-%d %I:%M %p')
 
-                                cout_dt = None
-                                if len(punches) >= 4:
-                                    out_t = f"{punches[2]} {punches[3]}"
-                                    cout_dt = datetime.strptime(f"{att_date} {out_t}", '%Y-%m-%d %I:%M %p')
-
-                                # 1. Save the Attendance Record
                                 m.AttendanceRecord.objects.update_or_create(
                                     employee=employee, attendance_date=att_date,
-                                    defaults={'check_in': cin_dt, 'check_out': cout_dt, 'status': 'present'}
+                                    defaults={
+                                        'check_in': cin_dt,
+                                        'check_out': cout_dt,
+                                        'status': m.AttendanceRecord.Status.PRESENT if (
+                                                    cin_dt and cout_dt) else m.AttendanceRecord.Status.HALF_DAY
+                                    }
                                 )
                                 success_punches += 1
 
-                                # 2. SMART AUTO-DEDUCTION (FOR FULL-TIME ONLY)
-                                if employee.employment_type == 'full_time':
-                                    policy = employee.company.get_policy_for_date(att_date)
-                                    off_start = policy.office_start_time
-                                    grace_limit = policy.grace_allowed_count
-                                    grace_window = (datetime.combine(att_date, off_start) +
-                                                    timedelta(minutes=policy.grace_minutes)).time()
+                                # Grace & Auto-Deduction for Full-Time
+                                if employee.employment_type == 'full_time' and cin_dt:
+                                    policy = employee.company.get_policy_for_date(att_date) if hasattr(employee.company,
+                                                                                                       'get_policy_for_date') else None
+                                    if policy:
+                                        off_start = policy.office_start_time
+                                        grace_limit = policy.grace_allowed_count
+                                        grace_window = (datetime.combine(att_date, off_start) +
+                                                        timedelta(minutes=policy.grace_minutes)).time()
 
-                                    # Work duration check (Short Punch Logic)
-                                    work_hrs = (cout_dt - cin_dt).total_seconds() / 3600 if (cin_dt and cout_dt) else 0
-                                    is_late = cin_dt.time() > grace_window
-                                    is_short = work_hrs > 0 and work_hrs < 4
+                                        work_hrs = (cout_dt - cin_dt).total_seconds() / 3600 if (
+                                                    cin_dt and cout_dt) else 0
+                                        is_late = cin_dt.time() > grace_window
+                                        is_short = (0 < work_hrs < 4) or (cout_dt is None)
 
-                                    # Check for existing applications to prevent duplicate deductions
-                                    if (is_late or is_short) and not m.LeaveApplication.objects.filter(
-                                            employee=employee, start_date=att_date).exists():
-                                        cl_type = m.LeaveType.objects.filter(code='CL',
-                                                                             company=employee.company).first()
-
-                                        if cl_type:
-                                            # LOGIC 1: WORKED LESS THAN 4 HOURS -> DEDUCT 1.0 DAY
-                                            if work_hrs > 0 and work_hrs < 4:
-                                                lv.apply_leave(employee, cl_type, att_date, att_date,
-                                                               day_type='full',
-                                                               reason="Auto-Deduct: Short Work Duration (<4h)")
-                                                success_leaves += 1
-
-                                            # LOGIC 2: ARRIVED BEYOND GRACE WINDOW (>10:15) -> DEDUCT 0.5 DAY
-                                            elif cin_dt.time() > grace_window:
-                                                lv.apply_leave(employee, cl_type, att_date, att_date,
-                                                               day_type='half', reason="Auto-Deduct: Late Arrival")
-                                                success_leaves += 1
-
-                                            # LOGIC 3: ARRIVED INSIDE GRACE WINDOW (10:01 - 10:15)
-                                            elif cin_dt.time() > off_start and cin_dt.time() <= grace_window:
-                                                if grace_used_this_month < grace_limit:
-                                                    # Free Grace used, just increment counter
-                                                    grace_used_this_month += 1
-                                                else:
-                                                    # Grace Exhausted -> Deduct 0.5 Day
+                                        if (is_late or is_short) and not m.LeaveApplication.objects.filter(
+                                                employee=employee, start_date=att_date).exists():
+                                            cl_type = m.LeaveType.objects.filter(code='CL',
+                                                                                 company=employee.company).first()
+                                            if cl_type:
+                                                if is_short:
                                                     lv.apply_leave(employee, cl_type, att_date, att_date,
                                                                    day_type='half',
-                                                                   reason="Auto-Deduct: Grace Exhausted")
+                                                                   reason="Auto-Deduct: Short Work Duration / Missing Punch")
                                                     success_leaves += 1
+                                                elif cin_dt.time() > grace_window:
+                                                    lv.apply_leave(employee, cl_type, att_date, att_date,
+                                                                   day_type='half',
+                                                                   reason="Auto-Deduct: Late Arrival")
+                                                    success_leaves += 1
+                                                elif off_start < cin_dt.time() <= grace_window:
+                                                    if grace_used_this_month < grace_limit:
+                                                        grace_used_this_month += 1
+                                                    else:
+                                                        lv.apply_leave(employee, cl_type, att_date, att_date,
+                                                                       day_type='half',
+                                                                       reason="Auto-Deduct: Grace Exhausted")
+                                                        success_leaves += 1
                             except Exception:
                                 continue
 
-                self.stdout.write(self.style.SUCCESS(f"Finished Employee: {employee.full_name}"))
+            if skipped_employees:
+                self.stdout.write(self.style.WARNING(
+                    f"\nSkipped {len(skipped_employees)} unmatched employee rows:\n{', '.join(skipped_employees[:10])}..."))
 
             self.stdout.write(self.style.SUCCESS(
-                f"\n--- SYNC COMPLETE ---\n- Punches: {success_punches}\n- Auto-Leaves: {success_leaves}\n- Status: READY FOR PAYROLL"
+                f"\n--- SYNC COMPLETE ---\n- Total Punches Processed: {success_punches}\n- Total Auto-Leaves: {success_leaves}\n- Status: READY FOR PAYROLL"
             ))
 
         except Exception as e:

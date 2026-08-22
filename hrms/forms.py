@@ -257,9 +257,9 @@ class LeaveTypeForm(BootstrapModelForm):
     class Meta:
         model = m.LeaveType
         fields = [
-            'company', 'name', 'code', 'days_per_year', 'is_paid', 'is_carry_forward',
-            'max_carry_forward', 'max_consecutive_days', 'requires_approval', 'requires_document',
-            'applicable_gender', 'description',
+            'company', 'name', 'code', 'allocation_mode', 'days_per_year', 'is_paid', 'is_carry_forward',
+            'max_carry_forward', 'max_consecutive_days', 'min_consecutive_days', 'requires_approval',
+            'requires_document', 'requires_relationship', 'requires_stage', 'applicable_gender', 'description',
         ]
 
 
@@ -275,11 +275,14 @@ class LeaveApplicationForm(BootstrapModelForm):
     """Self-service: the employee applying is fixed by the view, not a form field."""
     class Meta:
         model = m.LeaveApplication
-        fields = ['leave_type', 'day_type','start_date', 'end_date', 'reason']
+        fields = [
+            'leave_type', 'day_type', 'start_date', 'end_date', 'reason',
+            'supporting_document', 'relationship', 'leave_stage',
+        ]
         widgets = {
             'start_date': forms.DateInput(attrs={'type': 'date'}),
             'end_date': forms.DateInput(attrs={'type': 'date'}),
-            'reason': forms.Textarea(attrs={'rows': 3}),
+            'reason': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Reason for leave...'}),
         }
 
     def clean(self):
@@ -289,7 +292,6 @@ class LeaveApplicationForm(BootstrapModelForm):
         end_date = cleaned_data.get('end_date')
 
         if day_type == 'half':
-            # For half day, end date must be same as start date
             cleaned_data['end_date'] = start_date
         elif start_date and end_date and end_date < start_date:
             raise forms.ValidationError('End date cannot be before start date.')
@@ -303,50 +305,22 @@ class LeaveApplicationHRForm(LeaveApplicationForm):
         fields = ['employee'] + LeaveApplicationForm.Meta.fields
 
 
-class LeaveApplicationForm(forms.ModelForm):
-    class Meta:
-        model = m.LeaveApplication
-        fields = ['employee', 'leave_type', 'day_type', 'start_date', 'end_date', 'reason']
-
-    def clean(self):
-        cleaned_data = super().clean()
-        day_type = cleaned_data.get('day_type')
-        start_date = cleaned_data.get('start_date')
-        end_date = cleaned_data.get('end_date')
-
-        if day_type == 'half':
-            # 1. Force total_days to be 0.5
-            self.instance.total_days = 0.5
-            # 2. For half day, end_date must be the same as start_date
-            cleaned_data['end_date'] = start_date
-        else:
-            # 3. Standard calculation for Full Days
-            if start_date and end_date:
-                delta = (end_date - start_date).days + 1
-                self.instance.total_days = delta
-
-        return cleaned_data
-
 class LeaveRejectForm(forms.Form):
     rejection_reason = forms.CharField(
-        widget=forms.Textarea(attrs={'rows': 2, 'class': 'form-control',
-                                      'placeholder': 'Reason for rejection (optional)'}),
-        required=False,
+        widget=forms.Textarea(attrs={'rows': 3, 'class': 'form-control',
+                                      'placeholder': 'Mandatory reason for rejection...'}),
+        required=True,
+        help_text='Please provide a clear reason for the rejection.'
     )
 
-from django import forms
-from .models import EmployeeLeaveBalance
 
-class LeaveBalanceForm(forms.ModelForm):
-    class Meta:
-        model = EmployeeLeaveBalance
-        fields = [
-            'bereavement_leave', 'menstrual_leave', 'sick_leave',
-            'earned_leave', 'casual_leave', 'comp_off'
-        ]
-        # widgets = {
-        #     'status': forms.Select(choices=[('Active', 'Active'), ('Left', 'Left'), ('Terminated', 'Terminated')]),
-        # }
+class RejectionModalForm(forms.Form):
+    """Universal rejection form enforcing mandatory remarks."""
+    rejection_reason = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3, 'class': 'form-control',
+                                      'placeholder': 'Mandatory reason / remarks for rejection...'}),
+        required=True,
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -613,26 +587,17 @@ class ConvertToEmployeeForm(forms.Form):
 class AssetForm(BootstrapModelForm):
     class Meta:
         model = m.Asset
-        fields = ['company', 'employee', 'name', 'asset_type', 'serial_number',
-                  'purchase_date', 'status', 'assigned_on', 'remarks']
-        widgets = {
-            'purchase_date': forms.DateInput(attrs={'type': 'date'}),
-            'assigned_on': forms.DateInput(attrs={'type': 'date'}),
-        }
-# Assuming BootstrapModelForm is your base class that adds 'form-control' classes
-class AssetForm(BootstrapModelForm):
-    class Meta:
-        model = m.Asset
-        # Included the user's requested fields + device_password
         fields = [
             'company', 'category', 'name', 'asset_type', 'serial_number',
-            'sim', 'phone_number', 'device_password', 'employee',
-            'status', 'purchase_date', 'assigned_on', 'remarks'
+            'sim', 'phone_number', 'device_password', 'additional_details', 'employee',
+            'status', 'purchase_date', 'assigned_on', 'warranty_expiry',
+            'vendor_name', 'vendor_contact', 'invoice_document', 'remarks'
         ]
 
         widgets = {
             'purchase_date': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
             'assigned_on': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
+            'warranty_expiry': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
             'device_password': forms.TextInput(attrs={
                 'placeholder': 'Enter login password or PIN',
                 'class': 'form-control'
@@ -642,8 +607,12 @@ class AssetForm(BootstrapModelForm):
             'serial_number': forms.TextInput(attrs={'placeholder': 'Enter Unique Serial Number'}),
             'sim': forms.TextInput(attrs={'placeholder': 'SIM Number or Provider'}),
             'phone_number': forms.TextInput(attrs={'placeholder': 'Phone number associated'}),
+            'vendor_name': forms.TextInput(attrs={'placeholder': 'Vendor / Supplier name'}),
+            'vendor_contact': forms.TextInput(attrs={'placeholder': 'Vendor phone or email'}),
+            'additional_details': forms.Textarea(attrs={'rows': 2, 'placeholder': 'OS, RAM, Processor, etc.'}),
             'remarks': forms.Textarea(attrs={'rows': 2, 'placeholder': 'Optional notes about asset condition...'}),
             'company': forms.Select(attrs={'class': 'form-select'}),
+            'category': forms.Select(attrs={'class': 'form-select'}),
             'employee': forms.Select(attrs={'class': 'form-select'}),
             'status': forms.Select(attrs={'class': 'form-select'}),
         }
@@ -651,9 +620,111 @@ class AssetForm(BootstrapModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['category'].queryset = m.AssetCategory.objects.all()
-        # Professional Touch: If status is 'Available', hide assigned_on or make it optional
         self.fields['employee'].empty_label = "--- Select Employee (Leave blank if unassigned) ---"
-        # self.fields['asset_type'].help_text = "Enter the category of the device."
+
+
+class AssetReturnForm(forms.Form):
+    """Form used when returning/unassigning an asset."""
+    returned_in_good_condition = forms.ChoiceField(
+        choices=[('yes', 'Yes — In Good Condition'), ('no', 'No — Damaged / Missing Parts')],
+        widget=forms.RadioSelect(attrs={'class': 'form-check-input'}),
+        initial='yes',
+        label='Return Condition'
+    )
+    return_remarks = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3, 'class': 'form-control',
+                                      'placeholder': 'Mandatory remarks if asset is damaged or missing items...'}),
+        required=False,
+        label='Condition Notes / Remarks'
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        condition = cleaned_data.get('returned_in_good_condition')
+        remarks = (cleaned_data.get('return_remarks') or '').strip()
+        if condition == 'no' and not remarks:
+            raise forms.ValidationError('Remarks are mandatory when an asset is not returned in good condition.')
+        return cleaned_data
+
+
+# ---------------------------------------------------------------------------
+# Attendance Regularization & Punch Edit Forms (Module D)
+# ---------------------------------------------------------------------------
+class PunchRegularizationRequestForm(BootstrapModelForm):
+    class Meta:
+        model = m.PunchRegularizationRequest
+        fields = ['attendance_date', 'requested_check_in', 'requested_check_out', 'reason', 'proof_document']
+        widgets = {
+            'attendance_date': forms.DateInput(attrs={'type': 'date'}),
+            'requested_check_in': forms.DateTimeInput(attrs={'type': 'datetime-local'}),
+            'requested_check_out': forms.DateTimeInput(attrs={'type': 'datetime-local'}),
+            'reason': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Detailed explanation for regularizing this punch...'}),
+        }
+
+
+class PunchRegularizationReviewForm(forms.Form):
+    status = forms.ChoiceField(choices=[('approved', 'Approve'), ('rejected', 'Reject')])
+    rejection_reason = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3, 'class': 'form-control', 'placeholder': 'Mandatory if rejecting...'}),
+        required=False
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        status = cleaned_data.get('status')
+        reason = (cleaned_data.get('rejection_reason') or '').strip()
+        if status == 'rejected' and not reason:
+            raise forms.ValidationError('Rejection reason is mandatory.')
+        return cleaned_data
+
+
+class ManualPunchEditForm(forms.ModelForm):
+    """Admin manual punch edit with mandatory edit_reason."""
+    edit_reason = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 2, 'class': 'form-control',
+                                      'placeholder': 'Mandatory audit reason for manual punch modification...'}),
+        required=True,
+        label='Reason for Edit (Audit Trail)'
+    )
+
+    class Meta:
+        model = m.AttendanceRecord
+        fields = ['check_in', 'check_out', 'status', 'edit_reason']
+        widgets = {
+            'check_in': forms.DateTimeInput(attrs={'type': 'datetime-local', 'class': 'form-control'}),
+            'check_out': forms.DateTimeInput(attrs={'type': 'datetime-local', 'class': 'form-control'}),
+            'status': forms.Select(attrs={'class': 'form-select'}),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Policies & Notices Forms (Module F)
+# ---------------------------------------------------------------------------
+class PolicyForm(BootstrapModelForm):
+    class Meta:
+        model = m.Policy
+        fields = [
+            'company', 'title', 'category', 'description', 'document',
+            'effective_from', 'effective_to', 'is_mandatory', 'is_active', 'quiz_data'
+        ]
+        widgets = {
+            'effective_from': forms.DateInput(attrs={'type': 'date'}),
+            'effective_to': forms.DateInput(attrs={'type': 'date'}),
+            'description': forms.Textarea(attrs={'rows': 3}),
+            'quiz_data': forms.HiddenInput(),
+        }
+
+
+class CompanyNoticeForm(BootstrapModelForm):
+    class Meta:
+        model = m.CompanyNotice
+        fields = ['company', 'title', 'category', 'message', 'document', 'notice_date', 'expiry_date', 'is_active']
+        widgets = {
+            'notice_date': forms.DateInput(attrs={'type': 'date'}),
+            'expiry_date': forms.DateInput(attrs={'type': 'date'}),
+            'message': forms.Textarea(attrs={'rows': 4}),
+        }
+
 
 # ---------------------------------------------------------------------------
 # Performance Reviews

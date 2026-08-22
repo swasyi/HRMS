@@ -82,15 +82,19 @@ urlpatterns = [
          views.OfferTemplatePreviewView.as_view(), name='offertemplate_preview'),
 
     # --- Attendance ---
-
     path('attendance/records/', views.AttendanceRecordListView.as_view(), name='attendance_records'),
+    path('attendance/matrix/', views.AttendanceMatrixView.as_view(), name='attendance_matrix'),
     path('attendance/records/add/', views.AttendanceRecordCreateView.as_view(), name='attendance_record_add'),
     path('attendance/records/<int:pk>/edit/', views.AttendanceRecordUpdateView.as_view(), name='attendance_record_edit'),
+    path('attendance/punch/edit-ajax/', views.manual_punch_edit_ajax, name='manual_punch_edit_ajax'),
+    path('attendance/regularize/', views.PunchRegularizationListView.as_view(), name='regularization_list'),
+    path('attendance/regularize/apply/', views.PunchRegularizationCreateView.as_view(), name='regularization_apply'),
+    path('attendance/regularize/<int:pk>/review/', views.PunchRegularizationReviewView.as_view(), name='regularization_review'),
+
     path('attendance/policy/', views.AttendancePolicyListView.as_view(), name='attendance_policy'),
     path('attendance/policy/<int:pk>/configure/', views.AttendancePolicyFormView.as_view(), name='attendance_policy_configure'),
     path('attendance/policy/add/', views.AttendancePolicyCreateView.as_view(), name='attendance_policy_create'),
     path('attendance/policy-version/<int:pk>/edit/', views.AttendancePolicyUpdateView.as_view(), name='attendance_policy_edit'),
-
 
     path('attendance/me/', views.MyAttendanceView.as_view(), name='my_attendance'),
     path('attendance/check-in/', views.CheckInView.as_view(), name='attendance_check_in'),
@@ -113,6 +117,8 @@ urlpatterns = [
     # --- Leave ---
     path('leave/', views.LeaveApplicationListView.as_view(), name='my_leave'),
     path('leave/apply/', views.LeaveApplicationCreateView.as_view(), name='leave_apply'),
+    path('leave/<int:pk>/', views.LeaveDetailView.as_view(), name='leave_detail'),
+    path('leave/<int:pk>/reapply/', views.LeaveReapplyView.as_view(), name='leave_reapply'),
     path('leave/<int:pk>/approve/', views.LeaveApproveView.as_view(), name='leave_approve'),
     path('leave/<int:pk>/reject/', views.LeaveRejectView.as_view(), name='leave_reject'),
     path('leave/<int:pk>/cancel/', views.LeaveCancelView.as_view(), name='leave_cancel'),
@@ -158,10 +164,18 @@ urlpatterns = [
     path('payroll/payslips/<int:pk>/pdf/', views.PaySlipPDFView.as_view(), name='payslip_pdf'),
 
     # --- Policies & Notices ---
-    path('policies/', views.coming_soon, {'active_group': 'policy', 'active_item': 'policy',
-                                           'title': 'Policies'}, name='policy_list'),
-    path('notices/', views.coming_soon, {'active_group': 'policy', 'active_item': 'notice',
-                                          'title': 'Company Notices'}, name='notice_list'),
+    path('policies/', views.PolicyListView.as_view(), name='policy_list'),
+    path('policies/manage/', views.PolicyManagementView.as_view(), name='policy_manage'),
+    path('policies/add/', views.PolicyCreateView.as_view(), name='policy_add'),
+    path('policies/<int:pk>/', views.PolicyDetailView.as_view(), name='policy_detail'),
+    path('policies/<int:pk>/edit/', views.PolicyUpdateView.as_view(), name='policy_edit'),
+    path('policies/<int:pk>/delete/', views.PolicyDeleteView.as_view(), name='policy_delete'),
+
+    path('notices/', views.CompanyNoticeListView.as_view(), name='notice_list'),
+    path('notices/add/', views.CompanyNoticeCreateView.as_view(), name='notice_add'),
+    path('notices/<int:pk>/', views.CompanyNoticeDetailView.as_view(), name='notice_detail'),
+    path('notices/<int:pk>/edit/', views.CompanyNoticeUpdateView.as_view(), name='notice_edit'),
+    path('notices/<int:pk>/delete/', views.CompanyNoticeDeleteView.as_view(), name='notice_delete'),
 
     # --- Assets ---
     path('assets/', views.AssetListView.as_view(), name='asset_list'),
@@ -170,6 +184,7 @@ urlpatterns = [
     path('assets/<int:pk>/edit/', views.AssetUpdateView.as_view(), name='asset_edit'),
     path('assets/<int:pk>/return/', views.AssetReturnView.as_view(), name='asset_return'),
     path('assets/<int:pk>/', views.AssetDetailView.as_view(), name='asset_detail'),
+
     # --- Performance ---
     path('performance/', views.PerformanceReviewListView.as_view(), name='performance_list'),
     path('performance/add/', views.PerformanceReviewCreateView.as_view(), name='performance_add'),
