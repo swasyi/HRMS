@@ -588,15 +588,31 @@ def refund_leave_on_punch(employee, attendance_date, attendance_status):
 # ---------------------------------------------------------------------------
 # LEAVE BANK SYNC (Consolidated)
 # ---------------------------------------------------------------------------
-def sync_employee_leave_bank(employee):
+def get_financial_year(target_date=None):
+    """
+    Returns (fy_start_date, fy_end_date, fy_year_int) for the given date (default today).
+    Indian Financial Year: April 1 to March 31.
+    """
+    from datetime import date as dt_date
+    d = target_date or dt_date.today()
+    if d.month >= 4:
+        fy_start = dt_date(d.year, 4, 1)
+        fy_end = dt_date(d.year + 1, 3, 31)
+        fy_year = d.year
+    else:
+        fy_start = dt_date(d.year - 1, 4, 1)
+        fy_end = dt_date(d.year, 3, 31)
+        fy_year = d.year - 1
+    return fy_start, fy_end, fy_year
+
+
+def sync_employee_leave_bank(employee, target_date=None):
     """
     Calculates annual leave entitlement based on Office Rules:
     - Intern Male: 0
     - Intern Female: 2 Menstrual, 0 others
-    - Full Time: Fixed SL/BL, Pro-rated CL/EL based on Confirmation Date.
+    - Full Time: Fixed SL/BL, Pro-rated CL/EL based on Confirmation Date within the active FY.
     """
-    from datetime import date as dt_date
-
     bank, _ = m.EmployeeLeaveBalance.objects.get_or_create(e_name=employee)
 
     def get_days(code):
@@ -626,18 +642,19 @@ def sync_employee_leave_bank(employee):
     if not conf_date:
         return
 
-    # Fixed Financial Year for 2026-2027
-    FY_START = dt_date(2026, 4, 1)
-    FY_END = dt_date(2027, 3, 31)
+    # Dynamic Financial Year (April 1 to March 31)
+    fy_start, fy_end, _ = get_financial_year(target_date)
 
     bank.sick_leave = base_sl
     bank.bereavement_leave = base_bl
     bank.menstrual_leave = base_mtl if employee.gender == 'F' else 0.0
 
-    if conf_date <= FY_START:
+    if conf_date <= fy_start:
         months_left = 12
+    elif conf_date > fy_end:
+        months_left = 0
     else:
-        months_left = (FY_END.year - conf_date.year) * 12 + (FY_END.month - conf_date.month) + 1
+        months_left = (fy_end.year - conf_date.year) * 12 + (fy_end.month - conf_date.month) + 1
         months_left = min(max(months_left, 0), 12)
 
     bank.casual_leave = round((base_cl / 12.0) * months_left, 1)

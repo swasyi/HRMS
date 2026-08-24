@@ -9,8 +9,8 @@ from django.contrib.auth import get_user_model
 import re
 from django.db.models import Max
 from decimal import Decimal
-from datetime import datetime, date
-
+from datetime import datetime, date, time
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -48,6 +48,7 @@ class Company(TimeStampedModel):
 
     class Meta:
         verbose_name_plural = 'Companies'
+        ordering = ['name']
 
     def __str__(self):
         return self.name
@@ -277,12 +278,8 @@ class Employee(TimeStampedModel):
 
     @property
     def full_name(self):
-        return f'{self.first_name} {self.last_name}'.strip()
-
-@property
-def full_name(self):
-    name = f"{self.first_name} {self.last_name}".strip()
-    return name if name else self.email  # Returns email if name is blank
+        name = f"{self.first_name} {self.last_name}".strip()
+        return name if name else (self.email or self.employee_code)
 
 
 class EmployeeBankDetail(TimeStampedModel):
@@ -301,12 +298,22 @@ class EmployeeBankDetail(TimeStampedModel):
 
 class EmployeeDocument(TimeStampedModel):
     class DocumentType(models.TextChoices):
+        AADHAAR = 'aadhaar', 'Aadhaar Card'
+        PAN = 'pan', 'PAN Card'
+        OFFER_LETTER = 'offer_letter', 'Offer Letter'
+        RESUME = 'resume', 'Resume'
+        EXPERIENCE = 'experience_letter', 'Experience Letter'
+        MARKSHEET = 'marksheet', '10th/12th Marksheet'
+        BANK_PROOF = 'bank_proof', 'Bank Proof'
         ID_PROOF = 'id_proof', 'ID Proof'
         ADDRESS_PROOF = 'address_proof', 'Address Proof'
         EDUCATION = 'education', 'Education Certificate'
-        OFFER_LETTER = 'offer_letter', 'Offer Letter'
-        RESUME = 'resume', 'Resume'
         OTHER = 'other', 'Other'
+
+    class VerificationStatus(models.TextChoices):
+        PENDING = 'pending', 'Pending Verification'
+        VERIFIED = 'verified', 'Verified'
+        REJECTED = 'rejected', 'Rejected'
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='documents')
     document_type = models.CharField(max_length=30, choices=DocumentType.choices)
@@ -314,6 +321,20 @@ class EmployeeDocument(TimeStampedModel):
     description = models.CharField(max_length=255, blank=True)
     issued_on = models.DateField(null=True, blank=True)
     expiry_on = models.DateField(null=True, blank=True)
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.PENDING
+    )
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='verified_documents'
+    )
+    verified_on = models.DateTimeField(null=True, blank=True)
+    rejection_remarks = models.TextField(blank=True)
 
     def __str__(self):
         return f'{self.employee} - {self.get_document_type_display()}'
@@ -748,60 +769,71 @@ class AttendanceRecord(TimeStampedModel):
         ordering = ['-attendance_date']
 
     def save(self, *args, **kwargs):
-        # 1. Get the correct policy for this specific day
-        policy = self.employee.company.get_policy_for_date(self.attendance_date)
+        # 1. Safe Policy Resolution
+        policy = None
+        if self.employee and getattr(self.employee, 'company', None):
+            if hasattr(self.employee.company, 'get_policy_for_date'):
+                try:
+                    policy = self.employee.company.get_policy_for_date(self.attendance_date)
+                except Exception:
+                    policy = None
+            if not policy:
+                policy = AttendancePolicy.objects.filter(company=self.employee.company).first()
 
-        # 2. Calculate Total Hours
+        # 2. Extract threshold values safely
+        full_day_thresh = Decimal(str(getattr(policy, 'full_day_threshold_hours', '8.0') or '8.0'))
+        half_day_thresh = Decimal(str(getattr(policy, 'half_day_threshold_hours', '4.0') or '4.0'))
+        ot_thresh = getattr(policy, 'overtime_threshold_hours', None)
+        ot_threshold_hours = Decimal(str(ot_thresh)) if ot_thresh is not None else None
+
+        # 3. Calculate Gross Hours & Status when Check-In and Check-Out exist
         if self.check_in and self.check_out:
             diff = self.check_out - self.check_in
-            self.total_hours = Decimal(diff.total_seconds() / 3600).quantize(Decimal('0.01'))
+            gross_hours = Decimal(str(diff.total_seconds() / 3600)).quantize(Decimal('0.01'))
+            self.total_hours = max(Decimal('0.00'), gross_hours)
 
-            # 3. Apply Thresholds from the Policy
-            if self.total_hours >= policy.full_day_threshold_hours:
-                self.status = self.Status.PRESENT
-                self.is_half_day = False
-            elif self.total_hours >= policy.half_day_threshold_hours:
+            # Apply thresholds if not already marked as specialized status
+            if self.status not in (self.Status.ON_LEAVE, self.Status.HOLIDAY, self.Status.WEEK_OFF):
+                if self.total_hours >= full_day_thresh:
+                    self.status = self.Status.PRESENT
+                    self.is_half_day = False
+                elif self.total_hours >= half_day_thresh:
+                    self.status = self.Status.HALF_DAY
+                    self.is_half_day = True
+                else:
+                    self.status = self.Status.ABSENT
+                    self.is_half_day = False
+
+                # Overtime boolean flag
+                if ot_threshold_hours is not None:
+                    self.is_overtime = bool(self.total_hours >= ot_threshold_hours)
+                else:
+                    self.is_overtime = False
+
+        elif self.check_in and not self.check_out:
+            # Single punch scenario (checked in only)
+            self.total_hours = Decimal('0.00')
+            self.is_overtime = False
+            if self.status not in (self.Status.ON_LEAVE, self.Status.HOLIDAY, self.Status.WEEK_OFF):
                 self.status = self.Status.HALF_DAY
                 self.is_half_day = True
-            else:
-                self.status = self.Status.ABSENT
-                self.is_half_day = False
 
-            # 4. Check for Overtime
-            self.is_overtime = self.total_hours >= policy.overtime_threshold_hours
+        # 4. Calculate Late Arrival Minutes
+        office_start = getattr(policy, 'office_start_time', None) or time(9, 0)
+        if self.check_in and office_start:
+            local_in = timezone.localtime(self.check_in)
+            sched_start = timezone.make_aware(
+                datetime.combine(self.attendance_date, office_start),
+                timezone.get_current_timezone()
+            )
+            if local_in > sched_start:
+                late_secs = (local_in - sched_start).total_seconds()
+                self.late_minutes = int(late_secs // 60)
+            else:
+                self.late_minutes = 0
 
         super().save(*args, **kwargs)
 
-    # models.py -> AttendanceRecord
-
-    def save(self, *args, **kwargs):
-        # 1. Get the policy (contains thresholds like 8.0 for Full Day)
-        policy = self.employee.company.get_policy_for_date(self.attendance_date)
-
-        if self.check_in and self.check_out:
-            # 2. Calculate GROSS duration (Total time in office)
-            diff = self.check_out - self.check_in
-            gross_hours = Decimal(diff.total_seconds() / 3600).quantize(Decimal('0.01'))
-
-            # 3. Set total_hours to Gross Time so it includes lunch
-            self.total_hours = gross_hours
-
-            # 4. Use Gross Time to determine Status
-            # If they were in the office for 8+ hours total, it's a Full Day
-            if self.total_hours >= policy.full_day_threshold_hours:
-                self.status = self.Status.PRESENT
-                self.is_half_day = False
-            elif self.total_hours >= policy.half_day_threshold_hours:
-                self.status = self.Status.HALF_DAY
-                self.is_half_day = True
-            else:
-                self.status = self.Status.ABSENT
-                self.is_half_day = False
-
-            # 5. Check for Overtime
-            self.is_overtime = self.total_hours >= policy.overtime_threshold_hours
-
-        super().save(*args, **kwargs)
     def __str__(self):
         return f'{self.employee} - {self.attendance_date}'
 

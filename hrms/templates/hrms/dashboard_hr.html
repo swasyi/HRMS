@@ -668,6 +668,7 @@
         <div class="col-lg-4 col-xl-3">
 
             <!-- Quick Action Buttons -->
+<!-- Quick Action Buttons -->
             <div class="card attendo-card shadow-sm bg-dark text-white p-3 mb-4 border-0" style="background: linear-gradient(145deg, #0f172a, #1e293b) !important;">
                 <div class="d-flex align-items-center justify-content-between mb-3">
                     <h6 class="fw-bold mb-0 text-white"><i class="bi bi-lightning-charge-fill text-warning me-2"></i>Quick Actions</h6>
@@ -677,10 +678,14 @@
                     <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary btn-sm rounded-3 text-start py-2 fw-medium shadow-sm">
                         <i class="bi bi-person-plus-fill me-2"></i> Add New Employee
                     </a>
+                    <!-- NEW LEAVE APPLICATION BUTTON -->
+                    <a href="{% url 'hrms:my_leave' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
+                        <i class="bi bi-calendar2-plus me-2 text-info"></i> Leave Applications
+                    </a>
                     <a href="{% url 'hrms:notice_list' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
                         <i class="bi bi-megaphone-fill me-2"></i> Post Notice / Memo
                     </a>
-                    <a href="{% url 'hrms:payroll_process' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
+                    <a href="{% url 'hrms:payrollrun_list' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
                         <i class="bi bi-cash-stack me-2"></i> Run Payroll Run
                     </a>
                     <a href="{% url 'hrms:attendance_records' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
@@ -688,7 +693,6 @@
                     </a>
                 </div>
             </div>
-
             <!-- Celebrations (Birthdays This Month) -->
             <div class="card attendo-card shadow-sm mb-4 border-0">
                 <div class="card-header bg-white py-3 px-3 border-bottom d-flex align-items-center justify-content-between">

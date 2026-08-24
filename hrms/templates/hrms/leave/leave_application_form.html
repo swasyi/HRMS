@@ -1,110 +1,144 @@
 {% extends "hrms/base.html" %}
-{% block title %}New Leave Request{% endblock %}
+{% load static %}
 
-{% block extra_css %}
-<style>
-    .apply-card { border: none; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
-    .form-label { font-weight: 700; font-size: 0.85rem; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; }
-    .input-group-text { background: #f8fafc; border-right: none; }
-    .form-control, .form-select { border-left: none; background: #f8fafc; }
-    .form-control:focus, .form-select:focus { background: #fff; box-shadow: none; border-color: #cbd5e1; }
-
-    @media (max-width: 768px) {
-        .apply-card { border-radius: 0; box-shadow: none; }
-        .container { padding: 0; }
-        .btn-submit { width: 100%; margin-bottom: 10px; }
-        .btn-cancel { width: 100%; }
-    }
-</style>
-{% endblock %}
+{% block title %}Apply for Leave — HRMS{% endblock %}
 
 {% block content %}
-<div class="container py-md-5">
-    <div class="row justify-content-center">
-        <div class="col-12 col-md-8 col-lg-6">
-            <div class="card apply-card">
-                <div class="card-body p-4 p-md-5">
-                    <div class="text-center mb-4">
-                        <div class="h4 fw-bold mb-1">Apply for Leave</div>
-                        <p class="text-muted small">Submit your request for manager approval.</p>
-                    </div>
+<div class="container-fluid px-4 py-3">
 
-                    <form method="post" id="leaveForm">
-                        {% csrf_token %}
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb small">
+      <li class="breadcrumb-item"><a href="{% url 'hrms:my_leave' %}" class="text-decoration-none">Leaves</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Apply for Leave</li>
+    </ol>
+  </nav>
 
-                        {% if form.non_field_errors %}
-                            <div class="alert alert-danger small">{{ form.non_field_errors }}</div>
-                        {% endif %}
-
-                        <!-- Employee (Hidden if standard user, visible if HR) -->
-                        <div class="mb-4">
-                            <label class="form-label">Employee</label>
-                            {{ form.employee }}
-                        </div>
-
-                        <div class="row">
-                            <div class="col-md-6 mb-4">
-                                <label class="form-label">Start Date</label>
-                                {{ form.start_date }}
-                            </div>
-                            <!-- This div will hide automatically for Half Days -->
-                            <div class="col-md-6 mb-4" id="endDateWrapper">
-                                <label class="form-label">End Date</label>
-                                {{ form.end_date }}
-                            </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6 mb-4">
-                                <label class="form-label">Leave Type</label>
-                                {{ form.leave_type }}
-                            </div>
-                            <div class="col-md-6 mb-4">
-                                <label class="form-label">Duration Type</label>
-                                {{ form.day_type }}
-                            </div>
-                        </div>
-
-                        <div class="mb-4">
-                            <label class="form-label">Reason / Remarks</label>
-                            {{ form.reason }}
-                            <div class="form-text small">Please be specific to help with approval.</div>
-                        </div>
-
-                        <div class="d-flex flex-column flex-md-row gap-2 mt-4">
-                            <button type="submit" class="btn btn-primary rounded-pill px-5 fw-bold btn-submit">Submit Application</button>
-                            <a href="{% url 'hrms:my_leave' %}" class="btn btn-light rounded-pill px-4 btn-cancel">Cancel</a>
-                        </div>
-                    </form>
-                </div>
-            </div>
+  <div class="row justify-content-center">
+    <div class="col-12 col-md-9 col-lg-7">
+      <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+        <div class="card-header bg-primary text-white p-4 border-0">
+          <h4 class="fw-bold mb-1"><i class="bi bi-calendar-plus me-2"></i>Apply for Leave</h4>
+          <p class="text-white-50 small mb-0">Submit your leave request for reporting manager and HR review.</p>
         </div>
+
+        <div class="card-body p-4 p-md-5">
+          <form method="post" enctype="multipart/form-data" id="leaveForm">
+            {% csrf_token %}
+
+            {% if form.non_field_errors %}
+              <div class="alert alert-danger border-0 rounded-3 small mb-4">{{ form.non_field_errors }}</div>
+            {% endif %}
+
+            {% if form.employee %}
+              <div class="mb-3">
+                <label class="form-label small fw-bold">Employee*</label>
+                {{ form.employee }}
+                {% if form.employee.errors %}<div class="text-danger small mt-1">{{ form.employee.errors|striptags }}</div>{% endif %}
+              </div>
+            {% endif %}
+
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Leave Type*</label>
+                {{ form.leave_type }}
+                {% if form.leave_type.errors %}<div class="text-danger small mt-1">{{ form.leave_type.errors|striptags }}</div>{% endif %}
+              </div>
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Duration Type*</label>
+                {{ form.day_type }}
+                {% if form.day_type.errors %}<div class="text-danger small mt-1">{{ form.day_type.errors|striptags }}</div>{% endif %}
+              </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Start Date*</label>
+                {{ form.start_date }}
+                {% if form.start_date.errors %}<div class="text-danger small mt-1">{{ form.start_date.errors|striptags }}</div>{% endif %}
+              </div>
+              <div class="col-md-6" id="endDateWrapper">
+                <label class="form-label small fw-bold">End Date*</label>
+                {{ form.end_date }}
+                {% if form.end_date.errors %}<div class="text-danger small mt-1">{{ form.end_date.errors|striptags }}</div>{% endif %}
+              </div>
+            </div>
+
+            {% if form.relationship %}
+              <div class="mb-3">
+                <label class="form-label small fw-bold">Relationship (For Bereavement Leave)</label>
+                {{ form.relationship }}
+                {% if form.relationship.errors %}<div class="text-danger small mt-1">{{ form.relationship.errors|striptags }}</div>{% endif %}
+              </div>
+            {% endif %}
+
+            {% if form.leave_stage %}
+              <div class="mb-3">
+                <label class="form-label small fw-bold">Leave Stage (Pre / Post)</label>
+                {{ form.leave_stage }}
+                {% if form.leave_stage.errors %}<div class="text-danger small mt-1">{{ form.leave_stage.errors|striptags }}</div>{% endif %}
+              </div>
+            {% endif %}
+
+            <div class="mb-3">
+              <label class="form-label small fw-bold">Reason for Leave*</label>
+              {{ form.reason }}
+              {% if form.reason.errors %}<div class="text-danger small mt-1">{{ form.reason.errors|striptags }}</div>{% endif %}
+              <div class="form-text small">Please be specific to assist reporting manager review.</div>
+            </div>
+
+            {% if form.supporting_document %}
+              <div class="mb-4">
+                <label class="form-label small fw-bold">Supporting Document (Medical / Proof if applicable)</label>
+                {{ form.supporting_document }}
+                {% if form.supporting_document.errors %}<div class="text-danger small mt-1">{{ form.supporting_document.errors|striptags }}</div>{% endif %}
+              </div>
+            {% endif %}
+
+            <div class="d-flex justify-content-end gap-2 pt-3 border-top">
+              <a href="{% url 'hrms:my_leave' %}" class="btn btn-light rounded-pill px-4">Cancel</a>
+              <button type="submit" class="btn btn-primary rounded-pill px-5 fw-bold shadow-sm">
+                <i class="bi bi-send me-1"></i>Submit Application
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
+  </div>
+
 </div>
 
-<!-- Smart Toggle Script -->
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const dayTypeSelect = document.querySelector('select[name="day_type"]');
-        const endDateWrapper = document.getElementById('endDateWrapper'); // The div around your End Date field
-        const endDateInput = document.querySelector('input[name="end_date"]');
+  document.addEventListener('DOMContentLoaded', function() {
+    const dayTypeSelect = document.querySelector('select[name="day_type"]');
+    const endDateWrapper = document.getElementById('endDateWrapper');
+    const startDateInput = document.querySelector('input[name="start_date"]');
+    const endDateInput = document.querySelector('input[name="end_date"]');
 
-        function handleDurationChange() {
-            if (dayTypeSelect.value === 'half') {
-                // If Half Day: Hide End Date (it's irrelevant)
-                endDateWrapper.style.opacity = '0.5';
-                endDateWrapper.style.pointerEvents = 'none';
-                // Optional: Auto-set end date to match start date
-                const startDate = document.querySelector('input[name="start_date"]').value;
-                endDateInput.value = startDate;
-            } else {
-                // If Full Day: Show End Date
-                endDateWrapper.style.opacity = '1';
-                endDateWrapper.style.pointerEvents = 'auto';
-            }
+    function handleDurationChange() {
+      if (dayTypeSelect && endDateWrapper && dayTypeSelect.value === 'half') {
+        endDateWrapper.style.opacity = '0.5';
+        endDateWrapper.style.pointerEvents = 'none';
+        if (startDateInput && endDateInput) {
+          endDateInput.value = startDateInput.value;
         }
+      } else if (endDateWrapper) {
+        endDateWrapper.style.opacity = '1';
+        endDateWrapper.style.pointerEvents = 'auto';
+      }
+    }
 
-        dayTypeSelect.addEventListener('change', handleDurationChange);
-    });
+    if (dayTypeSelect) {
+      dayTypeSelect.addEventListener('change', handleDurationChange);
+    }
+    if (startDateInput) {
+      startDateInput.addEventListener('change', function() {
+        if (dayTypeSelect && dayTypeSelect.value === 'half' && endDateInput) {
+          endDateInput.value = this.value;
+        }
+      });
+    }
+    handleDurationChange();
+  });
 </script>
-
 {% endblock %}

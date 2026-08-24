@@ -125,17 +125,17 @@
             {% if is_hr or is_manager %}
             <div class="col-md-3">
                 <label class="small fw-bold text-muted mb-1">Employee</label>
-                <select name="employee" class="form-select form-select-sm">
+                <select name="employee" id="filterEmployeeSelect" class="form-select form-select-sm">
                     <option value="">All Employees</option>
                     {% for emp in employees %}
-                    <option value="{{ emp.pk }}" {% if filters.employee == emp.pk|stringformat:"s" %}selected{% endif %}>{{ emp.full_name }} ({{ emp.employee_code }})</option>
+                    <option value="{{ emp.pk }}" data-dept-id="{{ emp.department_id|default:'' }}" {% if filters.employee == emp.pk|stringformat:"s" %}selected{% endif %}>{{ emp.full_name }} ({{ emp.employee_code }})</option>
                     {% endfor %}
                 </select>
             </div>
             {% endif %}
             <div class="col-md-2">
                 <label class="small fw-bold text-muted mb-1">Department</label>
-                <select name="department" class="form-select form-select-sm">
+                <select name="department" id="filterDeptSelect" class="form-select form-select-sm">
                     <option value="">All Departments</option>
                     {% for dept in departments %}
                     <option value="{{ dept.pk }}" {% if filters.department == dept.pk|stringformat:"s" %}selected{% endif %}>{{ dept.name }}</option>
@@ -397,6 +397,37 @@
                 if (modalEmpName) modalEmpName.textContent = empName;
                 if (modalForm) modalForm.action = actionUrl;
                 if (reasonInput) reasonInput.value = '';
+            });
+        }
+
+        // Dynamic Department -> Employee Dropdown Chaining
+        const deptSelect = document.getElementById('filterDeptSelect');
+        const empSelect = document.getElementById('filterEmployeeSelect');
+        if (deptSelect && empSelect) {
+            const allEmpOptions = Array.from(empSelect.options).map(opt => ({
+                value: opt.value,
+                text: opt.text,
+                deptId: opt.getAttribute('data-dept-id') || '',
+                selected: opt.selected
+            }));
+
+            deptSelect.addEventListener('change', function() {
+                const selectedDeptId = this.value;
+                const currentEmpVal = empSelect.value;
+                empSelect.innerHTML = '';
+
+                allEmpOptions.forEach(opt => {
+                    if (!opt.value || !selectedDeptId || opt.deptId === selectedDeptId) {
+                        const newOpt = document.createElement('option');
+                        newOpt.value = opt.value;
+                        newOpt.text = opt.text;
+                        newOpt.setAttribute('data-dept-id', opt.deptId);
+                        if (opt.value === currentEmpVal) {
+                            newOpt.selected = true;
+                        }
+                        empSelect.appendChild(newOpt);
+                    }
+                });
             });
         }
     });

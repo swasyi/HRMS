@@ -20,8 +20,10 @@
       <div>
         <div class="name">Oblu HRMS</div>
         <div class="role-pill">
-          {% if hrms_role == ROLE_SUPERADMIN %}Super Admin
-          {% elif hrms_role == ROLE_HR %}HR / Manager
+          {% if request.user.is_superuser %}Super Admin
+          {% elif is_hr_user or hrms_role == 'hr' %}HR Team
+          {% elif is_manager_user or request.user.employee_profile.is_manager or request.user.employee.is_manager %}Manager
+          {% elif is_finance_user or request.user.is_finance or request.user.is_accountant %}Finance
           {% else %}Employee{% endif %}
         </div>
       </div>
@@ -37,7 +39,8 @@
           </a>
         </li>
 
-        {% if hrms_is_hr or request.user.employee_profile.is_manager %}
+        <!-- Manager Team Dashboard (For Managers, HR, and Superadmin) -->
+        {% if is_manager_user or hrms_is_hr or request.user.employee_profile.is_manager or request.user.employee.is_manager %}
         <li class="nav-item">
           <a class="nav-link hrms-toplink {% if active_group == 'manager' %}active{% endif %}"
              href="{% url 'hrms:manager_dashboard' %}">
@@ -46,7 +49,8 @@
         </li>
         {% endif %}
 
-        {% if hrms_is_hr %}
+        <!-- Organisation Settings (HR & Superadmin Only) -->
+        {% if hrms_is_hr or request.user.is_superuser %}
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'organisation' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navOrganisation" role="button"
@@ -63,6 +67,7 @@
         </li>
         {% endif %}
 
+        <!-- Employee Directory / Profile -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'employee' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navEmployee" role="button"
@@ -71,7 +76,7 @@
           </a>
           <div class="collapse {% if active_group == 'employee' %}show{% endif %}" id="navEmployee">
             <ul class="nav flex-column hrms-sublist">
-              {% if hrms_is_hr %}
+              {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:employee_list' %}" class="{% if active_item == 'employee_list' %}current{% endif %}">Directory</a></li>
                 <li><a href="{% url 'hrms:employee_add' %}" class="{% if active_item == 'employee_add' %}current{% endif %}">Add Employee</a></li>
               {% else %}
@@ -82,6 +87,7 @@
           </div>
         </li>
 
+        <!-- Hiring Pipeline -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'hiring' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navHiring" role="button"
@@ -90,7 +96,7 @@
           </a>
           <div class="collapse {% if active_group == 'hiring' %}show{% endif %}" id="navHiring">
             <ul class="nav flex-column hrms-sublist">
-              {% if hrms_is_hr %}
+              {% if hrms_is_hr or request.user.is_superuser %}
               <li><a href="{% url 'hrms:jobposting_list' %}" class="{% if active_item == 'jobposting' %}current{% endif %}">Job Postings</a></li>
               <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}">Candidates</a></li>
               <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}">Applications</a></li>
@@ -101,6 +107,7 @@
           </div>
         </li>
 
+        <!-- Attendance Management -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'attendance' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navAttendance" role="button"
@@ -109,7 +116,7 @@
           </a>
           <div class="collapse {% if active_group == 'attendance' %}show{% endif %}" id="navAttendance">
             <ul class="nav flex-column hrms-sublist">
-              {% if hrms_is_hr %}
+              {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:attendance_matrix' %}" class="{% if active_item == 'attendance_matrix' %}current{% endif %}">Attendance Matrix</a></li>
                 <li><a href="{% url 'hrms:attendance_records' %}" class="{% if active_item == 'attendance_records' %}current{% endif %}">All Records</a></li>
                 <li><a href="{% url 'hrms:attendance_policy' %}" class="{% if active_item == 'attendance_policy' %}current{% endif %}">Policy Settings</a></li>
@@ -123,6 +130,7 @@
           </div>
         </li>
 
+        <!-- Leave Portal -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'leave' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navLeave" role="button"
@@ -131,16 +139,18 @@
           </a>
           <div class="collapse {% if active_group == 'leave' %}show{% endif %}" id="navLeave">
             <ul class="nav flex-column hrms-sublist">
-              <li><a href="{% url 'hrms:my_leave' %}" class="{% if active_item == 'my_leave' %}current{% endif %}">{% if hrms_is_hr %}Leave Applications{% else %}Apply / My Leave{% endif %}</a></li>
+              <li><a href="{% url 'hrms:my_leave' %}" class="{% if active_item == 'my_leave' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}Leave Applications{% else %}Apply / My Leave{% endif %}</a></li>
               <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>
-              {% if hrms_is_hr %}
+              {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
               {% endif %}
-              <li><a href="{% url 'hrms:leave-bank' %}" class="{% if active_item == 'leave_bank' %}current{% endif %}">Leave Bank (Admin)</a></li>
+              <li><a href="{% url 'hrms:leave-bank' %}" class="{% if active_item == 'leave_bank' %}current{% endif %}">Leave Bank</a></li>
             </ul>
           </div>
         </li>
 
+        <!-- Payroll Portal (Visible strictly to HR, Superadmin, or Finance/Accounts) -->
+        {% if request.user.is_superuser or hrms_is_hr or is_finance_user or request.user.is_finance or request.user.is_accountant or request.user.employee.department.name == 'Accounts and operations Department' %}
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'payroll' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navPayroll" role="button"
@@ -149,18 +159,20 @@
           </a>
           <div class="collapse {% if active_group == 'payroll' %}show{% endif %}" id="navPayroll">
             <ul class="nav flex-column hrms-sublist">
-              {% if hrms_is_hr %}
+              {% if hrms_is_hr or request.user.is_superuser or is_finance_user %}
                 <li><a href="{% url 'hrms:salarystructure_list' %}" class="{% if active_item == 'salarystructure' %}current{% endif %}">Salary Structures</a></li>
                 <li><a href="{% url 'hrms:employee_salary_list' %}" class="{% if active_item == 'employee_salary' %}current{% endif %}">Employee Salaries</a></li>
                 <li><a href="{% url 'hrms:loan_list' %}" class="{% if active_item == 'loan' %}current{% endif %}">Loans &amp; Advances</a></li>
                 <li><a href="{% url 'hrms:extra_list' %}" class="{% if active_item == 'extra' %}current{% endif %}">Incentives / Extras</a></li>
                 <li><a href="{% url 'hrms:payrollrun_list' %}" class="{% if active_item == 'payrollrun' %}current{% endif %}">Payroll Runs</a></li>
               {% endif %}
-              <li><a href="{% url 'hrms:my_payslips' %}" class="{% if active_item == 'my_payslips' %}current{% endif %}">{% if hrms_is_hr %}All Payslips{% else %}My Payslips{% endif %}</a></li>
+              <li><a href="{% url 'hrms:my_payslips' %}" class="{% if active_item == 'my_payslips' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}All Payslips{% else %}My Payslips{% endif %}</a></li>
             </ul>
           </div>
         </li>
+        {% endif %}
 
+        <!-- Policies & Notices -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'policy' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navPolicy" role="button"
@@ -170,7 +182,7 @@
           <div class="collapse {% if active_group == 'policy' %}show{% endif %}" id="navPolicy">
             <ul class="nav flex-column hrms-sublist">
               <li><a href="{% url 'hrms:policy_list' %}" class="{% if active_item == 'policy' %}current{% endif %}">Policy Library</a></li>
-              {% if hrms_is_hr %}
+              {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:policy_manage' %}" class="{% if active_item == 'policy_manage' %}current{% endif %}">Policy Compliance (HR)</a></li>
               {% endif %}
               <li><a href="{% url 'hrms:notice_list' %}" class="{% if active_item == 'notice' %}current{% endif %}">Company Notices</a></li>
@@ -178,6 +190,7 @@
           </div>
         </li>
 
+        <!-- Assets -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'asset' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navAsset" role="button"
@@ -186,11 +199,12 @@
           </a>
           <div class="collapse {% if active_group == 'asset' %}show{% endif %}" id="navAsset">
             <ul class="nav flex-column hrms-sublist">
-              <li><a href="{% url 'hrms:asset_list' %}" class="{% if active_item == 'asset' %}current{% endif %}">{% if hrms_is_hr %}All Assets{% else %}My Assets{% endif %}</a></li>
+              <li><a href="{% url 'hrms:asset_list' %}" class="{% if active_item == 'asset' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}All Assets{% else %}My Assets{% endif %}</a></li>
             </ul>
           </div>
         </li>
 
+        <!-- Performance -->
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'performance' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navPerformance" role="button"
@@ -199,7 +213,7 @@
           </a>
           <div class="collapse {% if active_group == 'performance' %}show{% endif %}" id="navPerformance">
             <ul class="nav flex-column hrms-sublist">
-              <li><a href="{% url 'hrms:performance_list' %}" class="{% if active_item == 'performance' %}current{% endif %}">{% if hrms_is_hr %}All Reviews{% else %}My Reviews{% endif %}</a></li>
+              <li><a href="{% url 'hrms:performance_list' %}" class="{% if active_item == 'performance' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}All Reviews{% else %}My Reviews{% endif %}</a></li>
             </ul>
           </div>
         </li>
@@ -208,7 +222,7 @@
     </nav>
 
     <div class="hrms-sidebar-footer px-3 py-3 border-top border-secondary-subtle">
-      {% if hrms_role == ROLE_SUPERADMIN %}
+      {% if request.user.is_superuser %}
         <a href="/admin/" class="d-block mb-1"><i class="bi bi-gear-fill me-1"></i> Django Admin (Settings)</a>
       {% endif %}
       <a href="{% url 'logout' %}"><i class="bi bi-box-arrow-right me-1"></i> Log out</a>
@@ -223,7 +237,9 @@
           <i class="bi bi-list"></i>
         </button>
         <span class="page-title">{% block page_title %}Dashboard{% endblock %}</span>
-      </div>      <!-- Company Selection Navbar -->
+      </div>
+
+      <!-- Company Selection Navbar -->
       <div class="d-none d-sm-flex align-items-center">
         {% if can_switch_company %}
           <div class="dropdown">

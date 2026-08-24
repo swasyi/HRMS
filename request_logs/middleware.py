@@ -54,10 +54,13 @@ class RequestLoggingMiddleware:
             redirect_to = response.get("Location")
 
         # User
-        user = request.user if request.user.is_authenticated else None
+        user = getattr(request, 'user', None)
+        if user and not getattr(user, 'is_authenticated', False):
+            user = None
 
         # Session
-        session_id = request.session.session_key
+        session = getattr(request, 'session', None)
+        session_id = session.session_key if session else None
 
         # IP and User Agent
         ip = request.META.get("REMOTE_ADDR")

@@ -270,6 +270,24 @@ class LeaveBalanceForm(BootstrapModelForm):
         model = m.LeaveBalance
         fields = ['employee', 'leave_type', 'year', 'allocated', 'used', 'pending', 'carried_forward']
 
+from django import forms
+from hrms import models as m
+
+
+class LeaveBalanceForm(forms.ModelForm):
+    class Meta:
+        model = m.EmployeeLeaveBalance
+        # Use '__all__' or explicitly include the balance fields
+        fields = '__all__'
+        widgets = {
+            'e_name': forms.Select(attrs={'class': 'form-select select2', 'disabled': 'disabled'}),
+            'casual_leave': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
+            'earned_leave': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
+            'sick_leave': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
+            'maternity_leave': forms.NumberInput(attrs={'class': 'form-control', 'step': '1'}),
+            'paternity_leave': forms.NumberInput(attrs={'class': 'form-control', 'step': '1'}),
+            'bereavement_leave': forms.NumberInput(attrs={'class': 'form-control', 'step': '1'}),
+        }
 
 class LeaveApplicationForm(BootstrapModelForm):
     """Self-service: the employee applying is fixed by the view, not a form field."""

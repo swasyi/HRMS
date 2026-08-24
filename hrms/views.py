@@ -3,15 +3,18 @@ from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
-from django.views.generic import TemplateView, UpdateView, ListView, DetailView, FormView
+from django.views.generic import TemplateView, UpdateView, ListView, DetailView, FormView, View, CreateView, DeleteView
+from django.forms import modelformset_factory
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy, reverse
 from django.utils import timezone
 from django.db.models import Q, Count, Max
-from .forms import UnifiedCandidateForm
-from . import models
+from . import forms as f
 from . import models as m
+from . import leave_logic as lv
+from . import payroll_logic as pay
+from . import attendance_logic as att_logic
 from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE
 
 
@@ -293,15 +296,529 @@ def dashboard(request):
         # Standard Employee Logic
         employee = get_employee_profile(user)
         if employee:
+            import calendar
+            curr_month = today.month
+            curr_year = today.year
+            num_days = calendar.monthrange(curr_year, curr_month)[1]
+            month_days = [date(curr_year, curr_month, d) for d in range(1, num_days + 1)]
+
+            # Today's punch record
+            today_record = m.AttendanceRecord.objects.filter(employee=employee, attendance_date=today).first()
+
+            # Month attendance records & leaves
+            month_records = m.AttendanceRecord.objects.filter(
+                employee=employee,
+                attendance_date__range=[month_days[0], month_days[-1]]
+            )
+            rec_map = {r.attendance_date: r for r in month_records}
+
+            # Approved leaves
+            app_leaves = m.LeaveApplication.objects.filter(
+                employee=employee,
+                status=m.LeaveApplication.Status.APPROVED,
+                start_date__lte=month_days[-1],
+                end_date__gte=month_days[0]
+            ).select_related('leave_type')
+            leave_day_map = {}
+            for l in app_leaves:
+                c = max(l.start_date, month_days[0])
+                while c <= min(l.end_date, month_days[-1]):
+                    leave_day_map[c] = l.leave_type.code
+                    c += timedelta(days=1)
+
+            # Holidays
+            holidays = m.Holiday.objects.filter(
+                calendar=employee.holiday_calendar,
+                date__range=[month_days[0], month_days[-1]]
+            ) if employee.holiday_calendar else []
+            holiday_map = {h.date: h.name for h in holidays}
+
+            # Month Grid Cells
+            present_days = 0
+            half_days = 0
+            absent_days = 0
+            calendar_cells = []
+
+            for d in month_days:
+                r = rec_map.get(d)
+                l_code = leave_day_map.get(d)
+                h_name = holiday_map.get(d)
+
+                cell_status = 'absent'
+                badge_color = 'danger'
+                label = 'Absent'
+
+                if r and r.check_in:
+                    if r.status == m.AttendanceRecord.Status.PRESENT:
+                        cell_status = 'present'
+                        badge_color = 'success'
+                        label = 'Present'
+                        present_days += 1
+                    elif r.status == m.AttendanceRecord.Status.HALF_DAY:
+                        cell_status = 'half_day'
+                        badge_color = 'warning'
+                        label = 'Half Day'
+                        half_days += 1
+                elif l_code:
+                    cell_status = 'leave'
+                    badge_color = 'primary'
+                    label = f'Leave ({l_code})'
+                elif h_name:
+                    cell_status = 'holiday'
+                    badge_color = 'info'
+                    label = h_name
+                elif d.weekday() == 6:
+                    cell_status = 'week_off'
+                    badge_color = 'secondary'
+                    label = 'Week Off'
+                elif d > today:
+                    cell_status = 'future'
+                    badge_color = 'light text-muted'
+                    label = 'Upcoming'
+                else:
+                    absent_days += 1
+
+                calendar_cells.append({
+                    'date': d,
+                    'status': cell_status,
+                    'badge_color': badge_color,
+                    'label': label,
+                    'record': r,
+                    'is_past': d <= today and d.weekday() != 6 and not h_name and not l_code,
+                })
+
+            working_days_so_far = max(1, len([c for c in calendar_cells if c['date'] <= today and c['status'] not in ('week_off', 'holiday')]))
+            att_pct = round(((present_days + 0.5 * half_days) / working_days_so_far) * 100)
+
+            # Upcoming Holidays
+            upcoming_holidays = m.Holiday.objects.filter(
+                calendar=employee.holiday_calendar,
+                date__gte=today
+            ).order_by('date')[:4] if employee.holiday_calendar else []
+
+            # Leave Live balance
+            leave_live = m.EmployeeLeaveBalanceLive.objects.filter(e_name=employee).first()
+
             context.update({
                 'employee': employee,
-                'leave_balances': m.LeaveBalance.objects.filter(employee=employee, year=today.year),
-                'recent_attendance': m.AttendanceRecord.objects.filter(employee=employee).order_by('-attendance_date')[:7],
+                'today_record': today_record,
+                'leave_balances': m.LeaveBalance.objects.filter(employee=employee, year=today.year).select_related('leave_type'),
+                'leave_live': leave_live,
+                'recent_attendance': month_records.order_by('-attendance_date')[:7],
                 'recent_notices': m.CompanyNotice.objects.filter(company=employee.company, is_active=True).order_by('-notice_date')[:5],
+                'calendar_cells': calendar_cells,
+                'monthly_attendance_pct': min(100, att_pct),
+                'present_days': present_days,
+                'half_days': half_days,
+                'absent_days': absent_days,
+                'pending_leaves_count': m.LeaveApplication.objects.filter(employee=employee, status__in=['pending', 'pending_manager', 'pending_hr']).count(),
+                'pending_regularizations_count': m.PunchRegularizationRequest.objects.filter(employee=employee, status='pending').count(),
+                'upcoming_holidays': upcoming_holidays,
+                'current_month_name': calendar.month_name[curr_month],
+                'current_year': curr_year,
             })
         template = 'hrms/dashboard_employee.html'
 
     return render(request, template, context)
+@login_required
+def dashboard(request):
+  user = request.user
+  role = get_role(user)
+
+  # 1. Date Filtering
+  target_date_str = request.GET.get('date')
+  if target_date_str:
+    try:
+      target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+    except ValueError:
+      target_date = date.today()
+  else:
+    target_date = date.today()
+
+  today = date.today()
+  is_today = target_date == today
+
+  context = {
+      'active_group': 'dashboard',
+      'active_item': 'dashboard',
+      'selected_date': target_date.strftime('%Y-%m-%d'),
+      'display_date': target_date.strftime('%d %b, %Y'),
+      'is_today': is_today,
+  }
+
+  if is_hr_or_above(user):
+    # --- 2. Permission-Based Company List (FIXED) ---
+    if user.is_superuser:
+      available_companies = m.Company.objects.all()
+    else:
+      employee_profile = get_employee_profile(user)
+      if employee_profile and employee_profile.company:
+        available_companies = m.Company.objects.filter(
+            Q(id=employee_profile.company_id) | Q(managers=employee_profile)
+        ).distinct()
+      else:
+        available_companies = m.Company.objects.none()
+
+    active_company_id = request.session.get('active_company_id')
+
+    # --- 3. Robust Permission-Based Filters ---
+    emp_filter = Q(status=m.Employee.Status.ACTIVE)
+    leave_filter = Q(status=m.LeaveApplication.Status.PENDING)
+    job_filter = Q(is_active=True)
+    attend_filter = Q(attendance_date=target_date)
+
+    if active_company_id and active_company_id != 'all':
+      emp_filter &= Q(company_id=active_company_id)
+      leave_filter &= Q(employee__company_id=active_company_id)
+      job_filter &= Q(company_id=active_company_id)
+      attend_filter &= Q(employee__company_id=active_company_id)
+    elif not user.is_superuser:
+      allowed_ids = list(available_companies.values_list('id', flat=True))
+      emp_filter &= Q(company_id__in=allowed_ids)
+      leave_filter &= Q(employee__company_id__in=allowed_ids)
+      job_filter &= Q(company_id__in=allowed_ids)
+      attend_filter &= Q(employee__company_id__in=allowed_ids)
+
+    # --- 4. Fetch Optimized Data ---
+    active_employees = m.Employee.objects.filter(emp_filter).select_related(
+        'designation', 'department', 'company'
+    )
+    attendance_records = m.AttendanceRecord.objects.filter(
+        attend_filter
+    ).select_related('employee')
+    attendance_map = {r.employee_id: r for r in attendance_records}
+
+    on_leave_emp_ids = set(
+        m.LeaveApplication.objects.filter(
+            status=m.LeaveApplication.Status.APPROVED,
+            start_date__lte=target_date,
+            end_date__gte=target_date,
+        ).values_list('employee_id', flat=True)
+    )
+
+    # --- 5. Categorize Attendance with Grace Period & Live Timing ---
+    present_employees_detailed = []
+    absent_employees = []
+    on_leave_employees = []
+    all_employees_detailed = []
+    currently_working_count = 0
+
+    for emp in active_employees:
+      record = attendance_map.get(emp.id)
+      policy = (
+          emp.company.get_policy_for_date(target_date)
+          if hasattr(emp.company, 'get_policy_for_date')
+          else None
+      )
+      grace_minutes = policy.grace_minutes if policy else 15
+
+      if record and (
+          record.check_in
+          or record.status
+          in [
+              m.AttendanceRecord.Status.PRESENT,
+              m.AttendanceRecord.Status.HALF_DAY,
+          ]
+      ):
+        is_grace = False
+        is_late = False
+
+        if record.late_minutes > 0:
+          if record.late_minutes <= grace_minutes:
+            is_grace = True
+          else:
+            is_late = True
+        elif record.check_in and policy and policy.office_start_time:
+          local_in = timezone.localtime(record.check_in).time()
+          office_start = policy.office_start_time
+          if local_in > office_start:
+            dummy_d = date(2000, 1, 1)
+            diff_sec = (
+                datetime.combine(dummy_d, local_in)
+                - datetime.combine(dummy_d, office_start)
+            ).total_seconds()
+            diff_m = int(diff_sec / 60)
+            if diff_m <= grace_minutes:
+              is_grace = True
+            else:
+              is_late = True
+
+        is_running = False
+        if record.check_in and not record.check_out:
+          currently_working_count += 1
+          if is_today:
+            is_running = True
+
+        total_hours_display = ''
+        if record.total_hours and record.total_hours > 0:
+          hrs = int(record.total_hours)
+          mins = int((record.total_hours - hrs) * 60)
+          total_hours_display = f'{hrs:02d}h {mins:02d}m'
+        elif record.check_in and record.check_out:
+          diff_sec = (record.check_out - record.check_in).total_seconds()
+          hrs = int(diff_sec // 3600)
+          mins = int((diff_sec % 3600) // 60)
+          total_hours_display = f'{hrs:02d}h {mins:02d}m'
+
+        emp_item = {
+            'emp': emp,
+            'record': record,
+            'status_category': 'present',
+            'check_in': record.check_in,
+            'check_out': record.check_out,
+            'check_in_iso': (
+                record.check_in.isoformat() if record.check_in else ''
+            ),
+            'total_hours_display': total_hours_display,
+            'is_running': is_running,
+            'is_grace': is_grace,
+            'is_late': is_late,
+            'late_minutes': record.late_minutes,
+        }
+        present_employees_detailed.append(emp_item)
+        all_employees_detailed.append(emp_item)
+
+      elif emp.id in on_leave_emp_ids or (
+          record and record.status == m.AttendanceRecord.Status.ON_LEAVE
+      ):
+        emp_item = {
+            'emp': emp,
+            'record': record,
+            'status_category': 'on_leave',
+            'check_in': None,
+            'check_out': None,
+            'check_in_iso': '',
+            'total_hours_display': '--',
+            'is_running': False,
+            'is_grace': False,
+            'is_late': False,
+            'late_minutes': 0,
+        }
+        on_leave_employees.append(emp_item)
+        all_employees_detailed.append(emp_item)
+
+      else:
+        emp_item = {
+            'emp': emp,
+            'record': record,
+            'status_category': 'absent',
+            'check_in': None,
+            'check_out': None,
+            'check_in_iso': '',
+            'total_hours_display': '--',
+            'is_running': False,
+            'is_grace': False,
+            'is_late': False,
+            'late_minutes': 0,
+        }
+        absent_employees.append(emp_item)
+        all_employees_detailed.append(emp_item)
+
+    total_count = active_employees.count()
+    present_count = len(present_employees_detailed)
+    time_off_count = len(on_leave_employees)
+    absent_count = len(absent_employees)
+    attendance_pct = (
+        round((present_count / total_count) * 100) if total_count > 0 else 0
+    )
+
+    open_jobs_list = (
+        m.JobPosting.objects.filter(job_filter)
+        .annotate(app_count=Count('applications'))
+        .order_by('-created_at')[:4]
+    )
+
+    upcoming_birthdays = active_employees.filter(
+        date_of_birth__month=target_date.month
+    ).order_by('date_of_birth')[:4]
+
+    context.update({
+        'available_companies': available_companies,
+        'active_company_id': active_company_id,
+        'total_employees': total_count,
+        'currently_working': currently_working_count,
+        'on_break_count': 0,
+        'time_off_count': time_off_count,
+        'pending_biometrics': 0,
+        'present_today': present_count,
+        'absent_count': absent_count,
+        'attendance_percentage': attendance_pct,
+        'pending_leaves': m.LeaveApplication.objects.filter(
+            leave_filter
+        ).count(),
+        'open_jobs': m.JobPosting.objects.filter(job_filter).count(),
+        'all_employees_detailed': all_employees_detailed,
+        'present_employees_detailed': present_employees_detailed,
+        'absent_employees': absent_employees,
+        'on_leave_employees': on_leave_employees,
+        'upcoming_birthdays': upcoming_birthdays,
+        'open_jobs_list': open_jobs_list,
+    })
+    template = 'hrms/dashboard_hr.html'
+
+  else:
+    # Standard Employee Logic
+    employee = get_employee_profile(user)
+    if employee:
+      import calendar
+
+      curr_month = today.month
+      curr_year = today.year
+      num_days = calendar.monthrange(curr_year, curr_month)[1]
+      month_days = [
+          date(curr_year, curr_month, d) for d in range(1, num_days + 1)
+      ]
+
+      today_record = m.AttendanceRecord.objects.filter(
+          employee=employee, attendance_date=today
+      ).first()
+      month_records = m.AttendanceRecord.objects.filter(
+          employee=employee,
+          attendance_date__range=[month_days[0], month_days[-1]],
+      )
+      rec_map = {r.attendance_date: r for r in month_records}
+
+      app_leaves = m.LeaveApplication.objects.filter(
+          employee=employee,
+          status=m.LeaveApplication.Status.APPROVED,
+          start_date__lte=month_days[-1],
+          end_date__gte=month_days[0],
+      ).select_related('leave_type')
+
+      leave_day_map = {}
+      for l in app_leaves:
+        c = max(l.start_date, month_days[0])
+        while c <= min(l.end_date, month_days[-1]):
+          leave_day_map[c] = l.leave_type.code
+          c += timedelta(days=1)
+
+      holidays = (
+          m.Holiday.objects.filter(
+              calendar=employee.holiday_calendar,
+              date__range=[month_days[0], month_days[-1]],
+          )
+          if employee.holiday_calendar
+          else []
+      )
+      holiday_map = {h.date: h.name for h in holidays}
+
+      present_days = 0
+      half_days = 0
+      absent_days = 0
+      calendar_cells = []
+
+      for d in month_days:
+        r = rec_map.get(d)
+        l_code = leave_day_map.get(d)
+        h_name = holiday_map.get(d)
+
+        cell_status = 'absent'
+        badge_color = 'danger'
+        label = 'Absent'
+
+        if r and r.check_in:
+          if r.status == m.AttendanceRecord.Status.PRESENT:
+            cell_status = 'present'
+            badge_color = 'success'
+            label = 'Present'
+            present_days += 1
+          elif r.status == m.AttendanceRecord.Status.HALF_DAY:
+            cell_status = 'half_day'
+            badge_color = 'warning'
+            label = 'Half Day'
+            half_days += 1
+        elif l_code:
+          cell_status = 'leave'
+          badge_color = 'primary'
+          label = f'Leave ({l_code})'
+        elif h_name:
+          cell_status = 'holiday'
+          badge_color = 'info'
+          label = h_name
+        elif d.weekday() == 6:
+          cell_status = 'week_off'
+          badge_color = 'secondary'
+          label = 'Week Off'
+        elif d > today:
+          cell_status = 'future'
+          badge_color = 'light text-muted'
+          label = 'Upcoming'
+        else:
+          absent_days += 1
+
+        calendar_cells.append({
+            'date': d,
+            'status': cell_status,
+            'badge_color': badge_color,
+            'label': label,
+            'record': r,
+            'is_past': (
+                d <= today and d.weekday() != 6 and not h_name and not l_code
+            ),
+        })
+
+      working_days_so_far = max(
+          1,
+          len([
+              c
+              for c in calendar_cells
+              if c['date'] <= today and c['status'] not in ('week_off', 'holiday')
+          ]),
+      )
+      att_pct = round(
+          ((present_days + 0.5 * half_days) / working_days_so_far) * 100
+      )
+
+      upcoming_holidays = (
+          m.Holiday.objects.filter(
+              calendar=employee.holiday_calendar, date__gte=today
+          ).order_by('date')[:4]
+          if employee.holiday_calendar
+          else []
+      )
+
+      leave_live = getattr(m, 'EmployeeLeaveBalanceLive', None)
+      leave_live_obj = (
+          leave_live.objects.filter(e_name=employee).first()
+          if leave_live
+          else None
+      )
+
+      context.update({
+          'employee': employee,
+          'today_record': today_record,
+          'leave_balances': m.EmployeeLeaveBalance.objects.filter(
+              e_name=employee
+          ).first(),
+          'leave_live': leave_live_obj,
+          'recent_attendance': month_records.order_by('-attendance_date')[:7],
+          'recent_notices': m.CompanyNotice.objects.filter(
+              company=employee.company, is_active=True
+          ).order_by('-notice_date')[:5],
+          'calendar_cells': calendar_cells,
+          'monthly_attendance_pct': min(100, att_pct),
+          'present_days': present_days,
+          'half_days': half_days,
+          'absent_days': absent_days,
+          'pending_leaves_count': m.LeaveApplication.objects.filter(
+              employee=employee,
+              status__in=['pending', 'pending_manager', 'pending_hr'],
+          ).count(),
+          'pending_regularizations_count': (
+              m.PunchRegularizationRequest.objects.filter(
+                  employee=employee, status='pending'
+              ).count()
+              if hasattr(m, 'PunchRegularizationRequest')
+              else 0
+          ),
+          'upcoming_holidays': upcoming_holidays,
+          'current_month_name': calendar.month_name[curr_month],
+          'current_year': curr_year,
+      })
+    template = 'hrms/dashboard_employee.html'
+
+  return render(request, template, context)
+
 
 @login_required
 def coming_soon(request, active_group='dashboard', active_item='', title='Coming soon'):
@@ -351,7 +868,7 @@ class CompanyListView(HRRequiredMixin, SidebarContextMixin, ListView):
 
     def get_queryset(self):
         # Prefetch policy history to avoid N+1 database queries
-        qs = m.Company.objects.prefetch_related('policy_history').all()
+        qs = m.Company.objects.prefetch_related('policy_history').order_by('name')
         today = date.today()
 
         for company in qs:
@@ -765,6 +1282,111 @@ class MyDocumentsView(LoginRequiredMixin, SidebarContextMixin, ListView):
         return employee.documents.all()
 
 
+class EmployeeDocumentBulkUploadView(LoginRequiredMixin, SidebarContextMixin, View):
+    """
+    Multi-document sequential upload workflow.
+    Allows staging and uploading multiple documents simultaneously.
+    """
+    template_name = 'hrms/employee/employee_document_bulk_upload.html'
+    active_group, active_item = 'employee', 'my_documents'
+
+    def get_employee(self, pk=None):
+        if pk:
+            if not is_hr_or_above(self.request.user):
+                raise PermissionDenied("Only HR can upload documents for other employees.")
+            return get_object_or_404(m.Employee, pk=pk)
+        emp = get_employee_profile(self.request.user)
+        if not emp:
+            raise PermissionDenied("No employee profile found for your login.")
+        return emp
+
+    def get(self, request, pk=None):
+        employee = self.get_employee(pk)
+        return render(request, self.template_name, {
+            'employee': employee,
+            'doc_types': m.EmployeeDocument.DocumentType.choices,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+        })
+
+    def post(self, request, pk=None):
+        employee = self.get_employee(pk)
+        files = request.FILES
+        post_data = request.POST
+
+        row_indices = set()
+        for k in post_data.keys():
+            if k.startswith('doc_type_'):
+                row_indices.add(k.replace('doc_type_', ''))
+
+        uploaded_count = 0
+        with transaction.atomic():
+            for idx in sorted(list(row_indices), key=lambda x: int(x) if x.isdigit() else str(x)):
+                doc_type = post_data.get(f'doc_type_{idx}')
+                doc_file = files.get(f'doc_file_{idx}')
+                doc_desc = post_data.get(f'doc_desc_{idx}', '').strip()
+                doc_expiry_raw = post_data.get(f'doc_expiry_{idx}', '').strip()
+
+                if not doc_type or not doc_file:
+                    continue
+
+                expiry_date = None
+                if doc_expiry_raw:
+                    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                        try:
+                            expiry_date = datetime.strptime(doc_expiry_raw, fmt).date()
+                            break
+                        except ValueError:
+                            pass
+
+                m.EmployeeDocument.objects.create(
+                    employee=employee,
+                    document_type=doc_type,
+                    file=doc_file,
+                    description=doc_desc,
+                    expiry_on=expiry_date,
+                    verification_status=m.EmployeeDocument.VerificationStatus.PENDING
+                )
+                uploaded_count += 1
+
+        if uploaded_count > 0:
+            messages.success(request, f"Successfully uploaded {uploaded_count} document(s). Status set to Pending Verification.")
+        else:
+            messages.warning(request, "No valid document files were selected.")
+
+        if pk and is_hr_or_above(request.user):
+            return redirect('hrms:employee_detail', pk=employee.pk)
+        return redirect('hrms:my_documents')
+
+
+class EmployeeDocumentVerifyView(HRRequiredMixin, View):
+    """HR verification endpoint for employee documents."""
+    def post(self, request, pk):
+        doc = get_object_or_404(m.EmployeeDocument, pk=pk)
+        action = request.POST.get('status')
+        remarks = request.POST.get('rejection_remarks', '').strip()
+
+        if action == 'verified':
+            doc.verification_status = m.EmployeeDocument.VerificationStatus.VERIFIED
+            doc.verified_by = request.user
+            doc.verified_on = timezone.now()
+            doc.rejection_remarks = ''
+            doc.save()
+            messages.success(request, f"Document '{doc.get_document_type_display()}' verified successfully.")
+        elif action == 'rejected':
+            if not remarks:
+                messages.error(request, "A mandatory reason is required to reject a document.")
+                return redirect('hrms:employee_detail', pk=doc.employee.pk)
+            doc.verification_status = m.EmployeeDocument.VerificationStatus.REJECTED
+            doc.verified_by = request.user
+            doc.verified_on = timezone.now()
+            doc.rejection_remarks = remarks
+            doc.save()
+            messages.warning(request, f"Document '{doc.get_document_type_display()}' rejected.")
+
+        return redirect('hrms:employee_detail', pk=doc.employee.pk)
+
+
 class EmployeeNoticeCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
     model = m.EmployeeNotice
     form_class = f.EmployeeNoticeForm
@@ -1103,6 +1725,11 @@ class AttendanceRecordListView(HRRequiredMixin, SidebarContextMixin, ListView):
             with transaction.atomic():
                 for item in updates:
                     emp_id = str(item.get('emp_id'))
+                    # NEW CHECK: Verify employee is active before saving punch
+                    is_active = m.Employee.objects.filter(id=emp_id, status=m.Employee.Status.ACTIVE).exists()
+                    if not is_active:
+                        continue  # Skip this record if employee is inactive
+
                     date_str = item.get('date')
                     in_t, out_t = item.get('in_time'), item.get('out_time')
                     if not in_t: continue
@@ -1175,420 +1802,6 @@ class AttendanceRecordListView(HRRequiredMixin, SidebarContextMixin, ListView):
             return JsonResponse({'status': 'success'})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
-    def get_context_data(self, **kwargs):
-        """The 'Smart Brain' that calculates status based on the Policy of the Day."""
-        ctx = super().get_context_data(**kwargs)
-        tz = timezone.get_current_timezone()
-
-        # 1. Date Range Handling
-        d_from, d_to = self.request.GET.get('from'), self.request.GET.get('to')
-        start_date = datetime.strptime(d_from, '%Y-%m-%d').date() if d_from else timezone.now().date().replace(day=1)
-        if d_to:
-            end_date = datetime.strptime(d_to, '%Y-%m-%d').date()
-        else:
-            next_m = start_date.replace(day=28) + timedelta(days=4)
-            end_date = next_m - timedelta(days=next_m.day)
-        date_list = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
-
-        # 2. Fetch Employees and pre-fetch related data
-        emp_filter = self.request.GET.get('employee')
-        employees = m.Employee.objects.select_related('company', 'department').all().order_by('employee_code')
-        if emp_filter: employees = employees.filter(id=emp_filter)
-
-        records = m.AttendanceRecord.objects.filter(attendance_date__range=[start_date, end_date]).order_by(
-            'attendance_date')
-        leaves = m.LeaveApplication.objects.filter(status='approved', start_date__lte=end_date,
-                                                   end_date__gte=start_date).select_related('leave_type')
-
-        att_lookup = collections.defaultdict(dict)
-        for r in records: att_lookup[r.employee_id][r.attendance_date] = r
-
-        leave_lookup = collections.defaultdict(dict)
-        for l in leaves:
-            curr = max(l.start_date, start_date)
-            while curr <= min(l.end_date, end_date):
-                leave_lookup[l.employee_id][curr] = l.leave_type.code
-                curr += timedelta(days=1)
-
-        # 3. Build Smart Matrix
-        attendance_matrix = collections.defaultdict(dict)
-
-        for emp in employees:
-            grace_counters = collections.defaultdict(int)  # Reset grace per employee per month
-
-            for day in date_list:
-                # --- DYNAMIC POLICY FETCHING ---
-                # Checks what the rules were for THIS specific day (July 10-6 vs Aug 9-5)
-                active_rule = emp.company.get_policy_for_date(day)
-                off_start = active_rule.office_start_time
-                off_end = active_rule.office_end_time
-                grace_mins = active_rule.grace_minutes
-                grace_limit = active_rule.grace_allowed_count
-
-                rec = att_lookup[emp.id].get(day)
-                leave_code = leave_lookup[emp.id].get(day)
-                display_obj = {'status': 'absent', 'display_label': '', 'check_in': None, 'check_out': None}
-
-                if rec:
-                    display_obj['check_in'] = rec.check_in
-                    display_obj['check_out'] = rec.check_out
-                    l_in = timezone.localtime(rec.check_in) if rec.check_in else None
-                    l_out = timezone.localtime(rec.check_out) if rec.check_out else None
-
-                    if l_in:
-                        p_in = l_in.time()
-                        p_out = l_out.time() if l_out else off_start
-
-                        grace_deadline = (datetime.combine(day, off_start) + timedelta(minutes=grace_mins)).time()
-                        # Strict check: Must stay until office end (or past it)
-                        stayed_until_end = p_out >= off_end
-
-                        # LOGIC FLOW
-                        if p_in <= off_start:
-                            display_obj['status'] = 'present' if stayed_until_end else 'half_day'
-
-                        elif p_in <= grace_deadline:
-                            if stayed_until_end:
-                                m_key = (emp.id, day.month)
-                                if grace_counters[m_key] < grace_limit:
-                                    grace_counters[m_key] += 1
-                                    display_obj['status'], display_obj[
-                                        'display_label'] = 'present', f"G{grace_counters[m_key]}"
-                                else:
-                                    display_obj['status'], display_obj['display_label'] = 'half_day', "Grace Exhausted"
-                            else:
-                                # Within grace window but left early -> HD
-                                display_obj['status'] = 'half_day'
-
-                        else:
-                            # Late Arrival (> 15 mins late) -> HD
-                            display_obj['status'] = 'half_day'
-
-                elif leave_code:
-                    display_obj['status'], display_obj['display_label'] = 'on_leave', leave_code
-
-                attendance_matrix[emp.id][day] = display_obj
-
-        ctx.update({'employees': employees, 'date_list': date_list, 'attendance_matrix': attendance_matrix,
-                    'filters': self.request.GET, 'start_date': start_date, 'end_date': end_date})
-        return ctx
-    def get_context_data(self, **kwargs):
-        """The 'Smart Brain' that calculates status based on the Policy of the Day."""
-        ctx = super().get_context_data(**kwargs)
-        tz = timezone.get_current_timezone()
-
-        # 1. Date Range Handling
-        d_from, d_to = self.request.GET.get('from'), self.request.GET.get('to')
-        start_date = datetime.strptime(d_from, '%Y-%m-%d').date() if d_from else timezone.now().date().replace(day=1)
-        if d_to:
-            end_date = datetime.strptime(d_to, '%Y-%m-%d').date()
-        else:
-            next_m = start_date.replace(day=28) + timedelta(days=4)
-            end_date = next_m - timedelta(days=next_m.day)
-        date_list = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
-
-        # 2. Fetch Employees and pre-fetch related data
-        emp_filter = self.request.GET.get('employee')
-        employees = m.Employee.objects.select_related('company', 'department').all().order_by('employee_code')
-        if emp_filter: employees = employees.filter(id=emp_filter)
-
-        records = m.AttendanceRecord.objects.filter(attendance_date__range=[start_date, end_date]).order_by(
-            'attendance_date')
-        leaves = m.LeaveApplication.objects.filter(status='approved', start_date__lte=end_date,
-                                                   end_date__gte=start_date).select_related('leave_type')
-
-        att_lookup = collections.defaultdict(dict)
-        for r in records: att_lookup[r.employee_id][r.attendance_date] = r
-
-        leave_lookup = collections.defaultdict(dict)
-        for l in leaves:
-            curr = max(l.start_date, start_date)
-            while curr <= min(l.end_date, end_date):
-                leave_lookup[l.employee_id][curr] = l.leave_type.code
-                curr += timedelta(days=1)
-
-        # 3. Build Smart Matrix
-        attendance_matrix = collections.defaultdict(dict)
-
-        for emp in employees:
-            grace_counters = collections.defaultdict(int)  # Reset grace per employee per month
-
-            for day in date_list:
-                # --- DYNAMIC POLICY FETCHING ---
-                # Checks what the rules were for THIS specific day (July 10-6 vs Aug 9-5)
-                active_rule = emp.company.get_policy_for_date(day)
-                off_start = active_rule.office_start_time
-                off_end = active_rule.office_end_time
-                grace_mins = active_rule.grace_minutes
-                grace_limit = active_rule.grace_allowed_count
-
-                rec = att_lookup[emp.id].get(day)
-                leave_code = leave_lookup[emp.id].get(day)
-                display_obj = {'status': 'absent', 'display_label': '', 'check_in': None, 'check_out': None}
-
-                if rec and rec.check_in:  # PRIORITIZE PUNCH RECORD
-                    display_obj['check_in'] = rec.check_in
-                    display_obj['check_out'] = rec.check_out
-                    l_in = timezone.localtime(rec.check_in)
-                    l_out = timezone.localtime(rec.check_out) if rec.check_out else None
-
-                    p_in = l_in.time()
-                    p_out = l_out.time() if l_out else off_start
-                    grace_deadline = (datetime.combine(day, off_start) + timedelta(minutes=grace_mins)).time()
-                    stayed_until_end = p_out >= off_end
-
-                    # Calculate status based on punch
-                    if p_in <= off_start:
-                        display_obj['status'] = 'present' if stayed_until_end else 'half_day'
-                    elif p_in <= grace_deadline:
-                        if stayed_until_end:
-                            m_key = (emp.id, day.month)
-                            if grace_counters[m_key] < grace_limit:
-                                grace_counters[m_key] += 1
-                                display_obj['status'], display_obj[
-                                    'display_label'] = 'present', f"G{grace_counters[m_key]}"
-                            else:
-                                display_obj['status'], display_obj['display_label'] = 'half_day', "Grace Exhausted"
-                        else:
-                            display_obj['status'] = 'half_day'
-                    else:
-                        display_obj['status'] = 'half_day'
-
-                    # --- ADDED: If it's a Half Day punch, check if they have a leave for the other half ---
-                    if display_obj['status'] == 'half_day' and leave_code:
-                        display_obj['display_label'] = f"HD + {leave_code}"
-
-                elif leave_code:  # ONLY SHOW LEAVE IF NO PUNCH EXISTS
-                    display_obj['status'], display_obj['display_label'] = 'on_leave', leave_code
-
-                attendance_matrix[emp.id][day] = display_obj
-
-        ctx.update({'employees': employees, 'date_list': date_list, 'attendance_matrix': attendance_matrix,
-                    'filters': self.request.GET, 'start_date': start_date, 'end_date': end_date})
-        return ctx
-
-    def get_context_data(self, **kwargs):
-        """The 'Smart Brain' that calculates status based on the Policy of the Day."""
-        ctx = super().get_context_data(**kwargs)
-        tz = timezone.get_current_timezone()
-        today = timezone.now().date()  # Get current date to identify future days
-
-        # 1. Date Range Handling
-        d_from, d_to = self.request.GET.get('from'), self.request.GET.get('to')
-        start_date = datetime.strptime(d_from, '%Y-%m-%d').date() if d_from else timezone.now().date().replace(day=1)
-        if d_to:
-            end_date = datetime.strptime(d_to, '%Y-%m-%d').date()
-        else:
-            next_m = start_date.replace(day=28) + timedelta(days=4)
-            end_date = next_m - timedelta(days=next_m.day)
-        date_list = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
-
-        # 2. Fetch Employees and pre-fetch related data
-        emp_filter = self.request.GET.get('employee')
-        employees = m.Employee.objects.select_related('company', 'department').all().order_by('employee_code')
-        if emp_filter: employees = employees.filter(id=emp_filter)
-
-        records = m.AttendanceRecord.objects.filter(attendance_date__range=[start_date, end_date]).order_by(
-            'attendance_date')
-        leaves = m.LeaveApplication.objects.filter(status='approved', start_date__lte=end_date,
-                                                   end_date__gte=start_date).select_related('leave_type')
-
-        att_lookup = collections.defaultdict(dict)
-        for r in records: att_lookup[r.employee_id][r.attendance_date] = r
-
-        leave_lookup = collections.defaultdict(dict)
-        for l in leaves:
-            curr = max(l.start_date, start_date)
-            while curr <= min(l.end_date, end_date):
-                leave_lookup[l.employee_id][curr] = l.leave_type.code
-                curr += timedelta(days=1)
-
-        # 3. Build Smart Matrix
-        attendance_matrix = collections.defaultdict(dict)
-
-        for emp in employees:
-            grace_counters = collections.defaultdict(int)
-
-            for day in date_list:
-                active_rule = emp.company.get_policy_for_date(day)
-                off_start = active_rule.office_start_time
-                off_end = active_rule.office_end_time
-                grace_mins = active_rule.grace_minutes
-                grace_limit = active_rule.grace_allowed_count
-
-                rec = att_lookup[emp.id].get(day)
-                leave_code = leave_lookup[emp.id].get(day)
-
-                # Default status is now 'none' to allow specific checks
-                display_obj = {'status': '', 'display_label': '', 'check_in': None, 'check_out': None}
-
-                if rec and rec.check_in:
-                    display_obj['check_in'] = rec.check_in
-                    display_obj['check_out'] = rec.check_out
-                    l_in = timezone.localtime(rec.check_in)
-                    l_out = timezone.localtime(rec.check_out) if rec.check_out else None
-
-                    p_in = l_in.time()
-                    p_out = l_out.time() if l_out else off_start
-                    grace_deadline = (datetime.combine(day, off_start) + timedelta(minutes=grace_mins)).time()
-                    stayed_until_end = p_out >= off_end
-
-                    if p_in <= off_start:
-                        display_obj['status'] = 'present' if stayed_until_end else 'half_day'
-                    elif p_in <= grace_deadline:
-                        if stayed_until_end:
-                            m_key = (emp.id, day.month)
-                            if grace_counters[m_key] < grace_limit:
-                                grace_counters[m_key] += 1
-                                display_obj['status'], display_obj[
-                                    'display_label'] = 'present', f"G{grace_counters[m_key]}"
-                            else:
-                                display_obj['status'], display_obj['display_label'] = 'half_day', "Grace Exhausted"
-                        else:
-                            display_obj['status'] = 'half_day'
-                    else:
-                        display_obj['status'] = 'half_day'
-
-                    if display_obj['status'] == 'half_day' and leave_code:
-                        display_obj['display_label'] = f"HD + {leave_code}"
-
-                elif leave_code:
-                    display_obj['status'], display_obj['display_label'] = 'on_leave', leave_code
-
-                else:
-                    # NEW LOGIC FOR EMPTY CELLS
-                    if day > today:
-                        display_obj['status'] = 'future'
-                    elif day.weekday() == 6:  # 6 is Sunday
-                        display_obj['status'] = 'sunday'
-                    else:
-                        display_obj['status'] = 'absent'
-
-                attendance_matrix[emp.id][day] = display_obj
-
-        ctx.update({'employees': employees, 'date_list': date_list, 'attendance_matrix': attendance_matrix,
-                    'filters': self.request.GET, 'start_date': start_date, 'end_date': end_date})
-        return ctx
-
-    def get_context_data(self, **kwargs):
-        """The 'Smart Brain' that calculates status based on the Policy of the Day."""
-        ctx = super().get_context_data(**kwargs)
-        tz = timezone.get_current_timezone()
-        today = timezone.now().date()
-
-        # 1. Date Range Handling
-        d_from, d_to = self.request.GET.get('from'), self.request.GET.get('to')
-        start_date = datetime.strptime(d_from, '%Y-%m-%d').date() if d_from else timezone.now().date().replace(day=1)
-        if d_to:
-            end_date = datetime.strptime(d_to, '%Y-%m-%d').date()
-        else:
-            next_m = start_date.replace(day=28) + timedelta(days=4)
-            end_date = next_m - timedelta(days=next_m.day)
-        date_list = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
-
-        # 2. Fetch ONLY ACTIVE Employees and pre-fetch related data
-        emp_filter = self.request.GET.get('employee')
-
-        # UPDATED LINE: Added filter for status='active'
-        employees = m.Employee.objects.select_related('company', 'department').filter(
-            status=m.Employee.Status.ACTIVE
-        ).order_by('employee_code')
-
-        if emp_filter:
-            employees = employees.filter(id=emp_filter)
-
-        # 3. Fetch Records and Leaves for the date range
-        records = m.AttendanceRecord.objects.filter(attendance_date__range=[start_date, end_date]).order_by(
-            'attendance_date')
-        leaves = m.LeaveApplication.objects.filter(
-            status=m.LeaveApplication.Status.APPROVED,
-            start_date__lte=end_date,
-            end_date__gte=start_date
-        ).select_related('leave_type')
-
-        # Optimization: Lookups
-        att_lookup = collections.defaultdict(dict)
-        for r in records:
-            att_lookup[r.employee_id][r.attendance_date] = r
-
-        leave_lookup = collections.defaultdict(dict)
-        for l in leaves:
-            curr = max(l.start_date, start_date)
-            while curr <= min(l.end_date, end_date):
-                leave_lookup[l.employee_id][curr] = l.leave_type.code
-                curr += timedelta(days=1)
-
-        # 4. Build Smart Matrix
-        attendance_matrix = collections.defaultdict(dict)
-
-        for emp in employees:
-            grace_counters = collections.defaultdict(int)
-
-            for day in date_list:
-                active_rule = emp.company.get_policy_for_date(day)
-                off_start = active_rule.office_start_time
-                off_end = active_rule.office_end_time
-                grace_mins = active_rule.grace_minutes
-                grace_limit = active_rule.grace_allowed_count
-
-                rec = att_lookup[emp.id].get(day)
-                leave_code = leave_lookup[emp.id].get(day)
-
-                display_obj = {'status': '', 'display_label': '', 'check_in': None, 'check_out': None}
-
-                if rec and rec.check_in:
-                    # ... [Existing Punch Logic Remains the Same] ...
-                    display_obj['check_in'] = rec.check_in
-                    display_obj['check_out'] = rec.check_out
-                    l_in = timezone.localtime(rec.check_in)
-                    l_out = timezone.localtime(rec.check_out) if rec.check_out else None
-
-                    p_in = l_in.time()
-                    p_out = l_out.time() if l_out else off_start
-                    grace_deadline = (datetime.combine(day, off_start) + timedelta(minutes=grace_mins)).time()
-                    stayed_until_end = p_out >= off_end
-
-                    if p_in <= off_start:
-                        display_obj['status'] = 'present' if stayed_until_end else 'half_day'
-                    elif p_in <= grace_deadline:
-                        if stayed_until_end:
-                            m_key = (emp.id, day.month)
-                            if grace_counters[m_key] < grace_limit:
-                                grace_counters[m_key] += 1
-                                display_obj['status'], display_obj[
-                                    'display_label'] = 'present', f"G{grace_counters[m_key]}"
-                            else:
-                                display_obj['status'], display_obj['display_label'] = 'half_day', "Grace Exhausted"
-                        else:
-                            display_obj['status'] = 'half_day'
-                    else:
-                        display_obj['status'] = 'half_day'
-
-                    if display_obj['status'] == 'half_day' and leave_code:
-                        display_obj['display_label'] = f"HD + {leave_code}"
-
-                elif leave_code:
-                    display_obj['status'], display_obj['display_label'] = 'on_leave', leave_code
-
-                else:
-                    if day > today:
-                        display_obj['status'] = 'future'
-                    elif day.weekday() == 6:
-                        display_obj['status'] = 'sunday'
-                    else:
-                        display_obj['status'] = 'absent'
-
-                attendance_matrix[emp.id][day] = display_obj
-
-        ctx.update({
-            'employees': employees,
-            'date_list': date_list,
-            'attendance_matrix': attendance_matrix,
-            'filters': self.request.GET,
-            'start_date': start_date,
-            'end_date': end_date
-        })
-        return ctx
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -1735,7 +1948,10 @@ class AttendanceRecordListView(HRRequiredMixin, SidebarContextMixin, ListView):
         if emp_filter: employees = employees.filter(id=emp_filter)
 
         # 3. PRE-FETCH DATA FOR OPTIMIZATION
-        records = m.AttendanceRecord.objects.filter(attendance_date__range=[start_date, end_date])
+        records = m.AttendanceRecord.objects.filter(
+            employee__status=m.Employee.Status.ACTIVE,  # Ensure records are for active staff only
+            attendance_date__range=[start_date, end_date]
+        )
         leaves = m.LeaveApplication.objects.filter(
             status=m.LeaveApplication.Status.APPROVED,
             start_date__lte=end_date, end_date__gte=start_date
@@ -1985,13 +2201,27 @@ class HolidayListView(LoginRequiredMixin, SidebarContextMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        ctx['is_hr'] = is_hr_or_above(user)
 
         # Pass all calendars so the dropdown filter works
-        if self.request.user.is_superuser:
+        if user.is_superuser:
             ctx['calendars'] = m.HolidayCalendar.objects.all()
+        elif ctx['is_hr']:
+            emp_profile = get_employee_profile(user)
+            if emp_profile:
+                managed_ids = emp_profile.managed_companies.values_list('id', flat=True)
+                ctx['calendars'] = m.HolidayCalendar.objects.filter(
+                    Q(company_id=emp_profile.company_id) | Q(company_id__in=managed_ids)
+                ).distinct()
+            else:
+                ctx['calendars'] = m.HolidayCalendar.objects.all()
         else:
-            managed_ids = self.request.user.employee_profile.managed_companies.values_list('id', flat=True)
-            ctx['calendars'] = m.HolidayCalendar.objects.filter(company_id__in=managed_ids)
+            emp_profile = get_employee_profile(user)
+            if emp_profile and emp_profile.holiday_calendar:
+                ctx['calendars'] = m.HolidayCalendar.objects.filter(id=emp_profile.holiday_calendar_id)
+            else:
+                ctx['calendars'] = m.HolidayCalendar.objects.all()[:1]
 
         return ctx
 
@@ -2442,9 +2672,9 @@ class LeaveApplicationListView(LoginRequiredMixin, SidebarContextMixin, ListView
 
         if user_is_hr or (emp and emp.is_manager):
             if user_is_hr:
-                ctx['employees'] = m.Employee.objects.filter(status='active').order_by('first_name')
+                ctx['employees'] = m.Employee.objects.filter(status='active').select_related('department').order_by('first_name')
             else:
-                ctx['employees'] = m.Employee.objects.filter(reporting_manager=emp, status='active').order_by('first_name')
+                ctx['employees'] = m.Employee.objects.filter(reporting_manager=emp, status='active').select_related('department').order_by('first_name')
             ctx['status_choices'] = m.LeaveApplication.Status.choices
             ctx['departments'] = m.Department.objects.all()
             ctx['filters'] = self.request.GET
@@ -2717,153 +2947,101 @@ class LeaveCancelView(LoginRequiredMixin, View):
         return redirect('hrms:my_leave')
 
 
-from django.views.generic import ListView
-from django.shortcuts import redirect
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.forms import modelformset_factory
-from .models import EmployeeLeaveBalance
-from .forms import LeaveBalanceForm
-
-
-class LeaveBankListView(LoginRequiredMixin, ListView):
-    model = EmployeeLeaveBalance
+class LeaveBankListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    model = m.EmployeeLeaveBalance
     template_name = 'hrms/leave/leave_bank.html'
     context_object_name = 'leave_balances'
+    active_group, active_item = 'leave', 'leave-bank'
 
     def get_queryset(self):
         user = self.request.user
         active_statuses = [
-            Employee.Status.ACTIVE,
-            Employee.Status.ON_LEAVE,
-            Employee.Status.SUSPENDED
+            m.Employee.Status.ACTIVE,
+            m.Employee.Status.ON_LEAVE,
+            m.Employee.Status.SUSPENDED
         ]
 
-        # 2. Start with a base queryset filtering out inactive employees
-        qs = EmployeeLeaveBalance.objects.filter(
+        base_qs = m.EmployeeLeaveBalance.objects.filter(
             e_name__status__in=active_statuses
-        ).select_related('e_name', 'e_name__department', 'e_name__designation')
+        ).select_related(
+            'e_name',
+            'e_name__department',
+            'e_name__designation',
+            'e_name__company'
+        )
 
-        # 1. Superadmin and HR see everyone
-        if user.is_superuser or user.groups.filter(name='HR').exists():
-            return EmployeeLeaveBalance.objects.all().select_related('e_name')
+        # 1. Superadmin and HR see all company employees
+        if user.is_superuser or is_hr_or_above(user):
+            active_id = self.request.session.get('active_company_id')
+            if active_id and active_id != 'all':
+                base_qs = base_qs.filter(e_name__company_id=active_id)
+            return base_qs
 
-        # 2. Normal User sees only their own record
-        # Note: We filter by the User linked to the Employee
-        return EmployeeLeaveBalance.objects.filter(e_name__user=user).select_related('e_name')
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-
-        # 3. If Superadmin, provide a Formset for bulk editing
-        if self.request.user.is_superuser:
-            LeaveFormSet = modelformset_factory(
-                EmployeeLeaveBalance, form=LeaveBalanceForm, extra=0
+        # 2. Reporting Managers see their direct team & self
+        emp = get_employee_profile(user)
+        if emp and (emp.is_manager or m.Employee.objects.filter(reporting_manager=emp).exists()):
+            return base_qs.filter(
+                Q(e_name=emp) | Q(e_name__reporting_manager=emp)
             )
-            # Link the formset to the current queryset so it only shows filtered rows
-            context['formset'] = LeaveFormSet(queryset=self.get_queryset())
 
-        return context
-
-    def post(self, request, *args, **kwargs):
-        # 4. Handle bulk save for Superadmin
-        if not request.user.is_superuser:
-            return redirect('hrms:leave-bank')
-
-        LeaveFormSet = modelformset_factory(EmployeeLeaveBalance, form=LeaveBalanceForm, extra=0)
-        formset = LeaveFormSet(request.POST)
-
-        if formset.is_valid():
-            formset.save()
-            return redirect('hrms:leave-bank')
-
-        # If invalid, re-render with errors
-        return self.render_to_response(self.get_context_data(formset=formset))
-    def post(self, request, *args, **kwargs):
-        # 1. SECURITY: Only Superadmin can write to this page
-        if not request.user.is_superuser:
-            from django.contrib import messages
-            messages.error(request, "Access Denied.")
-            return redirect('hrms:leave-bank')
-
-        # 2. KEY FIX: Check for 'action' which matches your HTML button name
-        action = request.POST.get('action')
-
-        if action == 'calculate_all':
-            employees = Employee.objects.filter(
-                status__in=[Employee.Status.ACTIVE, Employee.Status.ON_LEAVE]
-            )
-            for emp in employees:
-                lv.sync_employee_leave_bank(emp)
-            return redirect('hrms:leave-bank')
-
-        # 3. Handle Manual Formset Save (If Unlocked)
-        LeaveFormSet = modelformset_factory(m.EmployeeLeaveBalance, form=LeaveBalanceForm, extra=0)
-        formset = LeaveFormSet(request.POST)
-        if formset.is_valid():
-            formset.save()
-            return redirect('hrms:leave-bank')
-
-        return self.render_to_response(self.get_context_data(formset=formset))
-
-
-from django.forms import modelformset_factory
-from .models import EmployeeLeaveBalance, Employee
-
-
-# ... other imports
-
-from django.forms import modelformset_factory
-from . import forms as f  # Import your forms file
-from . import models as m
-from . import leave_logic as lv
-
-
-class LeaveBankListView(LoginRequiredMixin, ListView):
-    model = m.EmployeeLeaveBalance
-    template_name = 'hrms/leave/leave_bank.html'
-    context_object_name = 'leave_balances'
-
-    def get_queryset(self):
-        user = self.request.user
-        qs = m.EmployeeLeaveBalance.objects.exclude(e_name__status='relieved').select_related('e_name', 'e_name__department', 'e_name__designation')
-        if not (user.is_superuser or user.groups.filter(name='HR').exists()):
-            qs = qs.filter(e_name__user=user)
-        return qs
+        # 3. Standard Employee sees only their own leave balance record
+        if emp:
+            return base_qs.filter(e_name=emp)
+        return m.EmployeeLeaveBalance.objects.none()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         qs = self.get_queryset()
-        context['active_records'] = qs.filter(e_name__status__in=['active', 'on_leave'])
-        context['inactive_records'] = qs.exclude(e_name__status__in=['active', 'on_leave'])
+        context['active_records'] = qs.filter(e_name__status__in=[m.Employee.Status.ACTIVE, m.Employee.Status.ON_LEAVE])
+        context['inactive_records'] = qs.exclude(e_name__status__in=[m.Employee.Status.ACTIVE, m.Employee.Status.ON_LEAVE])
+        context['is_hr'] = is_hr_or_above(self.request.user)
 
-        if self.request.user.is_superuser:
-            # We use the specific Form class from your forms.py
-            LeaveFormSet = modelformset_factory(m.EmployeeLeaveBalance, form=f.LeaveBalanceForm, extra=0)
-            context['formset'] = LeaveFormSet(queryset=qs)
+        # Superadmin / HR bulk editing formset
+        if self.request.user.is_superuser or is_hr_or_above(self.request.user):
+            LeaveFormSet = modelformset_factory(
+                m.EmployeeLeaveBalance,
+                form=f.LeaveBalanceForm,
+                extra=0
+            )
+            context['formset'] = kwargs.get('formset') or LeaveFormSet(queryset=qs)
+
         return context
 
     def post(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
+        # 1. Security Check: Only Superadmin / HR can modify or trigger bulk calculation
+        if not (request.user.is_superuser or is_hr_or_above(request.user)):
+            messages.error(request, "Access Denied: Only HR/Superadmin can modify leave balances.")
             return redirect('hrms:leave-bank')
 
         action = request.POST.get('action')
 
-        # 1. AUTO CALCULATE
+        # 2. Handle 'Calculate All' Bulk Sync Action
         if action == 'calculate_all':
-            employees = m.Employee.objects.filter(status='active')
-            for emp in employees:
+            active_id = request.session.get('active_company_id')
+            emp_qs = m.Employee.objects.filter(status__in=[m.Employee.Status.ACTIVE, m.Employee.Status.ON_LEAVE])
+            if active_id and active_id != 'all':
+                emp_qs = emp_qs.filter(company_id=active_id)
+            count = 0
+            for emp in emp_qs:
                 lv.sync_employee_leave_bank(emp)
+                count += 1
+            messages.success(request, f"Successfully recalculated leave bank balances for {count} active employees.")
             return redirect('hrms:leave-bank')
 
-        # 2. MANUAL SAVE (Triggered by value="save_manual")
-        LeaveFormSet = modelformset_factory(m.EmployeeLeaveBalance, form=f.LeaveBalanceForm, extra=0)
+        # 3. Handle Formset Submission (Manual Bulk Edit)
+        LeaveFormSet = modelformset_factory(
+            m.EmployeeLeaveBalance,
+            form=f.LeaveBalanceForm,
+            extra=0
+        )
         formset = LeaveFormSet(request.POST)
 
         if formset.is_valid():
             formset.save()
+            messages.success(request, "Leave bank balances updated successfully.")
             return redirect('hrms:leave-bank')
 
-        # If invalid, re-render with errors
+        messages.error(request, "Error saving leave balance changes. Please review the highlighted fields.")
         return self.render_to_response(self.get_context_data(formset=formset))
 
 # PAYROLL & SALARY STRUCTURE ENGINE
@@ -3518,309 +3696,7 @@ class PayrollProcessView(HRRequiredMixin, SidebarContextMixin, View):
             'form': form, 'active_group': self.active_group, 'active_item': self.active_item,
         })
 
-    @staticmethod
-    def process_payroll_logic(payroll_run, company, year, month):
-        """
-        Processes each active employee's attendance and calculates their payslip.
-        This follows the 'Smart Brain' logic: 8-hour effective time & Sequential Grace.
-        """
-        from decimal import Decimal, ROUND_HALF_UP
-
-        employees = m.Employee.objects.filter(company=company, status='active')
-        total_days_in_month = calendar.monthrange(year, month)[1]
-        tz = timezone.get_current_timezone()
-
-        # Office Boundaries from Company Model
-        # off_start = company.office_start_time
-        active_policy = company.get_policy_for_date(curr_date)
-        off_start = active_policy.office_start_time
-
-        off_start = active_policy.office_start_time
-        off_end = active_policy.office_end_time
-        grace_limit = active_policy.grace_allowed_count
-
-        for emp in employees:
-            salary = emp.salaries.filter(is_active=True).first()
-            if not salary:
-                continue
-
-            # 1. Base Money Math
-            monthly_ctc = salary.ctc_annual / Decimal('12')
-            daily_wage = (monthly_ctc / Decimal(total_days_in_month)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-            # 2. Initialize Counters (Decimal for precision)
-            stats = {
-                'full_days': Decimal('0'),
-                'half_days': Decimal('0'),
-                'off_days': Decimal('0'),  # Holidays/Sundays not worked
-                'comp_off_days': Decimal('0'),  # Holidays/Sundays worked
-                'paid_leaves': Decimal('0'),
-                'unpaid_days': Decimal('0'),
-                'extra_work_days': Decimal('0')
-            }
-            grace_used_this_month = 0
-
-            # 3. Daily Loop
-            for day_num in range(1, total_days_in_month + 1):
-                curr_date = date(year, month, day_num)
-                # --- MOVE POLICY FETCHING HERE ---
-                # This ensures if the time changed on Aug 1st, it switches correctly!
-                active_policy = company.get_policy_for_date(curr_date)
-
-                off_start = active_policy.office_start_time
-                off_end = active_policy.office_end_time
-                grace_limit = active_policy.grace_allowed_count
-
-                is_holiday = m.Holiday.objects.filter(company=company, date=curr_date).exists()
-                is_sunday = curr_date.weekday() == 6
-
-                att = m.AttendanceRecord.objects.filter(employee=emp, attendance_date=curr_date).first()
-
-                # --- RULE A: Holiday/Sunday Logic ---
-                if is_holiday or is_sunday:
-                    if att and att.check_in:
-                        stats['comp_off_days'] += 1
-                        stats['extra_work_days'] += 1
-                    else:
-                        stats['off_days'] += 1
-                    continue
-
-                # --- RULE B: Check for Punches (The Smart Logic) ---
-                if att and att.check_in:
-                    local_in = timezone.localtime(att.check_in)
-                    local_out = timezone.localtime(att.check_out) if att.check_out else None
-
-                    p_in = local_in.time()
-                    p_out = local_out.time() if local_out else off_start  # Default to start if no checkout
-
-                    # Calculate Effective Time (Only count 10:00 AM to 6:00 PM)
-                    eff_s = max(p_in, off_start)
-                    eff_e = min(p_out, off_end)
-                    eff_hours = (datetime.combine(curr_date, eff_e) - datetime.combine(curr_date,
-                                                                                       eff_s)).total_seconds() / 3600
-
-                    grace_deadline = (datetime.combine(curr_date, off_start) + timedelta(minutes=grace_mins)).time()
-
-                    # Logic Path 1: Arrived On Time (<= 10:00)
-                    if p_in <= off_start:
-                        if eff_hours >= 8:
-                            stats['full_days'] += 1
-                        elif eff_hours >= 4:
-                            stats['half_days'] += 1
-                        else:
-                            stats['unpaid_days'] += 1
-
-                    # Logic Path 2: Arrived in Grace Window (10:01 - 10:15)
-                    elif p_in <= grace_deadline:
-                        # Grace applies ONLY if they stayed until the end of office hours (6:00 PM)
-                        if p_out >= off_end:
-                            if grace_used_this_month < grace_limit:
-                                grace_used_this_month += 1
-                                stats['full_days'] += 1  # Grace "saves" the Full Day
-                            else:
-                                stats['half_days'] += 1  # Grace Exhausted
-                        else:
-                            # Came late, left early -> HD (Grace is not used/wasted)
-                            stats['half_days'] += 1
-
-                    # Logic Path 3: Arrived Late (> 10:15)
-                    else:
-                        stats['half_days'] += 1
-
-                # --- RULE C: Check for Approved Leaves (If no punch) ---
-                else:
-                    leave = m.LeaveApplication.objects.filter(
-                        employee=emp, status='approved',
-                        start_date__lte=curr_date, end_date__gte=curr_date
-                    ).first()
-
-                    if leave:
-                        # Intern Rule + LWP Rule
-                        if emp.employment_type != 'intern' and leave.leave_type.code != 'LWP':
-                            stats['paid_leaves'] += 1
-                        else:
-                            stats['unpaid_days'] += 1
-                    else:
-                        stats['unpaid_days'] += 1
-
-            # 4. Final Money Calculations
-            paid_days = stats['full_days'] + (stats['half_days'] * Decimal('0.5')) + \
-                        stats['paid_leaves'] + stats['off_days'] + stats['comp_off_days']
-
-            earned_wages = (paid_days * daily_wage).quantize(Decimal('0.01'))
-            penalty_deduction = (stats['unpaid_days'] * daily_wage).quantize(Decimal('0.01'))
-
-            # Loans & Extras
-            loan = emp.loans.filter(is_active=True).first()
-            loan_deduction = min(loan.monthly_installment, loan.remaining_balance) if loan else Decimal('0')
-
-            extras = m.PayrollExtra.objects.filter(employee=emp, is_consumed=False)
-            extra_earning = sum(ex.amount for ex in extras)
-
-            total_earnings = (salary.basic + salary.hra + salary.special_allowance + extra_earning).quantize(
-                Decimal('0.01'))
-            total_deductions = (salary.pf_employee + salary.esic_employee + salary.professional_tax + \
-                                salary.tds + loan_deduction).quantize(Decimal('0.01'))
-
-            net_pay = total_earnings - total_deductions - penalty_deduction
-
-            # 5. Save to PaySlip Model
-            m.PaySlip.objects.update_or_create(
-                payroll_run=payroll_run,
-                employee=emp,
-                defaults={
-                    'full_days': stats['full_days'],
-                    'half_days': stats['half_days'],
-                    'off_days': stats['off_days'],
-                    'comp_off_days': stats['comp_off_days'],
-                    'paid_leave_days': stats['paid_leaves'],
-                    'absent_days': stats['unpaid_days'],
-                    'paid_days': paid_days,
-                    'total_days_in_month': total_days_in_month,
-                    'daily_wage': daily_wage,
-                    'penalty_deduction': penalty_deduction,
-                    'loan_deduction': loan_deduction,
-                    'extra_earning': extra_earning,
-                    'total_earnings': total_earnings,
-                    'total_deductions': total_deductions,
-                    'net_pay': net_pay,
-                }
-            )
-
-    @staticmethod
-    def process_payroll_logic(payroll_run, company, year, month):
-        """
-        Calculates payslips. Rules: 8-hour effective time, Sequential Grace, Versioned Policy.
-        """
-        from decimal import Decimal, ROUND_HALF_UP
-        from datetime import date, datetime, timedelta
-
-        employees = m.Employee.objects.filter(company=company, status='active')
-        total_days_in_month = calendar.monthrange(year, month)[1]
-
-        for emp in employees:
-            salary = emp.salaries.filter(is_active=True).first()
-            if not salary:
-                continue
-
-            # 1. Money Setup
-            monthly_ctc = salary.ctc_annual / Decimal('12')
-            daily_wage = (monthly_ctc / Decimal(total_days_in_month)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-            stats = {
-                'full_days': Decimal('0'), 'half_days': Decimal('0'),
-                'off_days': Decimal('0'), 'comp_off_days': Decimal('0'),
-                'paid_leaves': Decimal('0'), 'unpaid_days': Decimal('0')
-            }
-            grace_used_this_month = 0
-
-            # 2. Daily Loop
-            for day_num in range(1, total_days_in_month + 1):
-                curr_date = date(year, month, day_num)
-
-                # --- FETCH ACTIVE POLICY FOR THIS SPECIFIC DATE ---
-                active_policy = company.get_policy_for_date(curr_date)
-                off_start = active_policy.office_start_time
-                off_end = active_policy.office_end_time
-                grace_limit = active_policy.grace_allowed_count
-                grace_mins = active_policy.grace_minutes  # FIX: Added this variable
-                # --------------------------------------------------
-
-                is_holiday = m.Holiday.objects.filter(company=company, date=curr_date).exists()
-                is_sunday = curr_date.weekday() == 6
-                att = m.AttendanceRecord.objects.filter(employee=emp, attendance_date=curr_date).first()
-
-                # Rule A: Holiday/Sunday
-                if is_holiday or is_sunday:
-                    if att and att.check_in:
-                        stats['comp_off_days'] += 1
-                    else:
-                        stats['off_days'] += 1
-                    continue
-
-                # Rule B: Attendance Punches
-                if att and att.check_in:
-                    local_in = timezone.localtime(att.check_in)
-                    local_out = timezone.localtime(att.check_out) if att.check_out else None
-
-                    p_in = local_in.time()
-                    p_out = local_out.time() if local_out else off_start
-
-                    # Math for effective hours (10-6 rule)
-                    eff_s = max(p_in, off_start)
-                    eff_e = min(p_out, off_end)
-                    eff_hours = (datetime.combine(curr_date, eff_e) - datetime.combine(curr_date,
-                                                                                       eff_s)).total_seconds() / 3600
-                    grace_deadline = (datetime.combine(curr_date, off_start) + timedelta(minutes=grace_mins)).time()
-
-                    if p_in <= off_start:
-                        if eff_hours >= 8:
-                            stats['full_days'] += 1
-                        elif eff_hours >= 4:
-                            stats['half_days'] += 1
-                        else:
-                            stats['unpaid_days'] += 1
-
-                    elif p_in <= grace_deadline:
-                        if p_out >= off_end:
-                            if grace_used_this_month < grace_limit:
-                                grace_used_this_month += 1
-                                stats['full_days'] += 1  # Grace saves FD
-                            else:
-                                stats['half_days'] += 1  # Exhausted
-                        else:
-                            stats['half_days'] += 1  # Left early
-                    else:
-                        stats['half_days'] += 1  # Late > 10:15
-
-                else:
-                    # Rule C: Leaves
-                    leave = m.LeaveApplication.objects.filter(
-                        employee=emp, status='approved',
-                        start_date__lte=curr_date, end_date__gte=curr_date
-                    ).first()
-                    if leave and emp.employment_type != 'intern' and leave.leave_type.code != 'LWP':
-                        stats['paid_leaves'] += 1
-                    else:
-                        stats['unpaid_days'] += 1
-
-            # 3. Final Calculations
-            paid_days = stats['full_days'] + (stats['half_days'] * Decimal('0.5')) + \
-                        stats['paid_leaves'] + stats['off_days'] + stats['comp_off_days']
-
-            penalty_deduction = (stats['unpaid_days'] * daily_wage).quantize(Decimal('0.01'))
-
-            loan = emp.loans.filter(is_active=True).first()
-            loan_deduction = min(loan.monthly_installment, loan.remaining_balance) if loan else Decimal('0')
-
-            extras = m.PayrollExtra.objects.filter(employee=emp, is_consumed=False)
-            extra_earning = sum(ex.amount for ex in extras)
-
-            total_earnings = (salary.basic + salary.hra + salary.special_allowance + extra_earning).quantize(
-                Decimal('0.01'))
-            total_deductions = (salary.pf_employee + salary.esic_employee + salary.professional_tax + \
-                                salary.tds + loan_deduction).quantize(Decimal('0.01'))
-
-            net_pay = total_earnings - total_deductions - penalty_deduction
-
-            # 4. Save
-            m.PaySlip.objects.update_or_create(
-                payroll_run=payroll_run, employee=emp,
-                defaults={
-                    'full_days': stats['full_days'], 'half_days': stats['half_days'],
-                    'off_days': stats['off_days'], 'comp_off_days': stats['comp_off_days'],
-                    'paid_leave_days': stats['paid_leaves'], 'absent_days': stats['unpaid_days'],
-                    'paid_days': paid_days, 'total_days_in_month': total_days_in_month,
-                    'daily_wage': daily_wage, 'penalty_deduction': penalty_deduction,
-                    'loan_deduction': loan_deduction, 'extra_earning': extra_earning,
-                    'total_earnings': total_earnings, 'total_deductions': total_deductions,
-                    'net_pay': net_pay,
-                }
-            )
-
     def post(self, request):
-        # data = calculate_payroll_for_emp(emp, m, y)
-
         form = f.PayrollProcessForm(request.POST)
         if form.is_valid():
             company = form.cleaned_data['company']
@@ -4073,49 +3949,23 @@ class CandidateListView(HRRequiredMixin, SidebarContextMixin, ListView):
 
 class CandidateCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
     model = m.Candidate
-    form_class = f.CandidateForm
+    form_class = f.UnifiedCandidateForm
     template_name = 'hrms/hiring/candidate_form.html'
     success_url = reverse_lazy('hrms:candidate_list')
     active_group, active_item = 'hiring', 'candidate'
 
-    # views.py
     def form_valid(self, form):
         with transaction.atomic():
-            # This part MUST save the names into the Candidate object
-            candidate = form.save()
-
-            # Then create the application
-            m.Application.objects.create(
-                candidate=candidate,
-                job_posting=form.cleaned_data['job_posting'],
-                status=form.cleaned_data['status'],
-                # ... other fields
-            )
-        return super().form_valid(form)
-
-from django.db import transaction
-
-
-class CandidateCreateView(CreateView):
-    model = m.Candidate
-    form_class = UnifiedCandidateForm
-    template_name = 'hrms/hiring/candidate_form.html'
-    success_url = reverse_lazy('hrms:candidate_list')
-
-    def form_valid(self, form):
-        with transaction.atomic():
-            # 1. Save Candidate
             self.object = form.save()
-
-            # 2. Extract application fields and save Application
             m.Application.objects.create(
                 candidate=self.object,
                 job_posting=form.cleaned_data['job_posting'],
-                status=form.cleaned_data['status'],
-                source=form.cleaned_data['source'],
-                cover_letter=form.cleaned_data['cover_letter']
+                status=form.cleaned_data.get('status', 'applied'),
+                source=form.cleaned_data.get('source', ''),
+                cover_letter=form.cleaned_data.get('cover_letter', '')
             )
-        return super().form_valid(form)
+        messages.success(self.request, f"Candidate {self.object.first_name} {self.object.last_name} added successfully.")
+        return redirect(self.success_url)
 
 class CandidateDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
     model = m.Candidate
@@ -5174,9 +5024,8 @@ class AttendanceMatrixView(HRRequiredMixin, SidebarContextMixin, TemplateView):
             for day in date_list:
                 policy = emp.company.get_policy_for_date(day) if emp.company else None
                 grace_mins = policy.grace_minutes if policy else 15
-                grace_limit = policy.grace_allowed_count if policy else 3
-                off_start = policy.office_start_time if policy else None
-                off_end = policy.office_end_time if policy else None
+                grace_limit = 4  # Standard allowance: G1, G2, G3, G4
+                off_start_time = policy.office_start_time if (policy and policy.office_start_time) else time(9, 0)
 
                 rec = att_lookup[emp.id].get(day)
                 leave_code = leave_lookup[emp.id].get(day)
@@ -5196,23 +5045,64 @@ class AttendanceMatrixView(HRRequiredMixin, SidebarContextMixin, TemplateView):
                 }
 
                 if rec and rec.check_in:
-                    cell['check_in'] = timezone.localtime(rec.check_in).strftime('%H:%M') if rec.check_in else None
-                    cell['check_out'] = timezone.localtime(rec.check_out).strftime('%H:%M') if rec.check_out else None
+                    local_in = timezone.localtime(rec.check_in)
+                    local_out = timezone.localtime(rec.check_out) if rec.check_out else None
 
-                    if rec.status == m.AttendanceRecord.Status.PRESENT:
-                        if rec.late_minutes > 0 and rec.late_minutes <= grace_mins:
-                            grace_tracker += 1
+                    cell['check_in'] = local_in.strftime('%H:%M')
+                    cell['check_out'] = local_out.strftime('%H:%M') if local_out else None
+
+                    # Check In vs Shift Start Time
+                    sched_start_dt = datetime.combine(day, off_start_time)
+                    if timezone.is_naive(sched_start_dt):
+                        sched_start_dt = timezone.make_aware(sched_start_dt, timezone.get_current_timezone())
+
+                    grace_cutoff_dt = sched_start_dt + timedelta(minutes=grace_mins)
+
+                    # 1. Check manual status overrides first
+                    if rec.status == m.AttendanceRecord.Status.ON_LEAVE:
+                        cell['status'] = 'on_leave'
+                        cell['badge'] = 'LV'
+                        cell['badge_class'] = 'bg-primary-subtle text-primary border-primary-subtle'
+                        cell['label'] = 'On Leave'
+                        emp_stats['on_leave'] += 1
+                        stats['total_on_leave'] += 1
+
+                    elif local_in > grace_cutoff_dt:
+                        # Late arrival beyond grace window -> Auto Half Day
+                        cell['status'] = 'half_day'
+                        cell['badge'] = 'HD'
+                        cell['badge_class'] = 'bg-info-subtle text-info border-info-subtle'
+                        cell['label'] = f"Half Day: Late Arrival after Grace Window (> {grace_cutoff_dt.strftime('%I:%M %p')})"
+                        emp_stats['half_day'] += 1
+                        stats['total_half_day'] += 1
+
+                    elif local_in > sched_start_dt and local_in <= grace_cutoff_dt:
+                        # Arrival in Grace Window (09:01 - 09:15)
+                        grace_tracker += 1
+                        if grace_tracker <= grace_limit:
                             cell['status'] = 'grace'
                             cell['badge'] = f'G{grace_tracker}'
                             cell['badge_class'] = 'bg-warning-subtle text-warning border-warning-subtle'
-                            cell['label'] = f'Grace #{grace_tracker}'
+                            cell['label'] = f'Grace #{grace_tracker} used (Arrived at {local_in.strftime("%H:%M")})'
+                            emp_stats['present'] += 1
+                            stats['total_present'] += 1
                         else:
-                            cell['status'] = 'present'
-                            cell['badge'] = 'P'
-                            cell['badge_class'] = 'bg-success-subtle text-success border-success-subtle'
-                            cell['label'] = 'Present'
-                        emp_stats['present'] += 1
-                        stats['total_present'] += 1
+                            # Grace limit exhausted (G4 crossed) -> Auto Half Day
+                            cell['status'] = 'half_day'
+                            cell['badge'] = 'HD'
+                            cell['badge_class'] = 'bg-info-subtle text-info border-info-subtle'
+                            cell['label'] = f'Half Day: Grace Limit Exhausted (G{grace_limit} Crossed)'
+                            emp_stats['half_day'] += 1
+                            stats['total_half_day'] += 1
+
+                    elif rec.total_hours > 0 and rec.total_hours < Decimal('4.0'):
+                        # Short duration < 4 hours
+                        cell['status'] = 'half_day'
+                        cell['badge'] = 'HD'
+                        cell['badge_class'] = 'bg-info-subtle text-info border-info-subtle'
+                        cell['label'] = f'Half Day: Short Work Duration ({rec.total_hours} Hours < 4.0)'
+                        emp_stats['half_day'] += 1
+                        stats['total_half_day'] += 1
 
                     elif rec.status == m.AttendanceRecord.Status.HALF_DAY:
                         cell['status'] = 'half_day'
@@ -5221,13 +5111,14 @@ class AttendanceMatrixView(HRRequiredMixin, SidebarContextMixin, TemplateView):
                         cell['label'] = 'Half Day'
                         emp_stats['half_day'] += 1
                         stats['total_half_day'] += 1
+
                     else:
-                        cell['status'] = 'absent'
-                        cell['badge'] = 'A'
-                        cell['badge_class'] = 'bg-danger-subtle text-danger border-danger-subtle'
-                        cell['label'] = 'Absent'
-                        emp_stats['absent'] += 1
-                        stats['total_absent'] += 1
+                        cell['status'] = 'present'
+                        cell['badge'] = 'P'
+                        cell['badge_class'] = 'bg-success-subtle text-success border-success-subtle'
+                        cell['label'] = 'Present'
+                        emp_stats['present'] += 1
+                        stats['total_present'] += 1
 
                 elif leave_code:
                     cell['status'] = 'on_leave'
@@ -5292,6 +5183,19 @@ def manual_punch_edit_ajax(request):
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': 'POST required.'}, status=400)
 
+    def parse_time_input(time_val, base_date, tz):
+        if not time_val or str(time_val).strip() in ('', 'None', 'null'):
+            return None
+        cleaned = str(time_val).strip()
+        for fmt in ('%H:%M', '%H:%M:%S', '%I:%M %p', '%I:%M%p', '%I:%M:%S %p'):
+            try:
+                t = datetime.strptime(cleaned, fmt).time()
+                dt = datetime.combine(base_date, t)
+                return timezone.make_aware(dt, tz)
+            except ValueError:
+                continue
+        return None
+
     try:
         data = json.loads(request.body)
         record_id = data.get('record_id')
@@ -5317,15 +5221,9 @@ def manual_punch_edit_ajax(request):
                 employee_id=emp_id, attendance_date=att_date
             )
 
-        if check_in_str:
-            d_str = record.attendance_date.strftime('%Y-%m-%d')
-            full_in = f"{d_str} {check_in_str}"
-            record.check_in = timezone.make_aware(datetime.strptime(full_in, '%Y-%m-%d %H:%M'), tz)
-
-        if check_out_str:
-            d_str = record.attendance_date.strftime('%Y-%m-%d')
-            full_out = f"{d_str} {check_out_str}"
-            record.check_out = timezone.make_aware(datetime.strptime(full_out, '%Y-%m-%d %H:%M'), tz)
+        # Parse Times safely
+        record.check_in = parse_time_input(check_in_str, record.attendance_date, tz)
+        record.check_out = parse_time_input(check_out_str, record.attendance_date, tz)
 
         if status_val:
             record.status = status_val

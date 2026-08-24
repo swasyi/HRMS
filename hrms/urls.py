@@ -31,12 +31,15 @@ urlpatterns = [
     path('employees/<int:pk>/delete/', views.EmployeeDeleteView.as_view(), name='employee_delete'),
     path('employees/<int:pk>/bank-detail/', views.EmployeeBankDetailUpdateView.as_view(), name='employee_bankdetail'),
     path('employees/<int:pk>/documents/add/', views.EmployeeDocumentCreateView.as_view(), name='employee_document_add'),
+    path('employees/<int:pk>/documents/bulk-upload/', views.EmployeeDocumentBulkUploadView.as_view(), name='employee_document_bulk_upload'),
     path('employees/documents/<int:pk>/delete/', views.EmployeeDocumentDeleteView.as_view(), name='employee_document_delete'),
+    path('employees/documents/<int:pk>/verify/', views.EmployeeDocumentVerifyView.as_view(), name='employee_document_verify'),
     path('employees/<int:pk>/notices/add/', views.EmployeeNoticeCreateView.as_view(), name='employee_notice_add'),
     path('employees/notices/<int:pk>/delete/', views.EmployeeNoticeDeleteView.as_view(), name='employee_notice_delete'),
 
     path('me/profile/', views.MyProfileView.as_view(), name='my_profile'),
     path('me/documents/', views.MyDocumentsView.as_view(), name='my_documents'),
+    path('me/documents/upload/', views.EmployeeDocumentBulkUploadView.as_view(), name='my_documents_bulk_upload'),
 
     # --- Hiring (HR/Admin) ---
     path('hiring/jobs/', views.JobPostingListView.as_view(), name='jobposting_list'),
