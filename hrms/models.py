@@ -217,6 +217,7 @@ class Employee(TimeStampedModel):
         default=False,
         help_text="Designates if this employee can act as a reporting manager."
     )
+
     reporting_manager = models.ForeignKey(
         'self',
         on_delete=models.SET_NULL,
@@ -224,6 +225,11 @@ class Employee(TimeStampedModel):
         blank=True,
         related_name='subordinates',
         help_text="Select direct reporting manager"
+    )
+
+    is_finance = models.BooleanField(
+        default=False,
+        help_text='Designates whether this employee has access to Payroll, Payslips, and Salary Ledgers.'
     )
     # NEW: Allows HR to be assigned to multiple companies
     managed_companies = models.ManyToManyField(
@@ -834,8 +840,21 @@ class AttendanceRecord(TimeStampedModel):
 
         super().save(*args, **kwargs)
 
+        # 5. Automatically trigger late penalty logging & leave deduction if marked Half Day due to late arrival
+        if self.status == self.Status.HALF_DAY and self.late_minutes > 0 and self.employee_id:
+            try:
+                from .services import process_late_arrival_penalty
+                process_late_arrival_penalty(self)
+            except Exception:
+                pass
+
     def __str__(self):
         return f'{self.employee} - {self.attendance_date}'
+    @property
+    def is_grace_applied(self):
+        # This logic assumes policy is accessible; otherwise, use a threshold
+        # For template logic, we'll check if late_minutes > 0 and a penalty wasn't applied
+        return self.late_minutes > 0 and self.late_minutes <= 15 # Replace 15 with policy.grace_minutes
 
 
 class GraceUsageTracker(TimeStampedModel):
@@ -882,6 +901,18 @@ class AttendancePenalty(TimeStampedModel):
 
     def __str__(self):
         return f"Penalty: {self.employee} - {self.penalty_date} ({self.deduction_source})"
+
+    @property
+    def late_duration(self):
+        return self.late_minutes
+
+    @property
+    def leave_deducted(self):
+        return self.deduction_days
+
+    @property
+    def logged_on(self):
+        return self.created_at
 
 
 
@@ -1167,7 +1198,9 @@ class EmployeeLeaveBalanceLive(models.Model):
     earned_leave = models.FloatField(default=0.0)
     casual_leave = models.FloatField(default=0.0)
     comp_off = models.FloatField(default=0.0)
-
+    # Add these two fields:
+    maternity_leave = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('20.00'))
+    paternity_leave = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('10.00'))
     def __str__(self):
         return f"Live Balance for {self.e_name.full_name}"
 @receiver(post_save, sender=Employee)
@@ -1335,6 +1368,13 @@ class PaySlip(TimeStampedModel):
         """Fixed monthly salary (Basic+HRA+Special Allowance) excluding ad-hoc extras."""
         return self.total_earnings - self.extra_earning
 
+    @property
+    def monthly_ctc(self):
+        """Calculates exact monthly package: Annual CTC / 12."""
+        salary = self.employee.salaries.filter(is_active=True).first()
+        if salary and salary.ctc_annual:
+            return (salary.ctc_annual / Decimal('12.0')).quantize(Decimal('0.01'))
+        return Decimal('0.00')
 
 class LoanAdvance(TimeStampedModel):
     """A running loan/salary-advance whose monthly_installment is auto-deducted

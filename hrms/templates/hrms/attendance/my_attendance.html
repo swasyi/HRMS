@@ -1,87 +1,370 @@
 {% extends "hrms/base.html" %}
-{% block title %}My Attendance{% endblock %}
-{% block page_title %}My Attendance{% endblock %}
+{% block title %}Attendance Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    :root {
+        --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+        --success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        --danger-gradient: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        --glass-bg: rgba(255, 255, 255, 0.95);
+        --border-color: #f1f5f9;
+    }
+
+    body { background-color: #f8fafc; }
+
+    .attendance-card {
+        border: 1px solid var(--border-color);
+        border-radius: 20px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.03);
+        background: var(--glass-bg);
+        transition: transform 0.2s ease;
+    }
+
+    .punch-clock {
+        font-size: 3.5rem;
+        font-weight: 800;
+        background: linear-gradient(to bottom, #1e293b, #475569);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .btn-punch {
+        padding: 14px 28px;
+        border-radius: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        border: none;
+    }
+
+    .btn-punch-in {
+        background: var(--success-gradient);
+        color: white;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    }
+
+    .btn-punch-in:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-punch-out {
+        background: white;
+        color: #ef4444;
+        border: 2px solid #ef4444;
+    }
+
+    .btn-punch-out:hover:not(:disabled) {
+        background: #fef2f2;
+        transform: translateY(-2px);
+    }
+
+    .btn-punch:disabled {
+        opacity: 0.6;
+        filter: grayscale(1);
+        transform: none !important;
+    }
+
+    .status-pill {
+        padding: 6px 16px;
+        border-radius: 50px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+    }
+
+    .time-card-mini {
+        background: #f8fafc;
+        padding: 15px;
+        border-radius: 15px;
+        border: 1px solid #e2e8f0;
+    }
+
+    /* Grace Dots */
+    .grace-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 4px;
+        background: #e2e8f0;
+        transition: all 0.3s ease;
+    }
+    .grace-dot.used { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); }
+    .grace-dot.active {
+        background: #10b981;
+        animation: pulse-green 2s infinite;
+    }
+
+    @keyframes pulse-green {
+        0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    .time-pill {
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        background: #f1f5f9;
+        color: #334155;
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+
+    .table-attendance thead th {
+        background: #f8fafc;
+        color: #64748b;
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.7rem;
+        letter-spacing: 1px;
+        padding: 15px;
+        border-top: none;
+    }
+
+    .live-indicator {
+        display: inline-flex;
+        align-items: center;
+        color: #10b981;
+        font-weight: 700;
+        font-size: 0.75rem;
+        gap: 5px;
+    }
+
+    .live-dot {
+        width: 8px;
+        height: 8px;
+        background: #10b981;
+        border-radius: 50%;
+        animation: blink 1.5s infinite;
+    }
+
+    @keyframes blink { 50% { opacity: 0; } }
+
+</style>
+{% endblock %}
 
 {% block content %}
-{% if not employee %}
-<div class="alert alert-warning">Your login isn't linked to an employee record yet. Contact HR.</div>
-{% else %}
+<div class="container-fluid py-4">
 
-<div class="card mb-4">
-  <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
-    <div>
-      <div class="text-muted small mb-1">Today — {{ today_record.attendance_date|default:"" }}</div>
-      {% if today_record %}
-        <div>
-          <strong>Check In:</strong> {{ today_record.check_in|time:"H:i"|default:"—" }}
-          &nbsp;·&nbsp;
-          <strong>Check Out:</strong> {{ today_record.check_out|time:"H:i"|default:"—" }}
+    {% if not employee %}
+    <div class="alert alert-warning border-0 shadow-lg rounded-4 p-4">
+        <div class="d-flex align-items-center">
+            <i class="bi bi-person-exclamation fs-1 me-3"></i>
+            <div>
+                <h5 class="mb-1 fw-bold">Profile Not Linked</h5>
+                <p class="mb-0">Please contact HR to link your user account with your employee profile.</p>
+            </div>
         </div>
-        <div class="mt-1">
-          <span class="badge {% if today_record.status == 'present' %}text-bg-success{% elif today_record.status == 'half_day' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
-            {{ today_record.get_status_display }}
-          </span>
-          {% if today_record.remarks %}<span class="text-muted small ms-2">{{ today_record.remarks }}</span>{% endif %}
+    </div>
+    {% else %}
+
+    <div class="row g-4">
+        <!-- Main Punching Section -->
+        <div class="col-lg-8">
+            <div class="card attendance-card h-100 border-0">
+                <div class="card-body p-4 p-md-5">
+                    <div class="d-flex justify-content-between align-items-center mb-5">
+                        <div>
+                            <h4 class="fw-800 text-slate-800 mb-1">Daily Attendance</h4>
+                            <p class="text-muted fw-500 mb-0"><i class="bi bi-calendar3 me-2"></i>{{ today_record.attendance_date|date:"l, d F Y"|default:"Today" }}</p>
+                        </div>
+                        <span class="status-pill {% if today_record.status == 'present' %}bg-success text-white{% elif today_record.status == 'half_day' %}bg-warning text-dark{% else %}bg-light text-muted{% endif %}">
+                            {{ today_record.get_status_display|default:"Not Clocked In" }}
+                        </span>
+                    </div>
+
+                    <div class="row g-5 align-items-center">
+                        <div class="col-md-6 text-center border-md-end">
+                            <label class="text-uppercase small fw-bold text-muted mb-2 d-block">Current Local Time</label>
+                            <div id="liveClock" class="punch-clock mb-4">00:00:00</div>
+
+                            <div class="d-flex justify-content-center gap-3">
+                                <form method="post" action="{% url 'hrms:attendance_check_in' %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-punch btn-punch-in"
+                                            {% if today_record and today_record.check_in %}disabled{% endif %}>
+                                        <i class="bi bi-box-arrow-in-right me-2"></i>Punch In
+                                    </button>
+                                </form>
+                                <form method="post" action="{% url 'hrms:attendance_check_out' %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-punch btn-punch-out"
+                                            {% if not today_record or not today_record.check_in or today_record.check_out %}disabled{% endif %}>
+                                        Punch Out
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6 ps-md-5">
+                            <div class="row g-3">
+                                <div class="col-6">
+                                    <div class="time-card-mini">
+                                        <small class="text-muted text-uppercase d-block mb-1 fw-bold" style="font-size: 0.65rem;">Check In</small>
+                                        <span class="fw-bold text-slate-700">
+                                            {% if today_record.check_in %}{{ today_record.check_in|time:"H:i" }}{% else %}--:--{% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="time-card-mini">
+                                        <small class="text-muted text-uppercase d-block mb-1 fw-bold" style="font-size: 0.65rem;">Check Out</small>
+                                        <span class="fw-bold text-slate-700">
+                                            {% if today_record.check_out %}{{ today_record.check_out|time:"H:i" }}{% else %}--:--{% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="col-12">
+                                    <div class="time-card-mini bg-white border-primary shadow-sm">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <small class="text-muted text-uppercase fw-bold" style="font-size: 0.65rem;">Working Hours</small>
+                                            <!-- TIMER CLOSE LOGIC: Only show "Live" if checked in but not checked out -->
+                                            {% if today_record.check_in and not today_record.check_out %}
+                                            <div class="live-indicator">
+                                                <div class="live-dot"></div> LIVE
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                        <div class="fs-3 fw-800 text-primary">{{ today_record.total_hours|default:"0.00" }} <small class="fs-6 fw-normal text-muted">hrs</small></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-      {% else %}
-        <div class="text-muted">You haven't checked in today.</div>
-      {% endif %}
-      {% if grace_max is not None %}
-        <div class="text-muted small mt-1">Grace used this month: {{ grace_used }}/{{ grace_max }}</div>
-      {% endif %}
-    </div>
-    <div class="d-flex gap-2">
-      <form method="post" action="{% url 'hrms:attendance_check_in' %}">
-        {% csrf_token %}
-        <button type="submit" class="btn text-white" style="background:var(--accent);"
-                {% if today_record and today_record.check_in %}disabled{% endif %}>
-          <i class="bi bi-box-arrow-in-right"></i> Check In
-        </button>
-      </form>
-      <form method="post" action="{% url 'hrms:attendance_check_out' %}">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-outline-secondary"
-                {% if not today_record or not today_record.check_in or today_record.check_out %}disabled{% endif %}>
-          <i class="bi bi-box-arrow-right"></i> Check Out
-        </button>
-      </form>
-    </div>
-  </div>
-</div>
 
-<div class="card">
-  <div class="card-header bg-white fw-semibold">History</div>
-  <div class="table-responsive">
-    <table class="table table-hover mb-0 align-middle">
-      <thead class="table-light"><tr><th>Date</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Late</th><th>Status</th></tr></thead>
-      <tbody>
-        {% for rec in records %}
-        <tr>
-          <td>{{ rec.attendance_date }}</td>
-          <td>{{ rec.check_in|time:"H:i"|default:"—" }}</td>
-          <td>{{ rec.check_out|time:"H:i"|default:"—" }}</td>
-          <td>{{ rec.total_hours }}</td>
-          <td>{% if rec.late_minutes %}{{ rec.late_minutes }} min{% else %}—{% endif %}</td>
-          <td>
-            <span class="badge {% if rec.status == 'present' %}text-bg-success{% elif rec.status == 'half_day' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">
-              {{ rec.get_status_display }}
-            </span>
-          </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="6" class="text-muted text-center py-4">No attendance recorded yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+        <!-- Grace Validity Section -->
+        <div class="col-lg-4">
+            <div class="card attendance-card h-100 border-0 overflow-hidden">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-center mb-4">
+                        <div class="bg-warning-subtle p-2 rounded-3 me-3 text-warning">
+                            <i class="bi bi-shield-check fs-4"></i>
+                        </div>
+                        <h6 class="fw-bold mb-0">Grace Policy</h6>
+                    </div>
 
-{% if is_paginated %}
-<nav class="mt-3"><ul class="pagination pagination-sm">
-  {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>{% endif %}
-  <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
-  {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
-</ul></nav>
-{% endif %}
-{% endif %}
+                    <p class="text-muted small mb-4">Monthly allowed grace arrivals: <span class="badge bg-slate-100 text-slate-800">{{ grace_max|default:"0" }}</span></p>
+
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span class="small fw-bold text-slate-600">Usage Tracker</span>
+                            <span class="small text-slate-500">{{ grace_used }} / {{ grace_max }} used</span>
+                        </div>
+                        <div class="grace-indicator d-flex flex-wrap gap-2">
+                            {% for i in "x"|rjust:grace_max %}
+                                <div class="grace-dot
+                                    {% if forloop.counter <= grace_used %}used{% elif forloop.counter == grace_used|add:1 %}active{% endif %}"
+                                    data-bs-toggle="tooltip"
+                                    title="Instance {{ forloop.counter }}">
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="p-3 rounded-4 bg-slate-50 border border-slate-100">
+                        <div class="d-flex gap-3">
+                            <i class="bi bi-info-circle text-primary"></i>
+                            <div class="small text-slate-600">
+                                <strong>Policy:</strong> Late check-in up to <span class="text-primary fw-bold">{{ grace_minutes_limit }}m</span> is auto-marked as grace.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Table -->
+    <div class="card attendance-card mt-5 border-0">
+        <div class="p-4 border-bottom d-flex justify-content-between align-items-center">
+            <h5 class="fw-bold mb-0">Attendance History</h5>
+            <button class="btn btn-sm btn-outline-primary rounded-pill px-3">Download Report</button>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-attendance align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-4">Date & Day</th>
+                        <th>Status</th>
+                        <th>Punch In</th>
+                        <th>Punch Out</th>
+                        <th>Duration</th>
+                        <th>Remark / Grace</th>
+                    </tr>
+                </thead>
+                <tbody class="border-top-0">
+                    {% for rec in records %}
+                    <tr style="border-bottom: 1px solid #f8fafc;">
+                        <td class="ps-4">
+                            <div class="fw-bold text-slate-700">{{ rec.attendance_date|date:"d M" }}</div>
+                            <div class="text-muted" style="font-size: 0.75rem;">{{ rec.attendance_date|date:"l" }}</div>
+                        </td>
+                        <td>
+                            <span class="badge {% if rec.status == 'present' %}bg-success-subtle text-success{% elif rec.status == 'half_day' %}bg-warning-subtle text-warning{% elif rec.status == 'absent' %}bg-danger-subtle text-danger{% else %}bg-secondary-subtle text-secondary{% endif %} rounded-pill px-3 py-2">
+                                {{ rec.get_status_display }}
+                            </span>
+                        </td>
+                        <td><span class="time-pill">{{ rec.check_in|time:"H:i"|default:"--" }}</span></td>
+                        <td><span class="time-pill">{{ rec.check_out|time:"H:i"|default:"--" }}</span></td>
+                        <td class="fw-800 text-slate-700">{{ rec.total_hours }}h</td>
+                        <td>
+                            {% if rec.late_minutes > 0 %}
+                                {% if rec.late_minutes <= grace_minutes_limit %}
+                                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2 py-1">
+                                        <i class="bi bi-shield-check me-1"></i>Grace: {{ rec.late_minutes }}m
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
+                                        <i class="bi bi-clock-history me-1"></i>Late: {{ rec.late_minutes }}m
+                                    </span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted small">On Time</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if is_paginated %}
+        <div class="p-4">
+            <nav><ul class="pagination pagination-sm justify-content-center mb-0">
+                {% if page_obj.has_previous %}
+                <li class="page-item"><a class="page-link rounded-start-pill border-0 px-3" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>
+                {% endif %}
+                <li class="page-item active"><span class="page-link border-0 px-3">{{ page_obj.number }}</span></li>
+                {% if page_obj.has_next %}
+                <li class="page-item"><a class="page-link rounded-end-pill border-0 px-3" href="?page={{ page_obj.next_page_number }}">Next</a></li>
+                {% endif %}
+            </ul></nav>
+        </div>
+        {% endif %}
+    </div>
+
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function updateClock() {
+        const now = new Date();
+        const clock = document.getElementById('liveClock');
+        if (clock) {
+            clock.textContent = now.toLocaleTimeString('en-GB', { hour12: false });
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+    tooltipTriggerList.map(t => new bootstrap.Tooltip(t));
+</script>
 {% endblock %}

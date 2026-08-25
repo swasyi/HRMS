@@ -47,7 +47,35 @@ from . import models as m
 
 class LeaveError(Exception):
     """Raised for any invalid leave action — insufficient balance, bad dates, etc."""
+# 1. DYNAMIC MODEL HELPERS (ZERO HARDCODED VALUES)
+# ---------------------------------------------------------------------------
+def get_leave_type_annual_quota(leave_type):
+    """Dynamically reads the yearly quota from whatever field exists on LeaveType."""
+    for attr in ('days_per_year', 'annual_quota', 'days_allowed', 'quota', 'max_days', 'days'):
+        if hasattr(leave_type, attr):
+            val = getattr(leave_type, attr)
+            if val is not None:
+                return Decimal(str(val))
+    return Decimal('0.0')
 
+
+def calculate_monthly_quota(leave_type):
+    """Calculates monthly quota dynamically (Annual / 12) from model database record."""
+    annual = get_leave_type_annual_quota(leave_type)
+    code = (leave_type.code or '').upper().strip()
+    norm_name = leave_type.name.lower()
+
+    # Emergency / Block leaves are not divided by 12
+    if code in ('SL', 'BL', 'MATERNITY', 'PATERNITY', 'MTL', 'PL') or any(
+        k in norm_name for k in ('sick', 'bereave', 'breave', 'matern', 'patern')
+    ):
+        return annual
+
+    if annual > Decimal('0.0'):
+        raw_monthly = annual / Decimal('12.0')
+        # Rounded to 1 decimal place, minimum 1.0 day if quota exists
+        return round(raw_monthly, 1) if raw_monthly > Decimal('1.0') else Decimal('1.0')
+    return Decimal('0.0')
 
 # ---------------------------------------------------------------------------
 # HELPERS
@@ -100,6 +128,77 @@ def _log_action(application, action, performed_by=None, remarks=''):
         performed_by=performed_by,
         remarks=remarks,
     )
+
+
+
+
+
+def _sync_bank_balance(employee, leave_type, days, action='deduct'):
+    """
+    Directly updates the Master Leave Bank (EmployeeLeaveBalance) so
+    the cards and tables update in real-time.
+    """
+    if not employee or not leave_type or days <= Decimal('0.0'):
+        return
+
+    bank = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+    if not bank:
+        return
+
+    code = (leave_type.code or '').upper().strip()
+    norm_name = leave_type.name.lower()
+
+    field_map = {
+        'CL': 'casual_leave',
+        'EL': 'earned_leave',
+        'SL': 'sick_leave',
+        'BL': 'bereavement_leave',
+        'ML': 'menstrual_leave',
+        'MTL': 'menstrual_leave',
+        'CO': 'comp_off',
+    }
+    target_field = field_map.get(code)
+    if not target_field:
+        for candidate in (
+            'maternity_leave', 'paternity_leave',
+            norm_name.replace(' ', '_') + '_leave',
+            norm_name.replace(' ', '_')
+        ):
+            if hasattr(bank, candidate):
+                target_field = candidate
+                break
+
+    if target_field and hasattr(bank, target_field):
+        current_val = Decimal(str(getattr(bank, target_field) or 0.0))
+        if action == 'deduct':
+            new_val = max(Decimal('0.0'), current_val - days)
+        elif action == 'refund':
+            new_val = current_val + days
+        else:
+            return
+
+        setattr(bank, target_field, new_val)
+        bank.save(update_fields=[target_field])
+
+
+def calculate_total_days(start_date, end_date, day_type='full'):
+    if end_date < start_date:
+        raise LeaveError('End date cannot be before start date.')
+    if day_type == 'half':
+        if start_date != end_date:
+            raise LeaveError('Half-day leave must have the same start and end date.')
+        return Decimal('0.5')
+    return Decimal(str((end_date - start_date).days + 1))
+
+
+def _log_action(application, action, performed_by=None, remarks=''):
+    if hasattr(m, 'LeaveApprovalLog'):
+        m.LeaveApprovalLog.objects.create(
+            application=application,
+            action=action,
+            performed_by=performed_by,
+            remarks=remarks,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -294,11 +393,6 @@ def approve_leave(application, approver_user):
     _log_action(application, 'hr_approved', performed_by=approver_user,
                 remarks=f'HR final approval. Balance: {msg}')
     return f"Success: {msg}"
-
-
-# ---------------------------------------------------------------------------
-# REJECT LEAVE
-# ---------------------------------------------------------------------------
 def reject_leave(application, approver_user, reason=''):
     """
     1. Updates Status to Rejected and records rejection_reason.
@@ -333,11 +427,6 @@ def reject_leave(application, approver_user, reason=''):
 
     _log_action(application, action_type, performed_by=approver_user, remarks=reason)
     return application
-
-
-# ---------------------------------------------------------------------------
-# CANCEL LEAVE (Atomic)
-# ---------------------------------------------------------------------------
 @transaction.atomic
 def cancel_leave(application, requested_by_employee, is_hr=False):
     """
@@ -380,6 +469,196 @@ def cancel_leave(application, requested_by_employee, is_hr=False):
     return application
 
 
+from datetime import timedelta
+from decimal import Decimal
+from django.db import transaction
+from django.utils import timezone
+from hrms import models as m
+
+
+
+def _adjust_employee_leave_bank(employee, leave_type, days, action='deduct'):
+    """Synchronizes balance deduction/refund directly on EmployeeLeaveBalance."""
+    bank = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+    if not bank or not leave_type:
+        return
+
+    days = Decimal(str(days or 0.0))
+    if days <= Decimal('0.0'):
+        return
+
+    code = (leave_type.code or '').upper().strip()
+    norm_name = leave_type.name.lower()
+
+    field_map = {
+        'CL': 'casual_leave',
+        'EL': 'earned_leave',
+        'SL': 'sick_leave',
+        'BL': 'bereavement_leave',
+        'ML': 'menstrual_leave',
+        'MTL': 'menstrual_leave',
+        'CO': 'comp_off',
+    }
+    target_field = field_map.get(code)
+    if not target_field:
+        for candidate in (
+            'maternity_leave',
+            'paternity_leave',
+            norm_name.replace(' ', '_') + '_leave',
+            norm_name.replace(' ', '_'),
+        ):
+            if hasattr(bank, candidate):
+                target_field = candidate
+                break
+
+    if target_field and hasattr(bank, target_field):
+        current_val = Decimal(str(getattr(bank, target_field) or 0.0))
+        if action == 'deduct':
+            new_val = max(Decimal('0.0'), current_val - days)
+        elif action == 'refund':
+            new_val = current_val + days
+        else:
+            return
+
+        setattr(bank, target_field, new_val)
+        bank.save(update_fields=[target_field])
+
+
+def approve_leave(application, approver_user):
+    """Approves leave: deducts days from master Leave Bank, updates attendance and status."""
+    valid_pending = [
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+    ]
+    if application.status not in valid_pending:
+        raise LeaveError('Only pending applications can be approved.')
+
+    with transaction.atomic():
+        emp = application.employee
+        days = Decimal(str(application.total_days or 0.0))
+        code = (application.leave_type.code or '').upper().strip()
+
+        # 1. Deduct from Master Leave Bank
+        _adjust_employee_leave_bank(emp, application.leave_type, days, action='deduct')
+
+        # 2. Deduct from Live Balance
+        if 'adjust_live_balance' in globals():
+            try:
+                adjust_live_balance(emp, days, action='deduct', leave_code=code)
+            except Exception:
+                pass
+
+        # 3. Create Daily Attendance Record
+        is_half = getattr(application, 'day_type', 'full') == 'half'
+        att_status = (
+            getattr(m.AttendanceRecord.Status, 'HALF_DAY', m.AttendanceRecord.Status.ON_LEAVE)
+            if is_half
+            else m.AttendanceRecord.Status.ON_LEAVE
+        )
+        curr = application.start_date
+        while curr <= application.end_date:
+            m.AttendanceRecord.objects.update_or_create(
+                employee=emp,
+                attendance_date=curr,
+                defaults={
+                    'status': att_status,
+                    'remarks': f"{code} Approved ({'Half Day' if is_half else 'Full Day'})",
+                },
+            )
+            curr += timedelta(days=1)
+
+        # 4. Finalize Status
+        application.status = getattr(m.LeaveApplication.Status, 'APPROVED', 'approved')
+        application.approved_by = approver_user
+        application.approved_on = timezone.now()
+        application.save(update_fields=['status', 'approved_by', 'approved_on'])
+
+        if '_log_action' in globals():
+            _log_action(application, 'hr_approved', performed_by=approver_user, remarks='Approved by HR/Admin')
+
+    return application
+
+
+def reject_leave(application, approver_user, reason=''):
+    """Rejects leave: refunds master Leave Bank if previously approved, updates status."""
+    with transaction.atomic():
+        emp = application.employee
+        days = Decimal(str(application.total_days or 0.0))
+        code = (application.leave_type.code or '').upper().strip()
+
+        # If it was previously approved, refund the days
+        if application.status == getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'):
+            _adjust_employee_leave_bank(emp, application.leave_type, days, action='refund')
+            if 'adjust_live_balance' in globals():
+                try:
+                    adjust_live_balance(emp, days, action='refund', leave_code=code)
+                except Exception:
+                    pass
+
+            m.AttendanceRecord.objects.filter(
+                employee=emp,
+                attendance_date__range=[application.start_date, application.end_date],
+                status=m.AttendanceRecord.Status.ON_LEAVE,
+            ).update(status=m.AttendanceRecord.Status.ABSENT, remarks='Leave Rejected/Cancelled')
+
+        action_type = (
+            'manager_rejected'
+            if application.status == getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager')
+            else 'hr_rejected'
+        )
+
+        application.status = getattr(m.LeaveApplication.Status, 'REJECTED', 'rejected')
+        application.rejection_reason = reason
+        application.approved_by = approver_user
+        application.save()
+
+        if '_log_action' in globals():
+            _log_action(application, action_type, performed_by=approver_user, remarks=reason)
+
+    return application
+@transaction.atomic
+def cancel_leave(application, requested_by_employee, is_hr=False):
+    """Cancels leave: releases pending reservation or refunds approved master bank."""
+    cancellable = (
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+    )
+    if application.status not in cancellable:
+        raise LeaveError('This application can no longer be cancelled.')
+
+    if not is_hr and application.employee != requested_by_employee:
+        raise LeaveError('You can only cancel your own leave applications.')
+
+    emp = application.employee
+    days = Decimal(str(application.total_days or 0.0))
+    code = (application.leave_type.code or '').upper().strip()
+
+    # Refund if previously approved
+    if application.status == getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'):
+        _adjust_employee_leave_bank(emp, application.leave_type, days, action='refund')
+        if 'adjust_live_balance' in globals():
+            try:
+                adjust_live_balance(emp, days, action='refund', leave_code=code)
+            except Exception:
+                pass
+
+        m.AttendanceRecord.objects.filter(
+            employee=emp,
+            attendance_date__range=[application.start_date, application.end_date],
+            status=m.AttendanceRecord.Status.ON_LEAVE,
+        ).update(status=m.AttendanceRecord.Status.ABSENT, remarks='Leave Cancelled')
+
+    application.status = getattr(m.LeaveApplication.Status, 'CANCELLED', 'cancelled')
+    application.save()
+
+    performer = getattr(requested_by_employee, 'user', None)
+    if '_log_action' in globals():
+        _log_action(application, 'cancelled', performed_by=performer, remarks='Cancelled by employee' if not is_hr else 'Cancelled by HR')
+
+    return application
 # ---------------------------------------------------------------------------
 # REAPPLY LEAVE (after rejection)
 # ---------------------------------------------------------------------------
@@ -414,86 +693,15 @@ def reapply_leave(original_application, employee, reason='', **kwargs):
 # ---------------------------------------------------------------------------
 # PENALTY DEDUCTION (Full-Time vs Intern)
 # ---------------------------------------------------------------------------
-def apply_late_penalty_deduction(record):
+def apply_late_penalty_deduction(record, reason=None):
     """
-    Handles late arrival penalties:
-    - Full-Time: Deducts 0.5 days from CL → EL → LWP.
-    - Intern: Direct half-day salary deduction.
-    Logs the penalty in AttendancePenalty.
+    Handles late arrival penalties and leave deduction by delegating to services.
+    - Full-Time: Deducts 0.5 days from CL → EL → LWP / Salary.
+    - Intern: Direct half-day salary/stipend deduction.
+    Logs the penalty in AttendancePenalty with full atomicity.
     """
-    if not record or not record.employee:
-        return None
-
-    # Check if penalty already logged for this record
-    existing = m.AttendancePenalty.objects.filter(
-        employee=record.employee,
-        penalty_date=record.attendance_date
-    ).first()
-    if existing:
-        return existing
-
-    employee = record.employee
-    employment_type = employee.employment_type
-    amount = Decimal('0.5')
-
-    if employment_type == 'intern':
-        # INTERN: Calculate half-day salary deduction
-        salary_deduction = Decimal('0')
-        try:
-            emp_salary = m.EmployeeSalary.objects.filter(
-                employee=employee, is_active=True
-            ).first()
-            if emp_salary:
-                daily_wage = emp_salary.ctc_annual / Decimal('365')
-                salary_deduction = (daily_wage / 2).quantize(Decimal('0.01'))
-        except Exception:
-            pass
-
-        penalty = m.AttendancePenalty.objects.create(
-            employee=employee,
-            attendance_record=record,
-            penalty_date=record.attendance_date,
-            reason=f"Late Arrival ({record.late_minutes} mins late - Exceeded Grace)",
-            late_minutes=record.late_minutes,
-            deduction_days=amount,
-            deduction_source="Intern Salary Deduction",
-            status=m.AttendancePenalty.DeductionStatus.INTERN_SALARY,
-            is_intern_penalty=True,
-            salary_deduction_amount=salary_deduction,
-            employment_type_snapshot=employment_type,
-        )
-        return penalty
-
-    # FULL-TIME: CL → EL → LWP cascade
-    live_report, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=employee)
-    deduction_source = "LWP"
-    penalty_status = m.AttendancePenalty.DeductionStatus.APPLIED
-
-    if live_report.casual_leave >= float(amount):
-        live_report.casual_leave -= float(amount)
-        live_report.save(update_fields=['casual_leave'])
-        deduction_source = "Deducted 0.5 from CL"
-    elif live_report.earned_leave >= float(amount):
-        live_report.earned_leave -= float(amount)
-        live_report.save(update_fields=['earned_leave'])
-        deduction_source = "Deducted 0.5 from EL"
-    else:
-        deduction_source = "LWP (Insufficient Balance)"
-        penalty_status = m.AttendancePenalty.DeductionStatus.LWP
-
-    penalty = m.AttendancePenalty.objects.create(
-        employee=employee,
-        attendance_record=record,
-        penalty_date=record.attendance_date,
-        reason=f"Late Arrival ({record.late_minutes} mins late - Exceeded Grace)",
-        late_minutes=record.late_minutes,
-        deduction_days=amount,
-        deduction_source=deduction_source,
-        status=penalty_status,
-        is_intern_penalty=False,
-        employment_type_snapshot=employment_type,
-    )
-    return penalty
+    from .services import process_late_arrival_penalty
+    return process_late_arrival_penalty(record, reason=reason)
 
 
 # ---------------------------------------------------------------------------
@@ -683,3 +891,603 @@ def is_holiday(employee, target_date):
         calendar=employee.holiday_calendar,
         date=target_date
     ).exists()
+
+
+# ---------------------------------------------------------------------------
+# 1. APPLY LEAVE (Instantly Deducts from Bank)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def apply_leave(employee, leave_type, start_date, end_date, day_type='full',
+                reason='', supporting_document=None, relationship='',
+                leave_stage='', parent_application=None):
+    if day_type == 'half':
+        end_date = start_date
+        total_days = Decimal('0.5')
+    else:
+        total_days = calculate_total_days(start_date, end_date, day_type)
+
+    # 1. Validate Balance
+    bank = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+    code = (leave_type.code or '').upper().strip()
+    field_map = {
+        'CL': 'casual_leave', 'EL': 'earned_leave', 'SL': 'sick_leave',
+        'BL': 'bereavement_leave', 'ML': 'menstrual_leave', 'CO': 'comp_off',
+    }
+    target_field = field_map.get(code)
+    if bank and target_field and hasattr(bank, target_field):
+        current_bal = Decimal(str(getattr(bank, target_field) or 0.0))
+        if total_days > current_bal and leave_type.is_paid:
+            raise LeaveError(f'Insufficient balance: {current_bal} days remaining for {leave_type.name}.')
+
+    # 2. Prevent Overlapping Leaves
+    overlap = m.LeaveApplication.objects.filter(
+        employee=employee,
+        status__in=[
+            getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+            getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+            getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+            getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+        ],
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+    ).exists()
+    if overlap:
+        raise LeaveError('You already have a leave applied/approved for these dates.')
+
+    # 3. Routing hierarchy
+    if employee.reporting_manager:
+        initial_status = m.LeaveApplication.Status.PENDING_MANAGER
+    else:
+        initial_status = m.LeaveApplication.Status.PENDING_HR
+
+    application = m.LeaveApplication.objects.create(
+        employee=employee,
+        leave_type=leave_type,
+        start_date=start_date,
+        end_date=end_date,
+        day_type=day_type,
+        total_days=total_days,
+        reason=reason,
+        status=initial_status,
+        supporting_document=supporting_document,
+        relationship=relationship,
+        leave_stage=leave_stage,
+        parent_application=parent_application,
+    )
+
+    # 4. INSTANT DEDUCTION FROM LEAVE BANK
+    if leave_type.is_paid:
+        _sync_bank_balance(employee, leave_type, total_days, action='deduct')
+
+    _log_action(application, 'applied', performed_by=getattr(employee, 'user', None), remarks=reason)
+    return application
+
+
+# ---------------------------------------------------------------------------
+# 2. APPROVE LEAVE
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def approve_leave(application, approver_user):
+    valid_pending = [
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+    ]
+    if application.status not in valid_pending:
+        raise LeaveError('Only pending applications can be approved.')
+
+    emp = application.employee
+    code = (application.leave_type.code or '').upper().strip()
+
+    # Create Daily Attendance Records
+    is_half = getattr(application, 'day_type', 'full') == 'half'
+    att_status = (
+        getattr(m.AttendanceRecord.Status, 'HALF_DAY', m.AttendanceRecord.Status.ON_LEAVE)
+        if is_half else m.AttendanceRecord.Status.ON_LEAVE
+    )
+    curr = application.start_date
+    while curr <= application.end_date:
+        m.AttendanceRecord.objects.update_or_create(
+            employee=emp,
+            attendance_date=curr,
+            defaults={
+                'status': att_status,
+                'remarks': f"{code} Approved ({'Half Day' if is_half else 'Full Day'})",
+            }
+        )
+        curr += timedelta(days=1)
+
+    application.status = getattr(m.LeaveApplication.Status, 'APPROVED', 'approved')
+    application.approved_by = approver_user
+    application.approved_on = timezone.now()
+    application.save(update_fields=['status', 'approved_by', 'approved_on'])
+
+    _log_action(application, 'hr_approved', performed_by=approver_user, remarks='Approved by HR/Admin')
+    return application
+
+
+# ---------------------------------------------------------------------------
+# 3. REJECT LEAVE (Refunds Balance Back)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def reject_leave(application, approver_user, reason=''):
+    emp = application.employee
+    days = Decimal(str(application.total_days or 0.0))
+
+    # REFUND THE DEDUCTED DAYS BACK TO MASTER BANK
+    if application.leave_type.is_paid and application.status != getattr(m.LeaveApplication.Status, 'REJECTED', 'rejected'):
+        _sync_bank_balance(emp, application.leave_type, days, action='refund')
+
+    # Reset attendance records if any existed
+    m.AttendanceRecord.objects.filter(
+        employee=emp,
+        attendance_date__range=[application.start_date, application.end_date],
+        status__in=[m.AttendanceRecord.Status.ON_LEAVE, getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'HD')]
+    ).delete()
+
+    action_type = (
+        'manager_rejected'
+        if application.status == getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager')
+        else 'hr_rejected'
+    )
+    application.status = getattr(m.LeaveApplication.Status, 'REJECTED', 'rejected')
+    application.rejection_reason = reason
+    application.approved_by = approver_user
+    application.save()
+
+    _log_action(application, action_type, performed_by=approver_user, remarks=reason)
+    return application
+
+
+# ---------------------------------------------------------------------------
+# 4. CANCEL / WITHDRAW LEAVE (Refunds Balance Back)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def cancel_leave(application, requested_by_employee, is_hr=False):
+    cancellable = (
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+    )
+    if application.status not in cancellable:
+        raise LeaveError('This application can no longer be cancelled.')
+
+    if not is_hr and application.employee != requested_by_employee:
+        raise LeaveError('You can only cancel your own leave applications.')
+
+    emp = application.employee
+    days = Decimal(str(application.total_days or 0.0))
+
+    # REFUND THE DEDUCTED DAYS BACK TO MASTER BANK
+    if application.leave_type.is_paid:
+        _sync_bank_balance(emp, application.leave_type, days, action='refund')
+
+    m.AttendanceRecord.objects.filter(
+        employee=emp,
+        attendance_date__range=[application.start_date, application.end_date],
+        status__in=[m.AttendanceRecord.Status.ON_LEAVE, getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'HD')]
+    ).delete()
+
+    application.status = getattr(m.LeaveApplication.Status, 'CANCELLED', 'cancelled')
+    application.save()
+
+    performer = getattr(requested_by_employee, 'user', None)
+    _log_action(application, 'cancelled', performed_by=performer, remarks='Withdrawn / Cancelled')
+    return application
+
+
+from datetime import timedelta
+from decimal import Decimal
+from django.db import transaction
+from django.db.models import Sum
+from django.utils import timezone
+from . import models as m
+
+
+class LeaveError(Exception):
+    """Raised for any invalid leave action."""
+
+
+# ---------------------------------------------------------------------------
+# 1. DYNAMIC MODEL HELPERS (ZERO HARDCODED VALUES)
+# ---------------------------------------------------------------------------
+def get_leave_type_annual_quota(leave_type):
+    """Dynamically reads the yearly quota from whatever field exists on LeaveType."""
+    for attr in ('days_per_year', 'annual_quota', 'days_allowed', 'quota', 'max_days', 'days'):
+        if hasattr(leave_type, attr):
+            val = getattr(leave_type, attr)
+            if val is not None:
+                return Decimal(str(val))
+    return Decimal('0.0')
+
+
+def calculate_monthly_quota(leave_type):
+    """Calculates monthly quota dynamically (Annual / 12) from model database record."""
+    annual = get_leave_type_annual_quota(leave_type)
+    code = (leave_type.code or '').upper().strip()
+    norm_name = leave_type.name.lower()
+
+    # Emergency / Block leaves are not divided by 12
+    if code in ('SL', 'BL', 'MATERNITY', 'PATERNITY', 'MTL', 'PL') or any(
+        k in norm_name for k in ('sick', 'bereave', 'breave', 'matern', 'patern')
+    ):
+        return annual
+
+    if annual > Decimal('0.0'):
+        raw_monthly = annual / Decimal('12.0')
+        # Rounded to 1 decimal place, minimum 1.0 day if quota exists
+        return round(raw_monthly, 1) if raw_monthly > Decimal('1.0') else Decimal('1.0')
+    return Decimal('0.0')
+
+
+def get_monthly_available_days(employee, leave_type, target_date=None):
+    """Calculates how many days of this leave type are available for the current calendar month."""
+    d = target_date or timezone.localdate()
+    monthly_quota = calculate_monthly_quota(leave_type)
+
+    active_statuses = [
+        getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+    ]
+
+    month_used_result = m.LeaveApplication.objects.filter(
+        employee=employee,
+        leave_type=leave_type,
+        status__in=active_statuses,
+        start_date__year=d.year,
+        start_date__month=d.month,
+    ).aggregate(total=Sum('total_days'))['total']
+
+    month_used = Decimal(str(month_used_result)) if month_used_result else Decimal('0.0')
+
+    # Also check annual master bank balance
+    bank = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+    code = (leave_type.code or '').upper().strip()
+    norm_name = leave_type.name.lower()
+
+    annual_bal = Decimal('0.0')
+    if bank:
+        field_candidates = (
+            code.lower() + '_leave',
+            norm_name.replace(' ', '_') + '_leave',
+            norm_name.replace(' ', '_'),
+        )
+        for attr in field_candidates:
+            if hasattr(bank, attr):
+                val = getattr(bank, attr)
+                if val is not None:
+                    annual_bal = Decimal(str(val))
+                    break
+        else:
+            annual_bal = get_leave_type_annual_quota(leave_type)
+    else:
+        annual_bal = get_leave_type_annual_quota(leave_type)
+
+    return max(Decimal('0.0'), min(annual_bal, monthly_quota - month_used))
+
+
+def _sync_bank_balance(employee, leave_type, days, action='deduct'):
+    """Directly updates the Master Leave Bank (EmployeeLeaveBalance)."""
+    if not employee or not leave_type or days <= Decimal('0.0'):
+        return
+
+    bank = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+    if not bank:
+        return
+
+    code = (leave_type.code or '').upper().strip()
+    norm_name = leave_type.name.lower()
+
+    field_map = {
+        'CL': 'casual_leave', 'EL': 'earned_leave', 'SL': 'sick_leave',
+        'BL': 'bereavement_leave', 'ML': 'menstrual_leave', 'MTL': 'menstrual_leave',
+        'CO': 'comp_off',
+    }
+    target_field = field_map.get(code)
+    if not target_field:
+        for candidate in (
+            'maternity_leave', 'paternity_leave',
+            norm_name.replace(' ', '_') + '_leave',
+            norm_name.replace(' ', '_')
+        ):
+            if hasattr(bank, candidate):
+                target_field = candidate
+                break
+
+    if target_field and hasattr(bank, target_field):
+        current_val = Decimal(str(getattr(bank, target_field) or 0.0))
+        if action == 'deduct':
+            new_val = max(Decimal('0.0'), current_val - days)
+        elif action == 'refund':
+            new_val = current_val + days
+        else:
+            return
+
+        setattr(bank, target_field, new_val)
+        bank.save(update_fields=[target_field])
+
+
+def calculate_total_days(start_date, end_date, day_type='full'):
+    if end_date < start_date:
+        raise LeaveError('End date cannot be before start date.')
+    if day_type == 'half':
+        if start_date != end_date:
+            raise LeaveError('Half-day leave must have the same start and end date.')
+        return Decimal('0.5')
+    return Decimal(str((end_date - start_date).days + 1))
+
+
+def _log_action(application, action, performed_by=None, remarks=''):
+    if hasattr(m, 'LeaveApprovalLog'):
+        m.LeaveApprovalLog.objects.create(
+            application=application,
+            action=action,
+            performed_by=performed_by,
+            remarks=remarks,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 2. APPLY LEAVE (WITH AUTO LWP SPLIT AND REAL-TIME BANK DEDUCTION)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def apply_leave(employee, leave_type, start_date, end_date, day_type='full',
+                reason='', supporting_document=None, relationship='',
+                leave_stage='', parent_application=None):
+
+    if day_type == 'half':
+        end_date = start_date
+        total_days = Decimal('0.5')
+    else:
+        total_days = calculate_total_days(start_date, end_date, day_type)
+
+    # Prevent Overlap
+    active_statuses = [
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+    ]
+    if m.LeaveApplication.objects.filter(
+        employee=employee,
+        status__in=active_statuses,
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+    ).exists():
+        raise LeaveError('You already have an active leave request applied/approved for these dates.')
+
+    # Routing
+    initial_status = (
+        m.LeaveApplication.Status.PENDING_MANAGER
+        if employee.reporting_manager
+        else m.LeaveApplication.Status.PENDING_HR
+    )
+
+    user_notice = None
+
+    # Handle Paid Allocation & LWP Conversion
+    if leave_type.is_paid:
+        available_days = get_monthly_available_days(employee, leave_type, target_date=start_date)
+
+        if total_days > available_days:
+            paid_days = available_days
+            lwp_days = total_days - available_days
+
+            lwp_type = m.LeaveType.objects.filter(
+                code='LWP', company=employee.company
+            ).first() or m.LeaveType.objects.filter(code='LWP').first()
+
+            if not lwp_type:
+                lwp_type = leave_type
+
+            # Split: Partial Paid + Partial LWP
+            if paid_days > Decimal('0.0'):
+                # 1. Paid Application
+                paid_end = start_date + timedelta(days=int(paid_days)) if day_type != 'half' else start_date
+                app_paid = m.LeaveApplication.objects.create(
+                    employee=employee,
+                    leave_type=leave_type,
+                    start_date=start_date,
+                    end_date=paid_end,
+                    day_type=day_type,
+                    total_days=paid_days,
+                    reason=f"{reason} (Paid portion: {paid_days} days)",
+                    status=initial_status,
+                    supporting_document=supporting_document,
+                    relationship=relationship,
+                    leave_stage=leave_stage,
+                )
+                _sync_bank_balance(employee, leave_type, paid_days, action='deduct')
+
+                # 2. LWP Portion
+                lwp_start = paid_end + timedelta(days=1) if day_type != 'half' else start_date
+                m.LeaveApplication.objects.create(
+                    employee=employee,
+                    leave_type=lwp_type,
+                    start_date=lwp_start,
+                    end_date=end_date,
+                    day_type=day_type,
+                    total_days=lwp_days,
+                    reason=f"{reason} (Excess over quota: {lwp_days} days marked as LWP)",
+                    status=initial_status,
+                    supporting_document=supporting_document,
+                )
+
+                user_notice = (
+                    f"You have only {paid_days} day(s) of {leave_type.name} available this month. "
+                    f"Applied: {paid_days} day(s) as {leave_type.name} and {lwp_days} day(s) as Leave Without Pay (LWP) which will be deducted from your salary."
+                )
+                _log_action(app_paid, 'applied', performed_by=getattr(employee, 'user', None), remarks=user_notice)
+                return app_paid, user_notice
+
+            # Zero Paid Available: Convert all to LWP
+            else:
+                app_lwp = m.LeaveApplication.objects.create(
+                    employee=employee,
+                    leave_type=lwp_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    day_type=day_type,
+                    total_days=total_days,
+                    reason=f"{reason} (Exceeded {leave_type.name} limit - Converted to LWP)",
+                    status=initial_status,
+                    supporting_document=supporting_document,
+                )
+                user_notice = (
+                    f"You have 0 days of {leave_type.name} available this month. "
+                    f"Your entire application ({total_days} days) has been recorded as Leave Without Pay (LWP) and will be deducted from your salary."
+                )
+                _log_action(app_lwp, 'applied', performed_by=getattr(employee, 'user', None), remarks=user_notice)
+                return app_lwp, user_notice
+
+        # Full balance available within quota
+        _sync_bank_balance(employee, leave_type, total_days, action='deduct')
+
+    # Standard Application
+    app = m.LeaveApplication.objects.create(
+        employee=employee,
+        leave_type=leave_type,
+        start_date=start_date,
+        end_date=end_date,
+        day_type=day_type,
+        total_days=total_days,
+        reason=reason,
+        status=initial_status,
+        supporting_document=supporting_document,
+        relationship=relationship,
+        leave_stage=leave_stage,
+    )
+    _log_action(app, 'applied', performed_by=getattr(employee, 'user', None), remarks=reason)
+    return app, user_notice
+
+
+# ---------------------------------------------------------------------------
+# 3. MANAGER APPROVE
+# ---------------------------------------------------------------------------
+def manager_approve_leave(application, approver_user):
+    if application.status != getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'):
+        raise LeaveError('Only applications pending manager approval can be approved by a manager.')
+
+    application.status = getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr')
+    application.manager_approved_by = approver_user
+    application.manager_approved_on = timezone.now()
+    application.save(update_fields=['status', 'manager_approved_by', 'manager_approved_on'])
+
+    _log_action(application, 'manager_approved', performed_by=approver_user, remarks='Manager approved — escalated to HR.')
+    return application
+
+
+# ---------------------------------------------------------------------------
+# 4. HR APPROVE
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def approve_leave(application, approver_user):
+    valid_pending = [
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+    ]
+    if application.status not in valid_pending:
+        raise LeaveError('Only pending applications can be approved.')
+
+    emp = application.employee
+    code = (application.leave_type.code or '').upper().strip()
+
+    is_half = getattr(application, 'day_type', 'full') == 'half'
+    att_status = (
+        getattr(m.AttendanceRecord.Status, 'HALF_DAY', m.AttendanceRecord.Status.ON_LEAVE)
+        if is_half else m.AttendanceRecord.Status.ON_LEAVE
+    )
+
+    curr = application.start_date
+    while curr <= application.end_date:
+        m.AttendanceRecord.objects.update_or_create(
+            employee=emp,
+            attendance_date=curr,
+            defaults={
+                'status': att_status,
+                'remarks': f"{code} Approved ({'Half Day' if is_half else 'Full Day'})",
+            }
+        )
+        curr += timedelta(days=1)
+
+    application.status = getattr(m.LeaveApplication.Status, 'APPROVED', 'approved')
+    application.approved_by = approver_user
+    application.approved_on = timezone.now()
+    application.save(update_fields=['status', 'approved_by', 'approved_on'])
+
+    _log_action(application, 'hr_approved', performed_by=approver_user, remarks='Approved by HR')
+    return application
+
+
+# ---------------------------------------------------------------------------
+# 5. REJECT LEAVE (Refunds Balance Back to Master Bank)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def reject_leave(application, approver_user, reason=''):
+    emp = application.employee
+    days = Decimal(str(application.total_days or 0.0))
+
+    # Refund the deducted days back to the bank
+    if application.leave_type.is_paid:
+        _sync_bank_balance(emp, application.leave_type, days, action='refund')
+
+    m.AttendanceRecord.objects.filter(
+        employee=emp,
+        attendance_date__range=[application.start_date, application.end_date],
+        status__in=[m.AttendanceRecord.Status.ON_LEAVE, getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'HD')]
+    ).delete()
+
+    action_type = (
+        'manager_rejected'
+        if application.status == getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager')
+        else 'hr_rejected'
+    )
+    application.status = getattr(m.LeaveApplication.Status, 'REJECTED', 'rejected')
+    application.rejection_reason = reason
+    application.approved_by = approver_user
+    application.save()
+
+    _log_action(application, action_type, performed_by=approver_user, remarks=reason)
+    return application
+
+
+# ---------------------------------------------------------------------------
+# 6. CANCEL / WITHDRAW LEAVE (Refunds Balance Back to Master Bank)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def cancel_leave(application, requested_by_employee, is_hr=False):
+    cancellable = (
+        getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+        getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+        getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+        getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+    )
+    if application.status not in cancellable:
+        raise LeaveError('This application can no longer be cancelled.')
+
+    if not is_hr and application.employee != requested_by_employee:
+        raise LeaveError('You can only cancel your own leave applications.')
+
+    emp = application.employee
+    days = Decimal(str(application.total_days or 0.0))
+
+    # Refund the deducted days back to the bank
+    if application.leave_type.is_paid:
+        _sync_bank_balance(emp, application.leave_type, days, action='refund')
+
+    m.AttendanceRecord.objects.filter(
+        employee=emp,
+        attendance_date__range=[application.start_date, application.end_date],
+        status__in=[m.AttendanceRecord.Status.ON_LEAVE, getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'HD')]
+    ).delete()
+
+    application.status = getattr(m.LeaveApplication.Status, 'CANCELLED', 'cancelled')
+    application.save()
+
+    performer = getattr(requested_by_employee, 'user', None)
+    _log_action(application, 'cancelled', performed_by=performer, remarks='Withdrawn by Employee' if not is_hr else 'Cancelled by HR')
+    return application

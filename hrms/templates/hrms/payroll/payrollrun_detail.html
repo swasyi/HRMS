@@ -2,266 +2,356 @@
 {% load hrms_extras %}
 {% load humanize %}
 
+{% block title %}Payroll Register — {{ run.company.name }} ({{ run.month|month_name }} {{ run.year }}){% endblock %}
+
 {% block extra_css %}
+
 <style>
-    body { background-color: #f4f7f6; }
-    .breadcrumb-area { font-size: 13px; color: #6c757d; margin-bottom: 10px; }
+    body {
+        background-color: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .breadcrumb-area { font-size: 13px; color: #64748b; margin-bottom: 12px; }
 
-    /* Stats Cards */
-    .stat-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; }
+    /* Top Summary Stat Cards */
+    .stat-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px 20px;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     .stat-label { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px; }
-    .stat-value { font-size: 20px; font-weight: 700; color: #1e293b; margin-top: 5px; }
-    .stat-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+    .stat-value { font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 4px; }
+    .stat-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
 
-    /* Master Table Styling */
-    .ui-card { background: white; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow: hidden; }
-
-    .table-detail { margin-bottom: 0; border-collapse: separate; border-spacing: 0; }
-    .table-detail thead th {
-        background: #1e293b;
-        color: #f8fafc;
-        font-size: 11px;
-        font-weight: 600;
-        padding: 12px 10px;
-        text-transform: uppercase;
-        border: 1px solid #334155;
-        white-space: nowrap;
+    /* ================= 1. SCROLL CONTAINER (CONSTRAINED WIDTH) ================= */
+    .ui-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        width: 100%;
+        max-width: 100%;
     }
 
-    .table-detail tbody td {
-        padding: 10px;
-        font-size: 12px;
-        border-bottom: 1px solid #e2e8f0;
-        border-right: 1px solid #f1f5f9;
-        white-space: nowrap;
-        vertical-align: middle;
-    }
-
-<!--    /* STICKY COLUMNS: Critical for large payroll tables */-->
-<!--    .sticky-id { position: sticky; left: 0; background: #f8fafc !important; z-index: 10; border-right: 2px solid #e2e8f0 !important; }-->
-<!--    .sticky-name { position: sticky; left: 80px; background: #f8fafc !important; z-index: 10; border-right: 2px solid #e2e8f0 !important; }-->
-<!--    thead th.sticky-id, thead th.sticky-name { z-index: 11; background: #0f172a !important; }-->
-
-/* 1. Force the container to handle scrolling correctly */
-    .table-responsive {
-        overflow-x: auto;
-        position: relative; /* Essential for sticky positioning */
+    .table-container-scroll {
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: 72vh;
+        position: relative !important;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 12px;
     }
 
     .table-detail {
-        border-collapse: separate; /* Required for sticky columns/borders */
-        border-spacing: 0;
+        margin-bottom: 0 !important;
+        border-collapse: separate !important;
+        border-spacing: 0 !important;
+        width: max-content !important;
     }
 
-    /* 2. Combined styles for both TH and TD */
-    .sticky-id, .sticky-name {
+    /* ================= 2. HEADERS ================= */
+    .table-detail thead th {
         position: sticky !important;
-        position: -webkit-sticky !important; /* Safari support */
-        background-color: white !important; /* Must be solid color so text doesn't overlap */
-        z-index: 10;
-        box-shadow: inset -1px 0 0 #e2e8f0; /* Cleaner than border-right for sticky */
-    }
-
-    /* 3. First Column: EMP ID (Fixed Width) */
-    .sticky-id {
-        left: 0;
-        width: 120px;       /* Set a specific width */
-        min-width: 120px;
-        max-width: 120px;
-    }
-
-    /* 4. Second Column: EMPLOYEE NAME (Fixed Width) */
-    .sticky-name {
-        left: 120px;      /* THIS MUST EQUAL THE WIDTH OF THE FIRST COLUMN (120px) */
-        width: 220px;     /* Room for long names */
-        min-width: 220px;
-        max-width: 220px;
-        border-right: 3px solid #cbd5e1 !important; /* Distinct line separating frozen area */
-    }
-
-    /* 5. Header specific overrides to keep them on top */
-    thead th.sticky-id,
-    thead th.sticky-name {
-        z-index: 20 !important; /* Higher z-index for the header corner */
-        background-color: #1e293b !important;
+        top: 0 !important;
+        background-color: #0f172a !important;
         color: #f8fafc !important;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 14px 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        border-bottom: 2px solid #334155 !important;
+        white-space: nowrap !important;
+        z-index: 10;
     }
 
-    /* Fix for row hover: ensures the frozen column highlight matches the row */
-    tbody tr:hover .sticky-id,
-    tbody tr:hover .sticky-name {
-        background-color: #f1f5f9 !important;
+    .table-detail tbody td {
+        padding: 12px 14px;
+        font-size: 12px;
+        border-bottom: 1px solid #e2e8f0;
+        border-right: 1px solid #f1f5f9;
+        white-space: nowrap !important;
+        vertical-align: middle;
+        background-color: #ffffff;
     }
-        /* Fix for horizontal scroll background bleeding */
-    tbody tr:hover td.sticky-id,
-    tbody tr:hover td.sticky-name {
-        background-color: #f1f5f9 !important; /* Match your table hover color if you have one */
+
+    /* ================= 3. FROZEN COLUMN 1 (EMP ID) ================= */
+    .freeze-id {
+        position: sticky !important;
+        left: 0px !important;
+        width: 120px !important;
+        min-width: 120px !important;
+        max-width: 120px !important;
+        background-color: #ffffff !important;
+        z-index: 15 !important;
+        border-right: 1px solid #e2e8f0 !important;
     }
 
-    /* Color Zones */
-    .zone-attendance { background-color: #f8fafc; }
-    .zone-earnings { background-color: #f0fdf4; } /* Light Green */
-    .zone-deductions { background-color: #fef2f2; } /* Light Red */
-    .zone-net { background-color: #eff6ff; font-weight: 700; } /* Light Blue */
-    .zone-bank { background-color: #fafafa; color: #64748b; }
+    /* ================= 4. FROZEN COLUMN 2 (NAME) ================= */
+    .freeze-name {
+        position: sticky !important;
+        left: 120px !important;
+        width: 220px !important;
+        min-width: 220px !important;
+        max-width: 220px !important;
+        background-color: #ffffff !important;
+        z-index: 15 !important;
+        border-right: 3px solid #94a3b8 !important;
+        box-shadow: 4px 0 8px -2px rgba(0,0,0,0.08);
+    }
 
-    .font-mono { font-family: 'Courier New', Courier, monospace; font-weight: 600; }
+    /* ================= 5. INTERSECTING HEADERS ================= */
+    thead th.freeze-id {
+        top: 0 !important;
+        left: 0px !important;
+        z-index: 40 !important;
+        background-color: #0f172a !important;
+    }
 
+    thead th.freeze-name {
+        top: 0 !important;
+        left: 120px !important;
+        z-index: 40 !important;
+        background-color: #0f172a !important;
+        border-right: 3px solid #64748b !important;
+    }
 
+    /* Row Hover */
+    tbody tr:hover td { background-color: #f8fafc !important; }
+    tbody tr:hover td.freeze-id,
+    tbody tr:hover td.freeze-name { background-color: #f1f5f9 !important; }
 
+    /* Category Zones */
+    .zone-att { background-color: #f8fafc; }
+    .zone-earn { background-color: #f0fdf4; color: #166534; }
+    .zone-ded { background-color: #fef2f2; color: #991b1b; }
+    .zone-net { background-color: #eff6ff; color: #1e40af; font-weight: 700; }
+    .zone-bank { background-color: #fbfbfe; color: #475569; }
+
+    .font-mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11.5px;
+    }
+    .sub-desig {
+        font-size: 11px;
+        color: #64748b;
+        font-weight: 400;
+        display: block;
+        margin-top: 2px;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid px-4 mt-3">
-    <!-- Breadcrumbs -->
+<div class="container-fluid px-4 py-3">
+
+    <!-- Breadcrumb Navigation -->
     <div class="breadcrumb-area">
-        Dashboard &nbsp;/&nbsp; Payroll List &nbsp;/&nbsp; <span class="text-dark">PAY-{{ payroll_run.year }}-{{ payroll_run.month }}</span>
+        <a href="{% url 'hrms:dashboard' %}" class="text-decoration-none text-muted">Dashboard</a> &nbsp;/&nbsp;
+        <a href="{% url 'hrms:payrollrun_list' %}" class="text-decoration-none text-muted">Payroll Runs</a> &nbsp;/&nbsp;
+        <span class="text-dark fw-bold">{{ run.company.name }} ({{ run.month|month_name }} {{ run.year }})</span>
     </div>
 
-    <!-- Header -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <!-- Company & Period Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-4">
         <div>
-            <h4 class="fw-bold mb-0">Payroll Detail: {{ payroll_run.month|month_name }} {{ payroll_run.year }}</h4>
-            <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3 mt-2">
-                <i class="bi bi-patch-check-fill me-1"></i> {{ payroll_run.get_status_display }}
-            </span>
+            <div class="d-flex align-items-center gap-2">
+                <h3 class="fw-bold text-dark mb-0">{{ run.company.name }}</h3>
+                <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-1">
+                    {{ run.month|month_name }} {{ run.year }}
+                </span>
+                <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3 py-1">
+                    <i class="bi bi-check-circle-fill me-1"></i> {{ run.get_status_display }}
+                </span>
+            </div>
+            <small class="text-muted">Master Salary, Attendance Reconciliation & Disbursement Register</small>
         </div>
-        <div class="d-flex gap-2">
-            <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-envelope"></i> Email All Slip</button>
-            <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-excel"></i> Export Bank CSV</button>
-            <button class="btn btn-dark btn-sm px-3"><i class="bi bi-printer"></i> Print Summary</button>
+
+        <!-- Action Toolbar -->
+        <div class="d-flex flex-wrap gap-2">
+            <a href="{% url 'hrms:payroll_export_csv' pk=run.pk %}?department={{ selected_dept|default:'' }}&q={{ search_query|default:'' }}"
+               class="btn btn-outline-success btn-sm rounded-pill px-3 fw-bold shadow-sm">
+                <i class="bi bi-file-earmark-excel me-1"></i> Export Bank CSV
+            </a>
+            <button onclick="window.print()" class="btn btn-dark btn-sm rounded-pill px-3 fw-bold shadow-sm">
+                <i class="bi bi-printer me-1"></i> Print Summary
+            </button>
         </div>
     </div>
 
-    <!-- Top Summary Cards -->
+    <!-- Live Stat Summary Cards -->
     <div class="row g-3 mb-4">
-        <div class="col-md-3">
+        <div class="col-6 col-md-3">
             <div class="stat-card d-flex align-items-center">
-                <div class="stat-icon bg-primary-subtle text-primary me-3"><i class="bi bi-people"></i></div>
+                <div class="stat-icon bg-primary-subtle text-primary me-3"><i class="bi bi-people-fill"></i></div>
                 <div>
                     <div class="stat-label">Total Employees</div>
-                    <div class="stat-value">{{ payslips.count }}</div>
+                    <div class="stat-value">{{ total_employees_count }}</div>
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
+        <div class="col-6 col-md-3">
             <div class="stat-card d-flex align-items-center">
-                <div class="stat-icon bg-success-subtle text-success me-3"><i class="bi bi-wallet2"></i></div>
+                <div class="stat-icon bg-success-subtle text-success me-3"><i class="bi bi-cash-stack"></i></div>
                 <div>
                     <div class="stat-label">Total Net Payout</div>
-                    <div class="stat-value">₹{{ total_net|intcomma }}</div>
+                    <div class="stat-value text-success">₹{{ total_net|intcomma }}</div>
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
+        <div class="col-6 col-md-3">
             <div class="stat-card d-flex align-items-center">
-                <div class="stat-icon bg-danger-subtle text-danger me-3"><i class="bi bi-graph-down-arrow"></i></div>
+                <div class="stat-icon bg-danger-subtle text-danger me-3"><i class="bi bi-shield-slash-fill"></i></div>
                 <div>
-                    <div class="stat-label">Total Deductions</div>
-                    <div class="stat-value">₹{{ total_deductions|intcomma }}</div>
+                    <div class="stat-label">Total Penalties</div>
+                    <div class="stat-value text-danger">₹{{ total_penalties|floatformat:1|intcomma }}</div>
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
+        <div class="col-6 col-md-3">
             <div class="stat-card d-flex align-items-center">
-                <div class="stat-icon bg-info-subtle text-info me-3"><i class="bi bi-calendar-check"></i></div>
+                <div class="stat-icon bg-info-subtle text-info me-3"><i class="bi bi-calendar2-check-fill"></i></div>
                 <div>
                     <div class="stat-label">Total Paid Days</div>
-                    <div class="stat-value">{{ total_paid_days|floatformat:0 }} Days</div>
+                    <div class="stat-value">{{ total_paid_days|floatformat:1 }}</div>
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Department & Name Filter Bar -->
+    <div class="card border-0 shadow-sm rounded-3 p-3 mb-4 bg-white">
+        <form method="GET" class="row g-2 align-items-center">
+            <div class="col-12 col-md-4">
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-light border-end-0"><i class="bi bi-search text-muted"></i></span>
+                    <input type="text" name="q" value="{{ search_query }}" class="form-control bg-light border-start-0" placeholder="Search Employee Code or Name...">
+                </div>
+            </div>
+            <div class="col-12 col-md-4">
+                <select name="department" class="form-select form-select-sm bg-light">
+                    <option value="">All Departments ({{ run.company.name }})</option>
+                    {% for dept in departments %}
+                        <option value="{{ dept.id }}" {% if selected_dept == dept.id|stringformat:"s" %}selected{% endif %}>
+                            {{ dept.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-12 col-md-4 d-flex gap-2">
+                <button type="submit" class="btn btn-sm btn-primary rounded-pill px-4 fw-bold">
+                    <i class="bi bi-filter me-1"></i> Apply Filter
+                </button>
+                {% if search_query or selected_dept %}
+                    <a href="{% url 'hrms:payrollrun_detail' pk=run.pk %}" class="btn btn-sm btn-light border rounded-pill px-3">
+                        Reset
+                    </a>
+                {% endif %}
+            </div>
+        </form>
     </div>
 
     <!-- Master Payroll Detail Table -->
-    <div class="ui-card">
-        <div class="table-responsive">
-            <table class="table table-detail">
+    <div class="ui-card mb-4">
+        <div class="table-container-scroll">
+            <table class="table table-detail align-middle">
                 <thead>
                     <tr>
-                        <th class="sticky-id">EMP ID</th>
-                        <th class="sticky-name">EMPLOYEE NAME</th>
+                        <th class="freeze-id">EMP ID</th>
+                        <th class="freeze-name">EMPLOYEE & DESIGNATION</th>
 
-                        <!-- Attendance Zone -->
-                        <th class="zone-attendance">FULL DAY</th>
-                        <th class="zone-attendance">HALF DAY</th>
-                        <th class="zone-attendance">OFF DAYS</th>
-                        <th class="zone-attendance">PAID LEAVE</th>
-                        <th class="zone-attendance">PAID DAYS</th>
-                        <th class="zone-attendance text-danger">UNPAID</th>
+                        <!-- Attendance Breakdown -->
+                        <th class="zone-att text-center">FULL DAYS</th>
+                        <th class="zone-att text-center">HALF DAYS</th>
+                        <th class="zone-att text-center">OFF / HOL</th>
+                        <th class="zone-att text-center">PAID LEAVES</th>
+                        <th class="zone-att text-center fw-bold">PAID DAYS</th>
+                        <th class="zone-att text-center text-danger">UNPAID (LWP)</th>
 
-                        <!-- Earnings Zone -->
-                        <th class="zone-earnings">DAILY WAGE</th>
-                        <th class="zone-earnings">GROSS WAGE</th>
-                        <th class="zone-earnings">EARNED WAGE</th>
-                        <th class="zone-earnings">OVERTIME</th>
-                        <th class="zone-earnings">EXTRAS</th>
-                        <th class="zone-earnings fw-bold text-dark">GROSS EARNING</th>
+                        <!-- Earnings Breakdown -->
+                        <th class="zone-earn text-end">MONTHLY CTC</th>
+                        <th class="zone-earn text-end">DAILY WAGE</th>
+                        <th class="zone-earn text-end">EARNED BASE</th>
+                        <th class="zone-earn text-end">EXTRAS / INCENTIVES</th>
+                        <th class="zone-earn text-end fw-bold">GROSS EARNED</th>
 
-                        <!-- Deductions Zone -->
-                        <th class="zone-deductions">STATUTORY (PF)</th>
-                        <th class="zone-deductions">TDS</th>
-                        <th class="zone-deductions text-danger">PENALTIES</th>
-                        <th class="zone-deductions">LOAN & ADV.</th>
-                        <th class="zone-deductions fw-bold text-danger">TOTAL DED.</th>
+                        <!-- Deductions Breakdown -->
+                        <th class="zone-ded text-end">PF</th>
+                        <th class="zone-ded text-end">TDS</th>
+                        <th class="zone-ded text-end">LOAN / EMI</th>
+                        <th class="zone-ded text-end text-danger">PENALTY DED.</th>
+                        <th class="zone-ded text-end fw-bold text-danger">TOTAL DEDUCTIONS</th>
 
                         <!-- Final Payout -->
-                        <th class="zone-net">TO PAY (NET)</th>
+                        <th class="zone-net text-end">NET TAKE-HOME</th>
 
-                        <!-- Bank Info Zone -->
+                        <!-- Bank Details -->
                         <th class="zone-bank">BANK NAME</th>
-                        <th class="zone-bank">BANK ACCOUNT</th>
+                        <th class="zone-bank">ACCOUNT NUMBER</th>
                         <th class="zone-bank">IFSC CODE</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for slip in payslips %}
                     <tr>
-                        <td class="sticky-id font-mono">
+                        <!-- Frozen EMP Code -->
+                        <td class="freeze-id font-mono">
                             <a href="{% url 'hrms:employee_punch_report' emp_id=slip.employee.id month=slip.payroll_run.month year=slip.payroll_run.year %}"
-                               class="text-primary text-decoration-none">
+                               class="text-primary fw-bold text-decoration-none" title="View Detailed Punch Records">
                                 {{ slip.employee.employee_code }}
                             </a>
                         </td>
-                        <!-- 2. EMPLOYEE NAME Cell -->
-                        <td class="sticky-name fw-bold">
-                            <a href="{% url 'hrms:employee_punch_report' emp_id=slip.employee.id month=slip.payroll_run.month year=slip.payroll_run.year %}"
-                               class="text-dark text-decoration-none">
+
+                        <!-- Frozen Name & Designation Subtitle -->
+                        <td class="freeze-name">
+                            <a href="{% url 'hrms:employee_detail' pk=slip.employee.pk %}" class="text-dark fw-bold text-decoration-none">
                                 {{ slip.employee.full_name }}
                             </a>
+                            <span class="sub-desig">{{ slip.employee.designation.title|default:"Staff" }} </span>
                         </td>
 
-                        <!-- Attendance -->
+                        <!-- Attendance Counts -->
                         <td class="text-center">{{ slip.full_days|floatformat:1 }}</td>
                         <td class="text-center">{{ slip.half_days|floatformat:1 }}</td>
-                        <td class="text-center">{{ slip.off_days|floatformat:1 }}</td>
+                        <td class="text-center">{{ slip.off_days|add:slip.comp_off_days|floatformat:1 }}</td>
                         <td class="text-center">{{ slip.paid_leave_days|floatformat:1 }}</td>
-                        <td class="text-center fw-bold">{{ slip.paid_days|floatformat:1 }}</td>
-                        <td class="text-center text-danger">{{ slip.absent_days|floatformat:1 }}</td>
+                        <td class="text-center fw-bold text-dark">{{ slip.paid_days|floatformat:1 }} <small class="text-muted fw-normal">/ {{ slip.total_days_in_month }}</small></td>
+                        <td class="text-center text-danger fw-bold">{{ slip.absent_days|floatformat:1 }}</td>
 
                         <!-- Earnings -->
-                        <td>{{ slip.daily_wage|intcomma }}</td>
-                        <td>{{ slip.gross_salary|intcomma }}</td>
-                        <td>{{ slip.total_earnings|intcomma }}</td>
-                        <td>0.00</td>
-                        <td>{{ slip.extra_earning|intcomma }}</td>
-                        <td class="fw-bold text-dark">₹{{ slip.total_earnings|intcomma }}</td>
+<!-- MONTHLY CTC COLUMN -->
+<td class="text-end font-mono text-muted">₹{{ slip.monthly_ctc|intcomma }}</td>
+                        <td class="text-end font-mono">₹{{ slip.daily_wage|intcomma }}</td>
+                        <td class="text-end font-mono">₹{{ slip.total_earnings|intcomma }}</td>
+                        <td class="text-end font-mono text-success">{% if slip.extra_earning > 0 %}+₹{{ slip.extra_earning|intcomma }}{% else %}—{% endif %}</td>
+                        <td class="text-end font-mono fw-bold text-dark">₹{{ slip.total_earnings|intcomma }}</td>
 
                         <!-- Deductions -->
-                        <td>{{ slip.employee.salaries.first.pf_employee|default:"0" }}</td>
-                        <td>{{ slip.employee.salaries.first.tds|default:"0" }}</td>
-                        <td class="text-danger">{{ slip.penalty_deduction|intcomma }}</td>
-                        <td>{{ slip.loan_deduction|intcomma }}</td>
-                        <td class="fw-bold text-danger">₹{{ slip.total_deductions|intcomma }}</td>
+                        <td class="text-end font-mono">₹{{ slip.employee.salaries.first.pf_employee|default:"0"|intcomma }}</td>
+                        <td class="text-end font-mono">₹{{ slip.employee.salaries.first.tds|default:"0"|intcomma }}</td>
+                        <td class="text-end font-mono">{% if slip.loan_deduction > 0 %}₹{{ slip.loan_deduction|intcomma }}{% else %}—{% endif %}</td>
+                        <td class="text-end font-mono text-danger">{% if slip.penalty_deduction > 0 %}₹{{ slip.penalty_deduction|floatformat:1|intcomma }}{% else %}—{% endif %}</td>
+                        <td class="text-end font-mono fw-bold text-danger">₹{{ slip.total_deductions|intcomma }}</td>
 
-                        <!-- Net Pay -->
-                        <td class="zone-net text-primary">₹{{ slip.net_pay|intcomma }}</td>
+                        <!-- Net Take Home -->
+                        <td class="zone-net text-end font-mono fs-6 text-primary">₹{{ slip.net_pay|intcomma }}</td>
 
-                        <!-- Bank Details -->
-                        <td class="zone-bank">{{ slip.employee.bank_detail.bank_name|default:"--" }}</td>
-                        <td class="zone-bank font-mono">{{ slip.employee.bank_detail.account_number|default:"--" }}</td>
-                        <td class="zone-bank">{{ slip.employee.bank_detail.ifsc_code|default:"--" }}</td>
+                        <!-- Bank Verification Columns -->
+                        <td class="zone-bank">{{ slip.employee.bank_detail.bank_name|default:"—" }}</td>
+                        <td class="zone-bank font-mono">{{ slip.employee.bank_detail.account_number|default:"—" }}</td>
+                        <td class="zone-bank font-mono">{{ slip.employee.bank_detail.ifsc_code|default:"—" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="21" class="text-center py-5 text-muted">
+                            <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+                            No employee payslips found matching the filter criteria for this run.
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -269,8 +359,11 @@
         </div>
     </div>
 
-    <div class="mt-3 text-muted" style="font-size: 11px;">
-        <i class="bi bi-info-circle"></i> This report is generated automatically based on attendance logs and salary configurations. Verify bank accounts before disbursement.
+    <!-- Info Footer -->
+    <div class="d-flex justify-content-between align-items-center text-muted small px-1">
+        <span><i class="bi bi-info-circle me-1"></i> Leftmost columns (EMP ID & Name) are locked for horizontal scrolling.</span>
+        <span>Generated by HRMS Automated Engine &bull; Oblu Group</span>
     </div>
+
 </div>
 {% endblock %}

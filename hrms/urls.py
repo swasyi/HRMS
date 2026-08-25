@@ -118,6 +118,7 @@ urlpatterns = [
     path('manager/leave/<int:pk>/reject/', views.ManagerLeaveRejectView.as_view(), name='manager_leave_reject'),
 
     # --- Leave ---
+    path('payroll/runs/<int:pk>/export-csv/', views.PayrollExportCSVView.as_view(), name='payroll_export_csv'),
     path('leave/', views.LeaveApplicationListView.as_view(), name='my_leave'),
     path('leave/apply/', views.LeaveApplicationCreateView.as_view(), name='leave_apply'),
     path('leave/<int:pk>/', views.LeaveDetailView.as_view(), name='leave_detail'),

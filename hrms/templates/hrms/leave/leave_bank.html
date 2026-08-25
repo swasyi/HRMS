@@ -1,169 +1,270 @@
 {% extends "hrms/base.html" %}
 
 {% block title %}Leave Bank | Oblu HRMS{% endblock %}
-{% block page_title %}Leave Bank Management : <span class="text-primary">APR 2026 - APR 2027</span>{% endblock %}
+{% block page_title %}Leave Bank Management <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-6 ms-2">APR 2026 - APR 2027</span>{% endblock %}
 
 {% block extra_css %}
 <style>
     :root {
-        --hrms-primary: #4e73df;
-        --hrms-success: #1cc88a;
-        --hrms-warning: #f6c23e;
-        --hrms-danger: #e74a3b;
-        --hrms-info: #36b9cc;
+        --primary-accent: #4f46e5;
+        --surface-card: #ffffff;
+        --surface-bg: #f8fafc;
+        --border-color: #e2e8f0;
+        --text-main: #0f172a;
+        --text-sub: #64748b;
     }
 
     .leave-bank-card {
-        background: #fff;
-        border: none;
+        background: var(--surface-card);
+        border: 1px solid var(--border-color);
         border-radius: 12px;
-        box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.08);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
         overflow: hidden;
     }
 
     .action-header {
         background: #ffffff;
-        padding: 20px;
-        border-bottom: 2px solid #f8f9fc;
+        padding: 0.75rem 1.25rem;
+        border-bottom: 1px solid var(--border-color);
     }
 
-    .table thead th {
-        background-color: #f8f9fc;
-        color: #4e73df;
-        font-weight: 800;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        border-top: none;
-        padding: 15px 10px;
-        white-space: nowrap;
+    .search-wrapper {
+        position: relative;
+        width: 100%;
+        max-width: 320px;
     }
 
-    /* Style for Django-generated inputs */
-    .leave-input-cell input {
-        width: 70px;
-        border: 1px solid transparent;
-        background: #f1f3f9;
-        text-align: center;
-        font-weight: 700;
-        color: #2e59d9;
-        padding: 4px;
-        border-radius: 6px;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-        pointer-events: none; /* View-only by default */
+    .search-wrapper .bi-search {
+        position: absolute;
+        left: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-sub);
+        font-size: 0.85rem;
     }
 
-    /* Styling when unlocked for editing */
-    .editing-mode .leave-input-cell input {
-        border: 1px solid var(--hrms-primary) !important;
-        background: #fff !important;
-        box-shadow: 0 0 0 3px rgba(78, 115, 223, 0.1);
-        pointer-events: auto !important;
-    }
-
-    .editing-mode select {
-        border-color: var(--hrms-primary) !important;
-        pointer-events: auto !important;
-    }
-
-    .status-badge {
-        font-size: 0.7rem;
-        padding: 5px 10px;
-        border-radius: 50px;
-        font-weight: 700;
-    }
-
-    .employee-name {
-        color: #2e59d9;
-        font-weight: 700;
-        transition: color 0.2s;
-    }
-
-    .employee-name:hover {
-        color: #1a3ab1;
-    }
-
-    .search-box {
-        max-width: 350px;
+    .search-input {
+        padding: 0.35rem 0.75rem 0.35rem 2.2rem;
         border-radius: 8px;
-        overflow: hidden;
-        box-shadow: inset 0 1px 2px rgba(0,0,0,0.075);
+        border: 1px solid var(--border-color);
+        background: var(--surface-bg);
+        font-size: 0.82rem;
+    }
+
+    /* Fixed Scroll Area & Compact Widths */
+    .table-container {
+        max-height: calc(100vh - 210px);
+        overflow-x: auto !important;
+        overflow-y: auto;
+        position: relative;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #leaveTable {
+        min-width: 1200px;
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        table-layout: fixed;
+    }
+
+    #leaveTable thead th {
+        background: #f8fafc;
+        color: #475569;
+        font-weight: 700;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border-bottom: 1px solid var(--border-color);
+        padding: 10px 8px;
+        white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        vertical-align: middle;
+    }
+
+    #leaveTable thead th.leave-header {
+        background-color: #f1f5f9;
+        text-align: center;
+    }
+
+    #leaveTable tbody tr:hover td {
+        background-color: #f8fafc !important;
+    }
+
+    #leaveTable td {
+        padding: 8px 8px;
+        border-bottom: 1px solid #f1f5f9;
+        font-size: 0.8rem;
+        vertical-align: middle;
+        white-space: nowrap;
+        background: #ffffff;
+    }
+
+    /* Solid Sticky Freeze for Employee Name */
+    .sticky-col {
+        position: sticky !important;
+        left: 0 !important;
+        background: #ffffff !important;
+        z-index: 8 !important;
+        border-right: 2px solid var(--border-color) !important;
+        box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.06);
+    }
+
+    #leaveTable thead th.sticky-col {
+        z-index: 20 !important;
+        background: #f8fafc !important;
+    }
+
+    /* Fixed Column Widths */
+    .col-emp    { width: 190px; }
+    .col-date   { width: 120px; }
+    .col-type   { width: 90px; text-align: center; }
+    .col-dept   { width: 160px; }
+    .col-status { width: 85px; text-align: center; }
+
+    /* Leave Column Inputs & Cells */
+    .leave-col {
+        width: 75px;
+        text-align: center !important;
+        padding: 6px 4px !important;
+    }
+
+    .leave-col input {
+        width: 100%;
+        max-width: 58px;
+        margin: 0 auto;
+        padding: 2px 0;
+        border-radius: 4px;
+        font-weight: 700;
+        font-size: 0.78rem;
+        text-align: center;
+        border: 1px solid transparent;
+        background: #f1f5f9;
+        color: var(--text-main);
+        pointer-events: none;
+        display: block;
+    }
+
+    .editing-mode .leave-col input {
+        background: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
+        pointer-events: auto !important;
+    }
+
+    .editing-mode .leave-col input:focus {
+        border-color: var(--primary-accent) !important;
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+    }
+
+    .leave-value {
+        font-weight: 600;
+        font-size: 0.78rem;
+        text-align: center;
+        display: block;
+        width: 100%;
+    }
+
+    /* Badges & Avatars */
+    .emp-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #e0e7ff;
+        color: var(--primary-accent);
+        font-size: 0.65rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .badge-status-active {
+        background-color: #ecfdf5;
+        color: #059669;
+        font-weight: 600;
+        font-size: 0.68rem;
+    }
+
+    .badge-status-inactive {
+        background-color: #f1f5f9;
+        color: #64748b;
+        font-weight: 600;
+        font-size: 0.68rem;
+    }
+
+    .badge-not-assigned {
+        background-color: #f8fafc;
+        color: #94a3b8;
+        border: 1px dashed #cbd5e1;
+        font-size: 0.65rem;
+        font-weight: 500;
+        padding: 2px 4px;
+        border-radius: 4px;
+        display: inline-block;
     }
 
     .hidden-actions { display: none !important; }
 
-    .btn-calculate {
-        background-color: #6f42c1;
-        border-color: #6f42c1;
-        color: white;
-    }
-    .btn-calculate:hover {
-        background-color: #59359a;
-        color: white;
-    }
-
-    /* Table Row Hover */
-    #leaveTable tbody tr {
-        transition: background-color 0.2s;
-    }
-    #leaveTable tbody tr:hover {
-        background-color: rgba(78, 115, 223, 0.03);
-    }
-
-    .sticky-col {
-        position: sticky;
-        left: 0;
-        background-color: white;
-        z-index: 5;
-        border-right: 2px solid #f8f9fc !important;
+    /* Mobile Adaptations */
+    @media (max-width: 768px) {
+        .action-header {
+            padding: 0.75rem;
+        }
+        .search-wrapper {
+            max-width: 100%;
+            margin-bottom: 0.5rem;
+        }
+        .table-container {
+            max-height: calc(100vh - 260px);
+        }
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid py-4">
+<div class="container-fluid py-3">
     <div class="leave-bank-card">
+        {% if user.is_superuser %}
         <form method="post" id="leaveBankForm">
             {% csrf_token %}
             {{ formset.management_form }}
-
-            <!-- Hidden Input for Action Type -->
             <input type="hidden" name="action" id="formAction" value="save_bulk">
+        {% endif %}
 
+            <!-- Control Bar -->
             <div class="action-header">
-                <div class="row align-items-center g-3">
-                    <!-- Search Section -->
-                    <div class="col-md-4">
-                        <div class="search-box input-group">
-                            <span class="input-group-text bg-white border-end-0 text-muted">
-                                <i class="bi bi-search"></i>
-                            </span>
-                            <input type="text" id="tableSearch" class="form-control border-start-0" placeholder="Search employee, dept, or type...">
+                <div class="row align-items-center g-2">
+                    <div class="col-12 col-md-5">
+                        <div class="search-wrapper">
+                            <i class="bi bi-search"></i>
+                            <input type="text" id="tableSearch" class="form-control search-input" placeholder="Search employee, dept, code...">
                         </div>
                     </div>
 
-                    <!-- Action Buttons Section -->
-                    <div class="col-md-8 text-md-end">
+                    <div class="col-12 col-md-7 text-md-end">
                         {% if user.is_superuser %}
-                            <div id="standardActions" class="d-flex justify-content-md-end gap-2">
-                                <button type="button" id="autoCalculateBtn" class="btn btn-calculate">
-                                    <i class="bi bi-magic me-1"></i> Auto Calculate All
+                            <div id="standardActions" class="d-flex flex-wrap justify-content-md-end gap-2">
+                                <button type="button" id="autoCalculateBtn" class="btn btn-sm btn-light border text-dark fw-semibold px-3 shadow-sm">
+                                    <i class="bi bi-cpu-fill text-primary me-1"></i> Auto Calculate All
                                 </button>
-
-                                <button type="button" id="unlockBtn" class="btn btn-primary">
+                                <button type="button" id="unlockBtn" class="btn btn-sm btn-primary fw-semibold px-3 shadow-sm">
                                     <i class="bi bi-pencil-square me-1"></i> Manual Override
                                 </button>
                             </div>
 
-                            <div id="saveActions" class="hidden-actions d-flex justify-content-md-end gap-2">
-                                <span class="align-self-center text-danger small fw-bold me-2 pulse">
-                                    <i class="bi bi-exclamation-triangle-fill"></i> EDITING MODE ACTIVE
+                            <div id="saveActions" class="hidden-actions d-flex flex-wrap align-items-center justify-content-md-end gap-2">
+                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
+                                    <i class="bi bi-exclamation-triangle-fill me-1"></i> Editing Active
                                 </span>
-                                <button type="button" onclick="window.location.reload()" class="btn btn-outline-secondary">
+                                <button type="button" onclick="window.location.reload()" class="btn btn-sm btn-outline-secondary fw-semibold">
                                     Cancel
                                 </button>
-                                <button type="submit" class="btn btn-success">
-                                    <i class="bi bi-check-circle-fill me-1"></i> Apply & Save
+                                <button type="submit" class="btn btn-sm btn-success fw-semibold px-3 shadow-sm">
+                                    <i class="bi bi-check2-circle me-1"></i> Apply & Save
                                 </button>
                             </div>
                         {% endif %}
@@ -171,117 +272,281 @@
                 </div>
             </div>
 
-            <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0" id="leaveTable">
+            <!-- Table -->
+            <div class="table-container">
+                <table class="table align-middle mb-0" id="leaveTable">
                     <thead>
                         <tr>
-                            <th class="sticky-col">Employee Details</th>
-                            <th>Dates (Join/Conf)</th>
-                            <th>Emp. Type</th>
-                            <th>Dept / Desig</th>
-                            <th>Work Status</th>
-                            <th class="text-center bg-light">Bereave</th>
-                            <th class="text-center bg-light">Menstrual</th>
-                            <th class="text-center bg-light">Sick</th>
-                            <th class="text-center bg-light">Earned</th>
-                            <th class="text-center bg-light">Casual</th>
-                            <th class="text-center bg-light">Comp Off</th>
+                            <th class="sticky-col col-emp">Employee</th>
+                            <th class="col-date">Dates (Join / Conf)</th>
+                            <th class="col-type">Emp. Type</th>
+                            <th class="col-dept">Dept / Desig</th>
+                            <th class="col-status">Status</th>
+                            <th class="leave-header leave-col">Bereave</th>
+                            <th class="leave-header leave-col">Menstrual</th>
+                            <th class="leave-header leave-col">Sick</th>
+                            <th class="leave-header leave-col">Earned</th>
+                            <th class="leave-header leave-col">Casual</th>
+                            <th class="leave-header leave-col">Comp Off</th>
+                            <th class="leave-header leave-col">Maternity</th>
+                            <th class="leave-header leave-col">Paternity</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% if user.is_superuser %}
                             {% for form in formset %}
-                                <tr class="employee-row">
-                                    <td class="sticky-col">
+                                {% with emp=form.instance.e_name %}
+                                <tr>
+                                    <td class="sticky-col col-emp">
                                         {{ form.id }}
-                                        <div class="d-flex align-items-center">
-                                            <div class="ms-2">
-                                                <a href="{% url 'hrms:employee_detail' pk=form.instance.e_name.pk %}" class="employee-name text-decoration-none">
-                                                    {{ form.instance.e_name.full_name }}
+                                        <div class="d-flex align-items-center gap-2">
+                                            <div class="emp-avatar">
+                                                {{ emp.first_name|first|upper }}{{ emp.last_name|first|upper }}
+                                            </div>
+                                            <div class="text-truncate" style="max-width: 135px;">
+                                                <a href="{% url 'hrms:employee_detail' pk=emp.pk %}" class="fw-bold text-decoration-none text-dark d-block text-truncate">
+                                                    {{ emp.full_name }}
                                                 </a>
-                                                <div class="text-muted small">{{ form.instance.e_name.employee_code }}</div>
+                                                <span class="text-muted" style="font-size: 0.68rem;">#{{ emp.employee_code }}</span>
                                             </div>
                                         </div>
                                     </td>
-                                    <td>
-                                        <div class="small fw-bold text-dark">{{ form.instance.joining_date|date:"d M Y" }}</div>
-                                        <div class="text-muted" style="font-size: 0.7rem;">
-                                            {% if form.instance.confirmation_date %}
-                                                Conf: {{ form.instance.confirmation_date|date:"d M Y" }}
+                                    <td class="col-date">
+                                        <div class="fw-semibold text-dark" style="font-size: 0.75rem;">{{ emp.date_of_joining|date:"d M Y"|default:"--" }}</div>
+                                        <div class="text-muted" style="font-size: 0.68rem;">
+                                            {% if emp.date_of_confirmation %}
+                                                <span class="text-success">Conf:</span> {{ emp.date_of_confirmation|date:"d M Y" }}
                                             {% else %}
-                                                <span class="text-warning">Not Confirmed</span>
+                                                <span class="text-warning-emphasis">Not Confirmed</span>
                                             {% endif %}
                                         </div>
                                     </td>
-                                    <td>
-                                        <span class="badge border {% if form.instance.employment_type == 'full_time' %}bg-success text-white{% else %}bg-light text-dark{% endif %}">
-                                            {{ form.instance.employment_type|upper }}
+                                    <td class="col-type">
+                                        <span class="badge border {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}bg-primary-subtle text-primary border-primary-subtle{% else %}bg-light text-secondary border-secondary-subtle{% endif %} text-uppercase" style="font-size: 0.65rem; padding: 2px 4px;">
+                                            {{ emp.employment_type|default:"N/A" }}
                                         </span>
                                     </td>
-                                    <td>
-                                        <div class="small fw-bold">{{ form.instance.e_name.department.name }}</div>
-                                        <div class="text-muted extra-small" style="font-size: 0.7rem;">{{ form.instance.e_name.designation.title }}</div>
+                                    <td class="col-dept">
+                                        <div class="fw-semibold text-dark text-truncate" style="max-width: 140px; font-size: 0.75rem;">{{ emp.department.name|default:"General" }}</div>
+                                        <div class="text-muted text-truncate" style="max-width: 140px; font-size: 0.68rem;">{{ emp.designation.title|default:"--" }}</div>
                                     </td>
-                                    <td style="width: 130px;">
-    <span class="badge {% if form.instance.e_name.status == 'active' %}bg-success{% else %}bg-warning{% endif %}">
-        {{ form.instance.e_name.get_status_display }}
-    </span>
+                                    <td class="col-status">
+                                        <span class="badge rounded-pill {% if emp.status == 'active' %}badge-status-active{% else %}badge-status-inactive{% endif %} px-2 py-0">
+                                            {{ emp.get_status_display }}
+                                        </span>
                                     </td>
 
-                                    <!-- Leave Fields -->
-                                    <td class="text-center leave-input-cell">{{ form.bereavement_leave }}</td>
-                                    <td class="text-center leave-input-cell">{{ form.menstrual_leave }}</td>
-                                    <td class="text-center leave-input-cell">{{ form.sick_leave }}</td>
-                                    <td class="text-center leave-input-cell">{{ form.earned_leave }}</td>
-                                    <td class="text-center leave-input-cell">{{ form.casual_leave }}</td>
-                                    <td class="text-center leave-input-cell">{{ form.comp_off }}</td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            {{ form.bereavement_leave }}
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.gender == 'F' or emp.gender == 'female' %}
+                                            {% if not emp.date_of_confirmation or emp.employment_type != 'full_time' %}
+                                                {{ form.menstrual_leave }}
+                                            {% else %}
+                                                <span class="text-muted opacity-25">--</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted opacity-25">--</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            {{ form.sick_leave }}
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            {{ form.earned_leave }}
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            {{ form.casual_leave }}
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">{{ form.comp_off }}</td>
+                                    <td class="leave-col">
+                                        {% if emp.gender == 'F' or emp.gender == 'female' %}
+                                            {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                                {{ form.maternity_leave }}
+                                            {% else %}
+                                                <span class="text-muted opacity-25">--</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted opacity-25">--</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.gender == 'M' or emp.gender == 'male' %}
+                                            {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                                {{ form.paternity_leave }}
+                                            {% else %}
+                                                <span class="text-muted opacity-25">--</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted opacity-25">--</span>
+                                        {% endif %}
+                                    </td>
                                 </tr>
+                                {% endwith %}
                             {% endfor %}
                         {% else %}
-                            <!-- Read-only view for HR/Managers if needed -->
+                            <!-- Manager / Employee View -->
                             {% for record in leave_balances %}
-                                <tr class="employee-row">
-                                    <td class="sticky-col fw-bold text-primary">{{ record.e_name.full_name }}</td>
-                                    <td>{{ record.joining_date|date:"d M Y" }}</td>
-                                    <td><span class="badge bg-info">{{ record.employment_type }}</span></td>
-                                    <td class="small">{{ record.e_name.department.name }}</td>
-                                    <td><span class="badge bg-success">{{ record.e_name.get_status_display }}</span></td>
-                                    <td class="text-center fw-bold">{{ record.bereavement_leave }}</td>
-                                    <td class="text-center fw-bold">{{ record.menstrual_leave }}</td>
-                                    <td class="text-center fw-bold">{{ record.sick_leave }}</td>
-                                    <td class="text-center fw-bold">{{ record.earned_leave }}</td>
-                                    <td class="text-center fw-bold">{{ record.casual_leave }}</td>
-                                    <td class="text-center fw-bold">{{ record.comp_off }}</td>
+                                {% with emp=record.e_name %}
+                                <tr>
+                                    <td class="sticky-col col-emp">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <div class="emp-avatar">
+                                                {{ emp.first_name|first|upper }}{{ emp.last_name|first|upper }}
+                                            </div>
+                                            <div class="text-truncate" style="max-width: 135px;">
+                                                <a href="{% url 'hrms:employee_detail' pk=emp.pk %}" class="fw-bold text-decoration-none text-dark d-block text-truncate">
+                                                    {{ emp.full_name }}
+                                                </a>
+                                                <span class="text-muted" style="font-size: 0.68rem;">#{{ emp.employee_code }}</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="col-date">
+                                        <div class="fw-semibold text-dark" style="font-size: 0.75rem;">{{ emp.date_of_joining|date:"d M Y"|default:"--" }}</div>
+                                        <div class="text-muted" style="font-size: 0.68rem;">
+                                            {% if emp.date_of_confirmation %}
+                                                <span class="text-success">Conf:</span> {{ emp.date_of_confirmation|date:"d M Y" }}
+                                            {% else %}
+                                                <span class="text-warning-emphasis">Not Confirmed</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td class="col-type">
+                                        <span class="badge border {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}bg-primary-subtle text-primary border-primary-subtle{% else %}bg-light text-secondary border-secondary-subtle{% endif %} text-uppercase" style="font-size: 0.65rem; padding: 2px 4px;">
+                                            {{ emp.employment_type|default:"N/A" }}
+                                        </span>
+                                    </td>
+                                    <td class="col-dept">
+                                        <div class="fw-semibold text-dark text-truncate" style="max-width: 140px; font-size: 0.75rem;">{{ emp.department.name|default:"General" }}</div>
+                                        <div class="text-muted text-truncate" style="max-width: 140px; font-size: 0.68rem;">{{ emp.designation.title|default:"--" }}</div>
+                                    </td>
+                                    <td class="col-status">
+                                        <span class="badge rounded-pill {% if emp.status == 'active' %}badge-status-active{% else %}badge-status-inactive{% endif %} px-2 py-0">
+                                            {{ emp.get_status_display }}
+                                        </span>
+                                    </td>
+
+                                    <!-- Aligned Read-Only Values -->
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            <span class="leave-value">{{ record.bereavement_leave|default:"0.0" }}</span>
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.gender == 'F' or emp.gender == 'female' %}
+                                            {% if not emp.date_of_confirmation or emp.employment_type != 'full_time' %}
+                                                <span class="leave-value text-danger fw-bold">{{ record.menstrual_leave|default:"2.0" }}</span>
+                                            {% else %}
+                                                <span class="leave-value text-muted opacity-25">--</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="leave-value text-muted opacity-25">--</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            <span class="leave-value">{{ record.sick_leave|default:"0.0" }}</span>
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            <span class="leave-value text-primary">{{ record.earned_leave|default:"0.0" }}</span>
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                            <span class="leave-value text-success">{{ record.casual_leave|default:"0.0" }}</span>
+                                        {% else %}
+                                            <span class="badge-not-assigned">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        <span class="leave-value">{{ record.comp_off|default:"0.0" }}</span>
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.gender == 'F' or emp.gender == 'female' %}
+                                            {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                                <span class="leave-value text-primary">{{ record.maternity_leave|default:"20.0" }}</span>
+                                            {% else %}
+                                                <span class="leave-value text-muted opacity-25">--</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="leave-value text-muted opacity-25">--</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="leave-col">
+                                        {% if emp.gender == 'M' or emp.gender == 'male' %}
+                                            {% if emp.date_of_confirmation and emp.employment_type == 'full_time' %}
+                                                <span class="leave-value text-primary">{{ record.paternity_leave|default:"10.0" }}</span>
+                                            {% else %}
+                                                <span class="leave-value text-muted opacity-25">--</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="leave-value text-muted opacity-25">--</span>
+                                        {% endif %}
+                                    </td>
                                 </tr>
+                                {% endwith %}
                             {% endfor %}
                         {% endif %}
                     </tbody>
                 </table>
             </div>
+        {% if user.is_superuser %}
         </form>
+        {% endif %}
     </div>
 </div>
 
-<!-- Auto Calculate Confirmation Modal -->
+<!-- Auto Calculate Modal -->
 <div class="modal fade" id="calcModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow">
-            <div class="modal-header bg-calculate text-white">
-                <h5 class="modal-title"><i class="bi bi-cpu-fill me-2"></i>Run Leave Engine?</h5>
+        <div class="modal-content border-0 shadow-lg" style="border-radius: 12px; overflow: hidden;">
+            <div class="modal-header bg-dark text-white p-3">
+                <h6 class="modal-title fw-bold"><i class="bi bi-cpu-fill text-warning me-2"></i>Run Leave Calculation Engine</h6>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body p-4">
-                <p>This will <strong>overwrite</strong> the current leave bank based on:</p>
-                <ul class="small text-muted">
-                    <li>Internship status (Gender-based menstrual leave only).</li>
-                    <li>Full-time pro-rating (Confirmation date vs Financial Year).</li>
-                    <li>Standard SL/BL office policies.</li>
-                </ul>
-                <p class="mb-0 text-danger small fw-bold">Note: This action cannot be undone.</p>
+            <div class="modal-body p-3">
+                <p class="text-secondary small mb-2">Recalculates and overwrites balances across all active employees:</p>
+                <div class="bg-light p-2 rounded-2 mb-2 border">
+                    <ul class="text-muted small mb-0 ps-3">
+                        <li><strong>Internship / Trainee:</strong> Menstrual cycle adjustments.</li>
+                        <li><strong>Full-Time Proration:</strong> Pro-rates casual/earned leaves against confirmation date.</li>
+                        <li><strong>Standard Quota:</strong> Resets SL/BL caps.</li>
+                    </ul>
+                </div>
+                <div class="alert alert-danger py-1 px-2 small border-0 d-flex align-items-center gap-2 mb-0">
+                    <i class="bi bi-exclamation-octagon-fill"></i>
+                    <span>This operation directly overwrites manual updates.</span>
+                </div>
             </div>
-            <div class="modal-footer bg-light">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" id="confirmCalcBtn" class="btn btn-calculate px-4">Start Calculation</button>
+            <div class="modal-footer bg-light p-2 border-top">
+                <button type="button" class="btn btn-sm btn-outline-secondary fw-semibold" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" id="confirmCalcBtn" class="btn btn-sm btn-primary fw-semibold px-3">Execute Engine</button>
             </div>
         </div>
     </div>
@@ -292,45 +557,40 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
     $(document).ready(function() {
-        // Initially disable all interactive elements to prevent accidental edits
         $("#leaveTable input, #leaveTable select").prop("disabled", true);
 
-        // 1. Live Search functionality
+        // Search Filter
         $("#tableSearch").on("keyup", function() {
             var value = $(this).val().toLowerCase();
             $("#leaveTable tbody tr").filter(function() {
-                $(this).toggle($(this).text().toLowerCase().indexOf(value) > -1)
+                $(this).toggle($(this).text().toLowerCase().indexOf(value) > -1);
             });
         });
 
-        // 2. Manual Unlock logic
+        // Unlock Manual Overrides
         $("#unlockBtn").click(function() {
             $("#standardActions").addClass('hidden-actions');
             $("#saveActions").removeClass('hidden-actions');
             $("#leaveTable").addClass('editing-mode');
             $("#leaveTable input, #leaveTable select").prop("disabled", false);
             $("#formAction").val("save_bulk");
-            $(".leave-input-cell input:first").focus();
+            $("#leaveTable tbody tr:first-child .leave-col input:first").focus();
         });
 
-        // 3. Auto-Calculate Engine logic
+        // Auto Calculation Engine
         $("#autoCalculateBtn").click(function() {
             var myModal = new bootstrap.Modal(document.getElementById('calcModal'));
             myModal.show();
         });
 
         $("#confirmCalcBtn").click(function() {
-            $(this).html('<span class="spinner-border spinner-border-sm me-2"></span>Processing...');
-            $(this).prop('disabled', true);
-
-            // Set action to calculate_all and submit form
+            $(this).html('<span class="spinner-border spinner-border-sm me-1"></span>Computing...').prop('disabled', true);
             $("#formAction").val("calculate_all");
-            // Need to enable inputs temporarily so they submit (Django requirement for formsets)
             $("#leaveTable input, #leaveTable select").prop("disabled", false);
             $("#leaveBankForm").submit();
         });
 
-        // Form submission safety
+        // Form Submit
         $("#leaveBankForm").on("submit", function() {
             $(this).find("input, select").prop("disabled", false);
         });

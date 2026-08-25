@@ -79,6 +79,33 @@ def is_finance(user):
             return True
     return False
 
+def is_finance(user):
+    """Checks if user has Finance / Payroll audit rights."""
+    if not user or not user.is_authenticated:
+        return False
+
+    # 1. Superadmin has universal access
+    if user.is_superuser:
+        return True
+
+    # 2. Django Group membership check
+    if user.groups.filter(name__in=['Finance', 'Accounts', 'Payroll']).exists():
+        return True
+
+    # 3. Employee model level checks
+    emp = get_employee_profile(user)
+    if emp:
+        # Check explicit boolean flag on Employee model
+        if getattr(emp, 'is_finance', False):
+            return True
+
+        # Check department fallback
+        if emp.department and emp.department.name:
+            dept_name = emp.department.name.lower()
+            if any(keyword in dept_name for keyword in ['account', 'finance', 'payroll']):
+                return True
+
+    return False
 
 def get_role(user):
     """Determines primary UI dashboard persona."""

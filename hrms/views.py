@@ -9,7 +9,7 @@ from django.forms import modelformset_factory
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy, reverse
 from django.utils import timezone
-from django.db.models import Q, Count, Max
+from django.db.models import Q, Count, Max, Sum
 from . import forms as f
 from . import models as m
 from . import leave_logic as lv
@@ -2142,6 +2142,40 @@ class MyAttendanceView(LoginRequiredMixin, SidebarContextMixin, ListView):
             ctx['grace_max'] = policy.max_grace_per_month if policy else None
         return ctx
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        employee = get_employee_profile(self.request.user)
+        ctx['employee'] = employee
+
+        if employee:
+            today = timezone.localdate()
+            # 1. Fetch Today's Record
+            ctx['today_record'] = m.AttendanceRecord.objects.filter(
+                employee=employee, attendance_date=today
+            ).first()
+
+            # 2. Correct Policy Logic: Fetch the policy valid for TODAY
+            # This uses the method you defined in your Company Model
+            policy = employee.company.get_policy_for_date(today)
+
+            # Use 'grace_allowed_count' (the field name in your model)
+            ctx['grace_max'] = policy.grace_allowed_count
+            ctx['grace_minutes_limit'] = policy.grace_minutes
+
+            # 3. Calculate Grace Used this month
+            # We count records where user was late but within the grace limit
+            grace_used_count = m.AttendanceRecord.objects.filter(
+                employee=employee,
+                attendance_date__month=today.month,
+                attendance_date__year=today.year,
+                late_minutes__gt=0,
+                late_minutes__lte=policy.grace_minutes
+            ).count()
+
+            ctx['grace_used'] = grace_used_count
+
+        return ctx
+
 
 class CheckInView(LoginRequiredMixin, View):
     def post(self, request):
@@ -2728,6 +2762,1136 @@ class LeaveApplicationCreateView(LoginRequiredMixin, SidebarContextMixin, View):
         })
 
 
+from datetime import date
+from decimal import Decimal
+from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Sum
+from django.shortcuts import redirect, render
+from django.views import View
+from hrms import forms as f
+from hrms import leave_logic as lv
+from hrms import models as m
+from hrms.permissions import get_employee_profile, is_hr_or_above
+
+
+class LeaveApplicationCreateView(LoginRequiredMixin, View):
+    active_group, active_item = 'leave', 'my_leave'
+    template_name = 'hrms/leave/leave_application_form.html'
+
+    def get_form_class(self):
+        return f.LeaveApplicationHRForm if is_hr_or_above(self.request.user) else f.LeaveApplicationForm
+
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            # 1. Fetch all Leave Types configured for this employee's company
+            company = employee.company
+            leave_types_qs = m.LeaveType.objects.filter(company=company) if company else m.LeaveType.objects.all()
+
+            # 2. Check employee status dynamically from model fields
+            is_female = bool(employee.gender and employee.gender.upper().startswith('F'))
+            is_male = bool(employee.gender and employee.gender.upper().startswith('M'))
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            # 3. Dynamic Monthly & Annual Card Generator from DB
+            for lt in leave_types_qs:
+                # Filter by gender restrictions configured in the LeaveType model
+                gender_rule = getattr(lt, 'gender_restriction', getattr(lt, 'gender', None))
+                if gender_rule:
+                    g_str = str(gender_rule).upper()
+                    if 'FEMALE' in g_str and not is_female:
+                        continue
+                    if 'MALE' in g_str and not is_male:
+                        continue
+
+                # Code & Name from DB
+                code = lt.code.upper()
+                annual_quota = Decimal(str(lt.annual_quota or 0.0))
+
+                # If the policy requires confirmation and the employee is not confirmed, skip paid leaves
+                if not is_confirmed and code not in ('ML', 'MENSTRUAL'):
+                    continue
+
+                # If employee is confirmed, exclude Menstrual leave (policy for trainees/interns only)
+                if is_confirmed and code in ('ML', 'MENSTRUAL'):
+                    continue
+
+                # Dynamic Monthly Quota (annual_quota / 12)
+                monthly_quota = round(annual_quota / Decimal('12.0'), 1) if annual_quota > 0 else Decimal('0.0')
+
+                # Calculate Approved Leave Usage This Month from LeaveApplication Table
+                current_month_used = m.LeaveApplication.objects.filter(
+                    employee=employee,
+                    leave_type=lt,
+                    status=m.LeaveApplication.Status.APPROVED,
+                    start_date__year=today.year,
+                    start_date__month=today.month
+                ).aggregate(total=Sum('total_days'))['total'] or Decimal('0.0')
+
+                monthly_available = max(Decimal('0.0'), monthly_quota - current_month_used)
+
+                # Fetch Balance Record from DB
+                balance_record = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    # Match dynamic attribute by leave type code/name
+                    field_map = {
+                        'CL': 'casual_leave',
+                        'EL': 'earned_leave',
+                        'SL': 'sick_leave',
+                        'BL': 'bereavement_leave',
+                        'ML': 'menstrual_leave',
+                        'CO': 'comp_off',
+                    }
+                    target_field = field_map.get(code)
+                    if target_field and hasattr(balance_record, target_field):
+                        annual_balance = getattr(balance_record, target_field) or Decimal('0.0')
+                    else:
+                        annual_balance = annual_quota
+                else:
+                    annual_balance = annual_quota
+
+                # Determine styling dynamically
+                is_emergency = code in ('SL', 'BL')
+                cards.append({
+                    'code': code,
+                    'name': lt.name,
+                    'is_paid': lt.is_paid,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
+    def get(self, request):
+        employee = get_employee_profile(request.user)
+        form = self.get_form_class()()
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        form_class = self.get_form_class()
+        form = form_class(request.POST, request.FILES)
+
+        employee = form.cleaned_data.get('employee') if (is_hr_or_above(request.user) and 'employee' in form.cleaned_data) else get_employee_profile(request.user)
+
+        if employee is None:
+            messages.error(request, "Your login isn't linked to an employee record.")
+            return redirect('hrms:dashboard')
+
+        if form.is_valid():
+            try:
+                lv.apply_leave(
+                    employee=employee,
+                    leave_type=form.cleaned_data['leave_type'],
+                    day_type=form.cleaned_data['day_type'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                    reason=form.cleaned_data.get('reason', ''),
+                    supporting_document=request.FILES.get('supporting_document'),
+                    relationship=form.cleaned_data.get('relationship', ''),
+                    leave_stage=form.cleaned_data.get('leave_stage', ''),
+                )
+                messages.success(request, 'Leave application submitted successfully.')
+                return redirect('hrms:my_leave')
+            except lv.LeaveError as e:
+                form.add_error(None, str(e))
+
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+from datetime import date
+from decimal import Decimal
+from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Sum
+from django.shortcuts import redirect, render
+from django.views import View
+from hrms import forms as f
+from hrms import leave_logic as lv
+from hrms import models as m
+from hrms.permissions import get_employee_profile, is_hr_or_above
+
+
+class LeaveApplicationCreateView(LoginRequiredMixin, View):
+    active_group, active_item = 'leave', 'my_leave'
+    template_name = 'hrms/leave/leave_application_form.html'
+
+    def get_form_class(self):
+        return f.LeaveApplicationHRForm if is_hr_or_above(self.request.user) else f.LeaveApplicationForm
+
+    def _get_leave_type_quota(self, leave_type_obj):
+        """Dynamically finds the yearly quota field on the LeaveType model instance."""
+        for field_name in ('days_per_year', 'annual_quota', 'days_allowed', 'quota', 'max_days', 'days'):
+            if hasattr(leave_type_obj, field_name):
+                val = getattr(leave_type_obj, field_name)
+                if val is not None:
+                    return Decimal(str(val))
+        return Decimal('0.0')
+
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            company = employee.company
+            leave_types_qs = m.LeaveType.objects.filter(company=company) if company else m.LeaveType.objects.all()
+
+            # Dynamic Employee Attributes
+            is_female = bool(employee.gender and employee.gender.upper().startswith('F'))
+            is_male = bool(employee.gender and employee.gender.upper().startswith('M'))
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            # Fetch Leave Balance Record for Employee from DB
+            balance_record = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+
+            for lt in leave_types_qs:
+                code = (lt.code or '').upper().strip()
+                name = lt.name
+
+                # Gender check from DB model
+                gender_rule = getattr(lt, 'gender_restriction', getattr(lt, 'gender', 'ALL'))
+                if gender_rule:
+                    g_str = str(gender_rule).upper()
+                    if 'FEMALE' in g_str and not is_female:
+                        continue
+                    if 'MALE' in g_str and not is_male:
+                        continue
+
+                annual_quota = self._get_leave_type_quota(lt)
+
+                # Skip paid allocations for unconfirmed staff / interns (except Menstrual Leave if female)
+                if not is_confirmed and code not in ('ML', 'MENSTRUAL') and 'menstrual' not in name.lower():
+                    continue
+
+                # Menstrual Leave policy: reserved for unconfirmed/intern female staff
+                if is_confirmed and (code in ('ML', 'MENSTRUAL') or 'menstrual' in name.lower()):
+                    continue
+
+                # Dynamic Monthly Quota (annual / 12)
+                monthly_quota = round(annual_quota / Decimal('12.0'), 1) if annual_quota > Decimal('0.0') else Decimal('0.0')
+
+                # Calculate Approved Days Taken in Current Month from DB
+                month_used = m.LeaveApplication.objects.filter(
+                    employee=employee,
+                    leave_type=lt,
+                    status=m.LeaveApplication.Status.APPROVED,
+                    start_date__year=today.year,
+                    start_date__month=today.month
+                ).aggregate(total=Sum('total_days'))['total'] or Decimal('0.0')
+
+                monthly_available = max(Decimal('0.0'), monthly_quota - Decimal(str(month_used)))
+
+                # Determine Balance from DB
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    # Look for corresponding field in EmployeeLeaveBalance
+                    for attr in (code.lower() + '_leave', name.lower().replace(' ', '_') + '_leave', name.lower().replace(' ', '_')):
+                        if hasattr(balance_record, attr):
+                            val = getattr(balance_record, attr)
+                            if val is not None:
+                                annual_balance = Decimal(str(val))
+                                break
+                    else:
+                        annual_balance = annual_quota
+                else:
+                    annual_balance = annual_quota
+
+                is_emergency = code in ('SL', 'BL') or 'sick' in name.lower() or 'bereave' in name.lower()
+
+                cards.append({
+                    'code': code,
+                    'name': name,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
+    def get(self, request):
+        employee = get_employee_profile(request.user)
+        form = self.get_form_class()()
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        form_class = self.get_form_class()
+        form = form_class(request.POST, request.FILES)
+
+        employee = form.cleaned_data.get('employee') if (is_hr_or_above(request.user) and 'employee' in form.cleaned_data) else get_employee_profile(request.user)
+
+        if employee is None:
+            messages.error(request, "Your login isn't linked to an employee record.")
+            return redirect('hrms:dashboard')
+
+        if form.is_valid():
+            try:
+                lv.apply_leave(
+                    employee=employee,
+                    leave_type=form.cleaned_data['leave_type'],
+                    day_type=form.cleaned_data['day_type'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                    reason=form.cleaned_data.get('reason', ''),
+                    supporting_document=request.FILES.get('supporting_document'),
+                    relationship=form.cleaned_data.get('relationship', ''),
+                    leave_stage=form.cleaned_data.get('leave_stage', ''),
+                )
+                messages.success(request, 'Leave application submitted successfully.')
+                return redirect('hrms:my_leave')
+            except lv.LeaveError as e:
+                form.add_error(None, str(e))
+
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+from decimal import Decimal
+from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Q, Sum
+from django.shortcuts import redirect, render
+from django.views import View
+from hrms import forms as f
+from hrms import leave_logic as lv
+from hrms import models as m
+from hrms.permissions import get_employee_profile, is_hr_or_above
+
+
+class LeaveApplicationCreateView(LoginRequiredMixin, View):
+    active_group, active_item = 'leave', 'my_leave'
+    template_name = 'hrms/leave/leave_application_form.html'
+
+    def get_form_class(self):
+        return (
+            f.LeaveApplicationHRForm
+            if is_hr_or_above(self.request.user)
+            else f.LeaveApplicationForm
+        )
+
+    def _get_leave_type_quota(self, leave_type_obj):
+        for field_name in (
+            'days_per_year',
+            'annual_quota',
+            'days_allowed',
+            'quota',
+            'max_days',
+            'days',
+        ):
+            if hasattr(leave_type_obj, field_name):
+                val = getattr(leave_type_obj, field_name)
+                if val is not None:
+                    return Decimal(str(val))
+        return Decimal('0.0')
+
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            company = employee.company
+            leave_types_qs = (
+                m.LeaveType.objects.filter(company=company)
+                if company
+                else m.LeaveType.objects.all()
+            )
+
+            is_female = bool(
+                employee.gender and employee.gender.upper().startswith('F')
+            )
+            is_male = bool(
+                employee.gender and employee.gender.upper().startswith('M')
+            )
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            # 1. Fetch Master Leave Balance record from DB
+            balance_record = m.EmployeeLeaveBalance.objects.filter(
+                e_name=employee
+            ).first()
+
+            for lt in leave_types_qs:
+                code = (lt.code or '').upper().strip()
+                name = lt.name
+                norm_name = name.lower()
+
+                # Gender restriction filter
+                gender_rule = getattr(
+                    lt, 'gender_restriction', getattr(lt, 'gender', 'ALL')
+                )
+                if gender_rule:
+                    g_str = str(gender_rule).upper()
+                    if 'FEMALE' in g_str and not is_female:
+                        continue
+                    if 'MALE' in g_str and not is_male:
+                        continue
+
+                # Fetch Annual Balance from EmployeeLeaveBalance table
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    field_candidates = (
+                        code.lower() + '_leave',
+                        norm_name.replace(' ', '_') + '_leave',
+                        norm_name.replace(' ', '_'),
+                    )
+                    for attr in field_candidates:
+                        if hasattr(balance_record, attr):
+                            val = getattr(balance_record, attr)
+                            if val is not None:
+                                annual_balance = Decimal(str(val))
+                                break
+                    else:
+                        annual_balance = self._get_leave_type_quota(lt)
+                else:
+                    annual_balance = self._get_leave_type_quota(lt)
+
+                # Maternity / Paternity: Show ONLY if explicitly assigned (> 0) in Leave Bank
+                is_maternity = 'matern' in norm_name or code in (
+                    'MATERNITY',
+                    'MTL',
+                )
+                is_paternity = 'patern' in norm_name or code in (
+                    'PATERNITY',
+                    'PL',
+                )
+                if (is_maternity or is_paternity) and annual_balance <= Decimal(
+                    '0.0'
+                ):
+                    continue
+
+                if (
+                    code in ('LWP', 'CO')
+                    or 'without pay' in norm_name
+                    or 'comp' in norm_name
+                ):
+                    continue
+
+                is_menstrual = (
+                    code in ('ML', 'MENSTRUAL') or 'menstrual' in norm_name
+                )
+                if not is_confirmed and not is_menstrual:
+                    continue
+                if is_confirmed and is_menstrual:
+                    continue
+
+                annual_quota = self._get_leave_type_quota(lt)
+                is_emergency = (
+                    code in ('SL', 'BL')
+                    or 'sick' in norm_name
+                    or 'breave' in norm_name
+                    or 'bereave' in norm_name
+                    or is_maternity
+                    or is_paternity
+                )
+
+                # Monthly limit definition
+                if code == 'CL' or 'casual' in norm_name:
+                    monthly_quota = Decimal('1.0')
+                elif code == 'EL' or 'earned' in norm_name:
+                    monthly_quota = (
+                        round(annual_quota / Decimal('12.0'), 1)
+                        if annual_quota > 0
+                        else Decimal('1.5')
+                    )
+                elif is_menstrual:
+                    monthly_quota = Decimal('2.0')
+                else:
+                    monthly_quota = annual_quota
+
+                # 2. Sum days taken/applied in the current calendar month (Pending + Approved)
+                month_used_result = m.LeaveApplication.objects.filter(
+                    employee=employee,
+                    leave_type=lt,
+                    status__in=[
+                        m.LeaveApplication.Status.APPROVED,
+                        m.LeaveApplication.Status.PENDING,
+                    ],
+                    start_date__year=today.year,
+                    start_date__month=today.month,
+                ).aggregate(total=Sum('total_days'))['total']
+
+                month_used = (
+                    Decimal(str(month_used_result))
+                    if month_used_result
+                    else Decimal('0.0')
+                )
+
+                # Remaining monthly quota
+                monthly_available = max(Decimal('0.0'), monthly_quota - month_used)
+
+                cards.append({
+                    'code': code,
+                    'name': name,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
+    def get(self, request):
+        employee = get_employee_profile(request.user)
+        form = self.get_form_class()()
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        form_class = self.get_form_class()
+        form = form_class(request.POST, request.FILES)
+
+        employee = (
+            form.cleaned_data.get('employee')
+            if (is_hr_or_above(request.user) and 'employee' in form.cleaned_data)
+            else get_employee_profile(request.user)
+        )
+
+        if employee is None:
+            messages.error(
+                request, "Your login isn't linked to an employee record."
+            )
+            return redirect('hrms:dashboard')
+
+        if form.is_valid():
+            try:
+                lv.apply_leave(
+                    employee=employee,
+                    leave_type=form.cleaned_data['leave_type'],
+                    day_type=form.cleaned_data['day_type'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                    reason=form.cleaned_data.get('reason', ''),
+                    supporting_document=request.FILES.get(
+                        'supporting_document'
+                    ),
+                    relationship=form.cleaned_data.get('relationship', ''),
+                    leave_stage=form.cleaned_data.get('leave_stage', ''),
+                )
+                messages.success(
+                    request, 'Leave application submitted successfully.'
+                )
+                return redirect('hrms:my_leave')
+            except lv.LeaveError as e:
+                form.add_error(None, str(e))
+
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+class LeaveApplicationCreateView(LoginRequiredMixin, View):
+    active_group, active_item = 'leave', 'my_leave'
+    template_name = 'hrms/leave/leave_application_form.html'
+
+    def get_form_class(self):
+        return (
+            f.LeaveApplicationHRForm
+            if is_hr_or_above(self.request.user)
+            else f.LeaveApplicationForm
+        )
+
+    def _get_leave_type_quota(self, leave_type_obj):
+        for field_name in (
+            'days_per_year',
+            'annual_quota',
+            'days_allowed',
+            'quota',
+            'max_days',
+            'days',
+        ):
+            if hasattr(leave_type_obj, field_name):
+                val = getattr(leave_type_obj, field_name)
+                if val is not None:
+                    return Decimal(str(val))
+        return Decimal('0.0')
+
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            company = employee.company
+            leave_types_qs = (
+                m.LeaveType.objects.filter(company=company)
+                if company
+                else m.LeaveType.objects.all()
+            )
+
+            is_female = bool(
+                employee.gender and employee.gender.upper().startswith('F')
+            )
+            is_male = bool(
+                employee.gender and employee.gender.upper().startswith('M')
+            )
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            # 1. Fetch Master Balance Record from DB
+            balance_record = m.EmployeeLeaveBalance.objects.filter(
+                e_name=employee
+            ).first()
+
+            for lt in leave_types_qs:
+                code = (lt.code or '').upper().strip()
+                name = lt.name
+                norm_name = name.lower()
+
+                # Gender check from DB model
+                gender_rule = getattr(
+                    lt, 'gender_restriction', getattr(lt, 'gender', 'ALL')
+                )
+                if gender_rule:
+                    g_str = str(gender_rule).upper()
+                    if 'FEMALE' in g_str and not is_female:
+                        continue
+                    if 'MALE' in g_str and not is_male:
+                        continue
+
+                # Annual Quota from DB
+                annual_quota = self._get_leave_type_quota(lt)
+
+                # Fetch Annual Balance from EmployeeLeaveBalance
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    candidates = (
+                        code.lower() + '_leave',
+                        norm_name.replace(' ', '_') + '_leave',
+                        norm_name.replace(' ', '_'),
+                    )
+                    for attr in candidates:
+                        if hasattr(balance_record, attr):
+                            val = getattr(balance_record, attr)
+                            if val is not None:
+                                annual_balance = Decimal(str(val))
+                                break
+                    else:
+                        annual_balance = annual_quota
+                else:
+                    annual_balance = annual_quota
+
+                # Maternity / Paternity: Show ONLY if assigned (> 0)
+                is_maternity = 'matern' in norm_name or code in (
+                    'MATERNITY',
+                    'MTL',
+                )
+                is_paternity = 'patern' in norm_name or code in (
+                    'PATERNITY',
+                    'PL',
+                )
+                if (is_maternity or is_paternity) and annual_balance <= Decimal(
+                    '0.0'
+                ):
+                    continue
+
+                if (
+                    code in ('LWP', 'CO')
+                    or 'without pay' in norm_name
+                    or 'comp' in norm_name
+                ):
+                    continue
+
+                is_menstrual = (
+                    code in ('ML', 'MENSTRUAL') or 'menstrual' in norm_name
+                )
+                if not is_confirmed and not is_menstrual:
+                    continue
+                if is_confirmed and is_menstrual:
+                    continue
+
+                is_emergency = (
+                    code in ('SL', 'BL')
+                    or 'sick' in norm_name
+                    or 'breave' in norm_name
+                    or 'bereave' in norm_name
+                    or is_maternity
+                    or is_paternity
+                )
+
+                # Monthly quota calculation
+                if code == 'CL' or 'casual' in norm_name:
+                    monthly_quota = Decimal('1.0')
+                elif code == 'EL' or 'earned' in norm_name:
+                    monthly_quota = (
+                        round(annual_quota / Decimal('12.0'), 1)
+                        if annual_quota > Decimal('0.0')
+                        else Decimal('1.5')
+                    )
+                elif is_menstrual:
+                    monthly_quota = Decimal('2.0')
+                else:
+                    monthly_quota = annual_quota
+
+                # 2. Query all active statuses (Pending Manager, Pending HR, Pending, Approved)
+                active_statuses = [
+                    getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                    getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+                    getattr(
+                        m.LeaveApplication.Status,
+                        'PENDING_HR',
+                        'pending_hr',
+                    ),
+                    getattr(
+                        m.LeaveApplication.Status,
+                        'PENDING_MANAGER',
+                        'pending_manager',
+                    ),
+                ]
+
+                month_used_result = (
+                    m.LeaveApplication.objects.filter(
+                        employee=employee,
+                        leave_type=lt,
+                        status__in=active_statuses,
+                    )
+                    .filter(
+                        Q(
+                            start_date__year=today.year,
+                            start_date__month=today.month,
+                        )
+                        | Q(
+                            end_date__year=today.year,
+                            end_date__month=today.month,
+                        )
+                    )
+                    .aggregate(total=Sum('total_days'))['total']
+                )
+
+                month_used = (
+                    Decimal(str(month_used_result))
+                    if month_used_result
+                    else Decimal('0.0')
+                )
+                monthly_available = max(
+                    Decimal('0.0'), monthly_quota - month_used
+                )
+
+                cards.append({
+                    'code': code,
+                    'name': name,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
+    def get(self, request):
+        employee = get_employee_profile(request.user)
+        form = self.get_form_class()()
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        form_class = self.get_form_class()
+        form = form_class(request.POST, request.FILES)
+
+        employee = (
+            form.cleaned_data.get('employee')
+            if (is_hr_or_above(request.user) and 'employee' in form.cleaned_data)
+            else get_employee_profile(request.user)
+        )
+
+        if employee is None:
+            messages.error(
+                request, "Your login isn't linked to an employee record."
+            )
+            return redirect('hrms:dashboard')
+
+        if form.is_valid():
+            try:
+                lv.apply_leave(
+                    employee=employee,
+                    leave_type=form.cleaned_data['leave_type'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                    day_type=form.cleaned_data.get('day_type', 'full'),
+                    reason=form.cleaned_data.get('reason', ''),
+                    supporting_document=request.FILES.get(
+                        'supporting_document'
+                    ),
+                    relationship=form.cleaned_data.get('relationship', ''),
+                    leave_stage=form.cleaned_data.get('leave_stage', ''),
+                )
+                messages.success(
+                    request, 'Leave application submitted successfully.'
+                )
+                return redirect('hrms:my_leave')
+            except lv.LeaveError as e:
+                form.add_error(None, str(e))
+
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+class   LeaveApplicationCreateView(LoginRequiredMixin, View):
+    active_group, active_item = 'leave', 'my_leave'
+    template_name = 'hrms/leave/leave_application_form.html'
+
+    def get_form_class(self):
+        return f.LeaveApplicationHRForm if is_hr_or_above(self.request.user) else f.LeaveApplicationForm
+
+    def _get_leave_type_quota(self, leave_type_obj):
+        for field_name in ('days_per_year', 'annual_quota', 'days_allowed', 'quota', 'max_days', 'days'):
+            if hasattr(leave_type_obj, field_name):
+                val = getattr(leave_type_obj, field_name)
+                if val is not None:
+                    return Decimal(str(val))
+        return Decimal('0.0')
+
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            company = employee.company
+            leave_types_qs = m.LeaveType.objects.filter(company=company) if company else m.LeaveType.objects.all()
+
+            is_female = bool(employee.gender and employee.gender.upper().startswith('F'))
+            is_male = bool(employee.gender and employee.gender.upper().startswith('M'))
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            # Master Balance Record from DB
+            balance_record = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+
+            for lt in leave_types_qs:
+                code = (lt.code or '').upper().strip()
+                name = lt.name
+                norm_name = name.lower()
+
+                # Gender check
+                gender_rule = getattr(lt, 'gender_restriction', getattr(lt, 'gender', 'ALL'))
+                if gender_rule:
+                    g_str = str(gender_rule).upper()
+                    if 'FEMALE' in g_str and not is_female:
+                        continue
+                    if 'MALE' in g_str and not is_male:
+                        continue
+
+                annual_quota = self._get_leave_type_quota(lt)
+
+                # Fetch Balance directly from Master Leave Bank
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    candidates = (
+                        code.lower() + '_leave',
+                        norm_name.replace(' ', '_') + '_leave',
+                        norm_name.replace(' ', '_'),
+                    )
+                    for attr in candidates:
+                        if hasattr(balance_record, attr):
+                            val = getattr(balance_record, attr)
+                            if val is not None:
+                                annual_balance = Decimal(str(val))
+                                break
+                    else:
+                        annual_balance = annual_quota
+                else:
+                    annual_balance = annual_quota
+
+                # Hide Maternity/Paternity if balance is 0 or unassigned
+                is_maternity = 'matern' in norm_name or code in ('MATERNITY', 'MTL')
+                is_paternity = 'patern' in norm_name or code in ('PATERNITY', 'PL')
+                if (is_maternity or is_paternity) and annual_balance <= Decimal('0.0'):
+                    continue
+
+                if code in ('LWP', 'CO') or 'without pay' in norm_name or 'comp' in norm_name:
+                    continue
+
+                is_menstrual = code in ('ML', 'MENSTRUAL') or 'menstrual' in norm_name
+                if not is_confirmed and not is_menstrual:
+                    continue
+                if is_confirmed and is_menstrual:
+                    continue
+
+                is_emergency = code in ('SL', 'BL') or 'sick' in norm_name or 'breave' in norm_name or 'bereave' in norm_name or is_maternity or is_paternity
+
+                # Monthly quota limits
+                if code == 'CL' or 'casual' in norm_name:
+                    monthly_quota = Decimal('1.0')
+                elif code == 'EL' or 'earned' in norm_name:
+                    monthly_quota = round(annual_quota / Decimal('12.0'), 1) if annual_quota > Decimal('0.0') else Decimal('1.5')
+                elif is_menstrual:
+                    monthly_quota = Decimal('2.0')
+                else:
+                    monthly_quota = annual_quota
+
+                # Count active applications for this month
+                active_statuses = [
+                    getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                    getattr(m.LeaveApplication.Status, 'PENDING', 'pending'),
+                    getattr(m.LeaveApplication.Status, 'PENDING_HR', 'pending_hr'),
+                    getattr(m.LeaveApplication.Status, 'PENDING_MANAGER', 'pending_manager'),
+                ]
+                month_used_result = m.LeaveApplication.objects.filter(
+                    employee=employee,
+                    leave_type=lt,
+                    status__in=active_statuses,
+                    start_date__year=today.year,
+                    start_date__month=today.month,
+                ).aggregate(total=Sum('total_days'))['total']
+
+                month_used = Decimal(str(month_used_result)) if month_used_result else Decimal('0.0')
+                monthly_available = max(Decimal('0.0'), min(annual_balance, monthly_quota - month_used))
+
+                cards.append({
+                    'code': code,
+                    'name': name,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
+    def get(self, request):
+        employee = get_employee_profile(request.user)
+        form = self.get_form_class()()
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        form_class = self.get_form_class()
+        form = form_class(request.POST, request.FILES)
+
+        employee = form.cleaned_data.get('employee') if (is_hr_or_above(request.user) and 'employee' in form.cleaned_data) else get_employee_profile(request.user)
+
+        if employee is None:
+            messages.error(request, "Your login isn't linked to an employee record.")
+            return redirect('hrms:dashboard')
+
+        if form.is_valid():
+            try:
+                lv.apply_leave(
+                    employee=employee,
+                    leave_type=form.cleaned_data['leave_type'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                    day_type=form.cleaned_data.get('day_type', 'full'),
+                    reason=form.cleaned_data.get('reason', ''),
+                    supporting_document=request.FILES.get('supporting_document'),
+                    relationship=form.cleaned_data.get('relationship', ''),
+                    leave_stage=form.cleaned_data.get('leave_stage', ''),
+                )
+                messages.success(request, 'Leave application submitted successfully.')
+                return redirect('hrms:my_leave')
+            except lv.LeaveError as e:
+                form.add_error(None, str(e))
+
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+class LeaveApplicationCreateView(LoginRequiredMixin, View):
+    active_group, active_item = 'leave', 'my_leave'
+    template_name = 'hrms/leave/leave_application_form.html'
+
+    def get_form_class(self):
+        return f.LeaveApplicationHRForm if is_hr_or_above(self.request.user) else f.LeaveApplicationForm
+    def _get_leave_type_quota(self, leave_type_obj):
+        for field_name in ('days_per_year', 'annual_quota', 'days_allowed', 'quota', 'max_days', 'days'):
+            if hasattr(leave_type_obj, field_name):
+                val = getattr(leave_type_obj, field_name)
+                if val is not None:
+                    return Decimal(str(val))
+        return Decimal('0.0')
+
+
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            company = employee.company
+            leave_types_qs = m.LeaveType.objects.filter(company=company) if company else m.LeaveType.objects.all()
+
+            is_female = bool(employee.gender and employee.gender.upper().startswith('F'))
+            is_male = bool(employee.gender and employee.gender.upper().startswith('M'))
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            balance_record = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+
+            for lt in leave_types_qs:
+                code = (lt.code or '').upper().strip()
+                name = lt.name
+                norm_name = name.lower()
+
+                # Dynamic Gender Filter
+                # gender_rule = getattr(lt, 'gender_restriction', getattr(lt, 'gender', 'ALL'))
+                # if gender_rule:
+                #     g_str = str(gender_rule).upper()
+                #     if 'FEMALE' in g_str and not is_female:
+                #         continue
+                #     if 'MALE' in g_str and not is_male:
+                #         continue
+                # 1. READ EXACT FIELD FROM DB: applicable_gender
+                gender_rule = str(getattr(lt, 'applicable_gender', getattr(lt, 'gender', 'ALL')) or 'ALL').upper()
+
+                # Filter out by Gender
+                if 'FEMALE' in gender_rule or gender_rule == 'F':
+                    if not is_female:
+                        continue
+                elif 'MALE' in gender_rule or gender_rule == 'M':
+                    if not is_male:
+                        continue
+
+
+                annual_quota = lv.get_leave_type_annual_quota(lt)
+
+                # Read Annual Balance directly from Master Leave Bank
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    candidates = (code.lower() + '_leave', norm_name.replace(' ', '_') + '_leave', norm_name.replace(' ', '_'))
+                    for attr in candidates:
+                        if hasattr(balance_record, attr):
+                            val = getattr(balance_record, attr)
+                            if val is not None:
+                                annual_balance = Decimal(str(val))
+                                break
+                    else:
+                        annual_balance = annual_quota
+                else:
+                    annual_balance = annual_quota
+
+                # Maternity / Paternity only if assigned (> 0)
+                is_maternity = 'matern' in norm_name or code in ('MATERNITY', 'MTL')
+                is_paternity = 'patern' in norm_name or code in ('PATERNITY', 'PL')
+                if (is_maternity or is_paternity) and annual_balance <= Decimal('0.0'):
+                    continue
+
+                if code in ('LWP', 'CO') or 'without pay' in norm_name or 'comp' in norm_name:
+                    continue
+
+                is_menstrual = code in ('ML', 'MENSTRUAL') or 'menstrual' in norm_name
+                if not is_confirmed and not is_menstrual:
+                    continue
+                if is_confirmed and is_menstrual:
+                    continue
+
+                is_emergency = code in ('SL', 'BL') or any(k in norm_name for k in ('sick', 'bereave', 'breave')) or is_maternity or is_paternity
+
+                # 100% Dynamic calculation from DB
+                monthly_quota = lv.calculate_monthly_quota(lt)
+                monthly_available = lv.get_monthly_available_days(employee, lt, target_date=today)
+
+                cards.append({
+                    'code': code,
+                    'name': name,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
+    def get(self, request):
+        employee = get_employee_profile(request.user)
+        form = self.get_form_class()()
+        context = self.get_context_data(employee, form)
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        form_class = self.get_form_class()
+        form = form_class(request.POST, request.FILES)
+        if form.is_valid():
+
+            employee = form.cleaned_data.get('employee') if (is_hr_or_above(request.user) and 'employee' in form.cleaned_data) else get_employee_profile(request.user)
+
+            if employee is None:
+                messages.error(request, "Your login isn't linked to an employee record.")
+                return redirect('hrms:dashboard')
+
+        # if form.is_valid():
+            try:
+                _, notice_msg = lv.apply_leave(
+                    employee=employee,
+                    leave_type=form.cleaned_data['leave_type'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                    day_type=form.cleaned_data.get('day_type', 'full'),
+                    reason=form.cleaned_data.get('reason', ''),
+                    supporting_document=request.FILES.get('supporting_document'),
+                    relationship=form.cleaned_data.get('relationship', ''),
+                    leave_stage=form.cleaned_data.get('leave_stage', ''),
+                )
+                if notice_msg:
+                    messages.warning(request, notice_msg)
+                else:
+                    messages.success(request, 'Leave application submitted successfully.')
+                return redirect('hrms:my_leave')
+            except lv.LeaveError as e:
+                form.add_error(None, str(e))
+
+        # 3. If form is invalid, re-render context using current user's profile
+        current_emp = get_employee_profile(request.user)
+        context = self.get_context_data(current_emp, form)
+        return render(request, self.template_name, context)
 class LeaveApproveView(HRRequiredMixin, View):
     """HR/SuperAdmin approves leave -> updates status to approved and deducts leave balance."""
     def post(self, request, pk):
@@ -2886,6 +4050,8 @@ class PenaltyListView(LoginRequiredMixin, SidebarContextMixin, ListView):
 
         user = self.request.user
         emp = get_employee_profile(user)
+        active_company_id = self.request.session.get('active_company_id')
+
         if not is_hr_or_above(user):
             if emp is None:
                 return m.AttendancePenalty.objects.none()
@@ -2893,6 +4059,8 @@ class PenaltyListView(LoginRequiredMixin, SidebarContextMixin, ListView):
                 qs = qs.filter(Q(employee=emp) | Q(employee__reporting_manager=emp))
             else:
                 qs = qs.filter(employee=emp)
+        elif active_company_id and active_company_id != 'all':
+            qs = qs.filter(employee__company_id=active_company_id)
 
         employee_id = self.request.GET.get('employee')
         start_date = self.request.GET.get('start_date')
@@ -2918,17 +4086,33 @@ class PenaltyListView(LoginRequiredMixin, SidebarContextMixin, ListView):
         ctx['is_hr'] = user_is_hr
 
         base_qs = self.get_queryset()
+        stats_agg = base_qs.aggregate(
+            total_penalties=Count('id'),
+            total_days_deducted=Sum('deduction_days'),
+            total_late_minutes=Sum('late_minutes')
+        )
         ctx['stats'] = {
-            'total_penalties': base_qs.count(),
-            'total_days_deducted': sum(p.deduction_days for p in base_qs),
-            'total_late_minutes': sum(p.late_minutes for p in base_qs),
+            'total_penalties': stats_agg['total_penalties'] or 0,
+            'total_days_deducted': stats_agg['total_days_deducted'] or Decimal('0.0'),
+            'total_late_minutes': stats_agg['total_late_minutes'] or 0,
         }
 
+        active_company_id = self.request.session.get('active_company_id')
+        emp_scope = m.Employee.objects.filter(status='active')
+        dept_scope = m.Department.objects.all()
+
+        if active_company_id and active_company_id != 'all':
+            emp_scope = emp_scope.filter(company_id=active_company_id)
+            dept_scope = dept_scope.filter(company_id=active_company_id)
+
         if user_is_hr:
-            ctx['employees'] = m.Employee.objects.filter(status='active').order_by('first_name')
+            ctx['employees'] = emp_scope.order_by('first_name')
         elif emp and emp.is_manager:
-            ctx['employees'] = m.Employee.objects.filter(reporting_manager=emp, status='active').order_by('first_name')
-        ctx['departments'] = m.Department.objects.all()
+            ctx['employees'] = emp_scope.filter(reporting_manager=emp).order_by('first_name')
+        else:
+            ctx['employees'] = emp_scope.filter(pk=emp.pk) if emp else emp_scope.none()
+
+        ctx['departments'] = dept_scope
         ctx['filters'] = self.request.GET
         return ctx
 
@@ -3007,6 +4191,39 @@ class LeaveBankListView(LoginRequiredMixin, SidebarContextMixin, ListView):
 
         return context
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        qs = self.get_queryset()
+        context['active_records'] = qs.filter(
+            e_name__status__in=[
+                m.Employee.Status.ACTIVE,
+                m.Employee.Status.ON_LEAVE,
+            ]
+        )
+        context['inactive_records'] = qs.exclude(
+            e_name__status__in=[
+                m.Employee.Status.ACTIVE,
+                m.Employee.Status.ON_LEAVE,
+            ]
+        )
+        context['is_hr'] = is_hr_or_above(self.request.user)
+
+        # Pull dynamic leave type policy quotas from DB
+        active_id = self.request.session.get('active_company_id')
+        l_types = m.LeaveType.objects.all()
+        if active_id and active_id != 'all':
+            l_types = l_types.filter(company_id=active_id)
+        context['leave_type_map'] = {lt.code: lt for lt in l_types}
+
+        # Formset for Superadmin / HR inline updates
+        if self.request.user.is_superuser or is_hr_or_above(self.request.user):
+            LeaveFormSet = modelformset_factory(
+                m.EmployeeLeaveBalance, form=f.LeaveBalanceForm, extra=0
+            )
+            context['formset'] = kwargs.get('formset') or LeaveFormSet(queryset=qs)
+
+        return context
+
     def post(self, request, *args, **kwargs):
         # 1. Security Check: Only Superadmin / HR can modify or trigger bulk calculation
         if not (request.user.is_superuser or is_hr_or_above(request.user)):
@@ -3043,6 +4260,9 @@ class LeaveBankListView(LoginRequiredMixin, SidebarContextMixin, ListView):
 
         messages.error(request, "Error saving leave balance changes. Please review the highlighted fields.")
         return self.render_to_response(self.get_context_data(formset=formset))
+
+
+
 
 # PAYROLL & SALARY STRUCTURE ENGINE
 # ===========================================================================
@@ -3217,115 +4437,6 @@ class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
     context_object_name = 'target_employee'
     pk_url_kwarg = 'emp_id'
 
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        emp = self.object
-        month = int(self.kwargs['month'])
-        year = int(self.kwargs['year'])
-        tz = timezone.get_current_timezone()
-
-        # Company Rules
-        comp = emp.company
-        off_start, off_end = comp.office_start_time, comp.office_end_time
-        grace_deadline_mins = comp.grace_minutes
-        grace_limit = comp.grace_allowed_count
-
-        days_in_month = calendar.monthrange(year, month)[1]
-        report_data = []
-        grace_used = 0
-
-        # Prefetch data for the whole month to avoid DB hits in loop
-        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
-            employee=emp, attendance_date__year=year, attendance_date__month=month).order_by('attendance_date')}
-
-        # Build a lookup for leaves covering this month
-        leaves = m.LeaveApplication.objects.filter(
-            employee=emp, status='approved',
-            start_date__lte=date(year, month, days_in_month),
-            end_date__gte=date(year, month, 1)
-        ).select_related('leave_type')
-
-        leave_map = {}
-        for l in leaves:
-            curr = l.start_date
-            while curr <= l.end_date:
-                if curr.month == month and curr.year == year:
-                    leave_map[curr] = l.leave_type.code.upper()
-                curr += timedelta(days=1)
-        # Note: If you don't use the signal, use LeaveApplication.objects.filter(...) logic here
-
-        for d in range(1, days_in_month + 1):
-            dt = date(year, month, d)
-            rec = records.get(dt)
-            leave_code = leave_map.get(dt)
-            is_holiday = m.Holiday.objects.filter(company=comp, date=dt).exists()
-            is_sunday = dt.weekday() == 6
-
-            day_info = {
-                'date': dt, 'in': None, 'out': None, 'hours': 0,
-                'status': 'ABS', 'label': '', 'css': 'mark-abs'
-            }
-
-            if is_holiday or is_sunday:
-                day_info['status'] = 'HOL' if is_holiday else 'SUN'
-                day_info['css'] = 'text-muted'
-                if rec and rec.check_in:
-                    day_info['label'] = 'Extra Work'
-            # elif leave_code:
-            #     # MARK AS LEAVE (PAID)
-            #     day_info.update({'status': leave_code, 'css': 'bg-primary text-white', 'label': 'Approved Leave'})
-            #
-
-            elif rec:
-                if rec.status == 'on_leave':
-                    day_info['status'] = 'LEAVE'
-                    day_info['label'] = rec.remarks  # e.g., SL, CL
-                    day_info['css'] = 'bg-primary text-white'
-
-                elif rec.check_in:
-                    local_in = timezone.localtime(rec.check_in)
-                    local_out = timezone.localtime(rec.check_out) if rec.check_out else None
-                    day_info['in'] = local_in
-                    day_info['out'] = local_out
-
-                    p_in = local_in.time()
-                    p_out = local_out.time() if local_out else off_start
-
-                    # Effective Hours Math (10-6 rule)
-                    eff_s = max(p_in, off_start)
-                    eff_e = min(p_out, off_end)
-                    eff_hours = (datetime.combine(dt, eff_e) - datetime.combine(dt, eff_s)).total_seconds() / 3600
-                    day_info['hours'] = round(eff_hours, 2)
-
-                    grace_time = (datetime.combine(dt, off_start) + timedelta(minutes=grace_deadline_mins)).time()
-
-                    # SMART GATEWAY LOGIC
-                    if p_in <= off_start:
-                        if eff_hours >= 8:
-                            day_info.update({'status': 'FD', 'css': 'mark-fd'})
-                        else:
-                            day_info.update({'status': 'HD', 'css': 'mark-hd'})
-
-                    elif p_in <= grace_time:
-                        if p_out >= off_end:
-                            if grace_used < grace_limit:
-                                grace_used += 1
-                                day_info.update({'status': 'FD', 'css': 'mark-fd', 'label': f'G{grace_used}'})
-                            else:
-                                day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Grace Exhausted'})
-                        else:
-                            day_info.update({'status': 'HD', 'css': 'mark-hd'})
-                    else:
-                        day_info.update({'status': 'HD', 'css': 'mark-hd'})
-
-            report_data.append(day_info)
-
-        ctx.update({
-            'report': report_data,
-            'month_name': calendar.month_name[month],
-            'year': year,
-        })
-        return ctx
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -3602,6 +4713,126 @@ class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
             'year': year,
         })
         return ctx
+
+
+class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
+    model = m.Employee
+    template_name = 'hrms/attendance/punch_report.html'
+    context_object_name = 'target_employee'
+    pk_url_kwarg = 'emp_id'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        emp = self.object
+        month = int(self.kwargs['month'])
+        year = int(self.kwargs['year'])
+        comp = emp.company
+
+        days_in_month = calendar.monthrange(year, month)[1]
+        report_data = []
+
+        # Counters for Summary
+        stats = {'FD': 0, 'HD': 0, 'ABS': 0, 'Grace': 0, 'Leave': 0}
+
+        # Data fetching
+        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
+            employee=emp, attendance_date__year=year, attendance_date__month=month)}
+
+        holiday_dates = []
+        if emp.holiday_calendar:
+            holiday_dates = m.Holiday.objects.filter(
+                calendar=emp.holiday_calendar, date__year=year, date__month=month
+            ).values_list('date', flat=True)
+
+        leaves = m.LeaveApplication.objects.filter(
+            employee=emp, status='approved',
+            start_date__lte=date(year, month, days_in_month),
+            end_date__gte=date(year, month, 1)
+        ).select_related('leave_type')
+
+        leave_map = {dt: l.leave_type.code.upper() for l in leaves for dt in
+                     [l.start_date + timedelta(days=x) for x in range((l.end_date - l.start_date).days + 1)]
+                     if dt.month == month and dt.year == year}
+
+        grace_used = 0
+
+        for d in range(1, days_in_month + 1):
+            dt = date(year, month, d)
+            policy = comp.get_policy_for_date(dt)  # Dynamic policy per day
+
+            off_start = policy.office_start_time
+            off_end = policy.office_end_time
+            grace_limit = policy.grace_allowed_count
+            full_thresh = float(policy.full_day_threshold_hours)
+
+            rec = records.get(dt)
+            leave_code = leave_map.get(dt)
+            is_holiday = dt in holiday_dates
+            is_sunday = dt.weekday() == 6
+
+            day_info = {
+                'date': dt, 'in': None, 'out': None, 'hours': 0,
+                'status': 'ABS', 'label': '', 'css': 'mark-abs'
+            }
+
+            if is_holiday or is_sunday:
+                day_info.update({'status': 'HOL' if is_holiday else 'SUN', 'css': 'mark-sun'})
+
+            elif rec and rec.check_in:
+                local_in = timezone.localtime(rec.check_in)
+                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
+                day_info.update({'in': local_in, 'out': local_out})
+
+                # Math
+                p_in = local_in.time()
+                p_out = local_out.time() if local_out else off_start
+                eff_hours = (datetime.combine(dt, min(p_out, off_end)) -
+                             datetime.combine(dt, max(p_in, off_start))).total_seconds() / 3600
+                day_info['hours'] = round(eff_hours, 2)
+
+                grace_deadline = (datetime.combine(dt, off_start) + timedelta(minutes=policy.grace_minutes)).time()
+
+                # Status Logic
+                if p_in <= off_start:
+                    if day_info['hours'] >= full_thresh:
+                        day_info.update({'status': 'FD', 'css': 'mark-fd'})
+                        stats['FD'] += 1
+                    else:
+                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Short Duration'})
+                        stats['HD'] += 1
+                elif p_in <= grace_deadline:
+                    if local_out and local_out.time() >= off_end:
+                        if grace_used < grace_limit:
+                            grace_used += 1
+                            day_info.update(
+                                {'status': 'FD', 'css': 'mark-fd', 'label': f'Grace Used ({grace_used}/{grace_limit})'})
+                            stats['FD'] += 1
+                            stats['Grace'] += 1
+                        else:
+                            day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Grace Exhausted'})
+                            stats['HD'] += 1
+                    else:
+                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Late + Early Out'})
+                        stats['HD'] += 1
+                else:
+                    day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Late Arrival'})
+                    stats['HD'] += 1
+
+            elif leave_code:
+                day_info.update({'status': leave_code, 'css': 'mark-leave', 'label': 'Approved Leave'})
+                stats['Leave'] += 1
+            else:
+                stats['ABS'] += 1
+
+            report_data.append(day_info)
+
+        ctx.update({
+            'report': report_data,
+            'stats': stats,
+            'month_name': calendar.month_name[month],
+            'year': year,
+        })
+        return ctx
 # ---------------------------------------------------------------------------
 # Loans/Advances & Payroll Extras (Incentives) — HR/Admin manage
 # ---------------------------------------------------------------------------
@@ -3673,6 +4904,18 @@ class PayrollRunListView(HRRequiredMixin, SidebarContextMixin, ListView):
     def get_queryset(self):
         return m.PayrollRun.objects.select_related('company').order_by('-year', '-month')
 
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('company').order_by('-year', '-month')
+        active_id = self.request.session.get('active_company_id')
+
+        # Scoped strictly to selected company
+        if active_id and active_id != 'all':
+            qs = qs.filter(company_id=active_id)
+        elif not self.request.user.is_superuser:
+            emp = get_employee_profile(self.request.user)
+            if emp and emp.company:
+                qs = qs.filter(company=emp.company)
+        return qs
 
 
 
@@ -3715,6 +4958,8 @@ class PayrollProcessView(HRRequiredMixin, SidebarContextMixin, View):
             'form': form, 'active_group': self.active_group, 'active_item': self.active_item,
         })
 
+from django.db.models import F, Q, Sum
+import csv
 
 class PayrollRunDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
     """The Bootstrap 5 payroll summary table for one processed run."""
@@ -3734,6 +4979,131 @@ class PayrollRunDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
             total_net=Sum('net_pay'), total_earnings=Sum('total_earnings'), total_deductions=Sum('total_deductions'))
         return ctx
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        payroll_run = self.object
+
+        # 1. Base Queryset scoped to the PayrollRun's Company
+        payslips = (
+            payroll_run.payslips.filter(employee__company=payroll_run.company)
+            .select_related(
+                'employee',
+                'employee__department',
+                'employee__designation',
+                'employee__company',
+                'employee__bank_detail'
+            )
+            .order_by('employee__employee_code')
+        )
+
+        # 2. Extract & Apply Department / Employee Search Filters
+        dept_id = self.request.GET.get('department')
+        emp_search = self.request.GET.get('q', '').strip()
+
+        if dept_id:
+            payslips = payslips.filter(employee__department_id=dept_id)
+        if emp_search:
+            payslips = payslips.filter(
+                Q(employee__first_name__icontains=emp_search) |
+                Q(employee__last_name__icontains=emp_search) |
+                Q(employee__employee_code__icontains=emp_search)
+            )
+
+        # 3. Dynamic Aggregated Totals based on Active Filter Selection
+        totals = payslips.aggregate(
+            total_net=Sum('net_pay'),
+            total_earnings=Sum('total_earnings'),
+            total_deductions=Sum('total_deductions'),
+            total_penalties=Sum('penalty_deduction'),
+            total_paid_days=Sum('paid_days'),
+            # Calculate the theoretical total liability (Full Salary of everyone)
+
+            total_liability = Sum(F('employee__salaries__ctc_annual') / 12)
+
+        )
+
+        ctx['payslips'] = payslips
+        ctx['total_net'] = totals['total_net'] or 0
+        ctx['total_earnings'] = totals['total_earnings'] or 0
+        ctx['total_deductions'] = totals['total_deductions'] or 0
+        ctx['total_penalties'] = totals['total_penalties'] or 0
+        ctx['total_paid_days'] = totals['total_paid_days'] or 0
+        ctx['total_liability'] = totals['total_liability'] or 0
+
+        ctx['total_employees_count'] = payslips.count()
+
+        # 4. Filter Dropdown Choices scoped to this Company
+        ctx['departments'] = m.Department.objects.filter(company=payroll_run.company).order_by('name')
+        ctx['selected_dept'] = dept_id
+        ctx['search_query'] = emp_search
+        return ctx
+
+
+class PayrollExportCSVView(HRRequiredMixin, View):
+    """Exports the complete, filtered Payroll & Bank Disbursement CSV."""
+
+    def get(self, request, pk):
+        payroll_run = get_object_or_404(m.PayrollRun, pk=pk)
+        payslips = (
+            payroll_run.payslips
+            .select_related(
+                'employee',
+                'employee__department',
+                'employee__designation',
+                'employee__bank_detail'
+            )
+            .order_by('employee__employee_code')
+        )
+
+        # Apply same filters to CSV export
+        dept_id = request.GET.get('department')
+        emp_search = request.GET.get('q', '').strip()
+        if dept_id:
+            payslips = payslips.filter(employee__department_id=dept_id)
+        if emp_search:
+            payslips = payslips.filter(
+                Q(employee__first_name__icontains=emp_search) |
+                Q(employee__last_name__icontains=emp_search) |
+                Q(employee__employee_code__icontains=emp_search)
+            )
+
+        response = HttpResponse(content_type='text/csv')
+        filename = f"Payroll_{payroll_run.company.name}_{payroll_run.month}_{payroll_run.year}.csv".replace(' ', '_')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            'EMP ID', 'EMPLOYEE NAME', 'DEPARTMENT', 'DESIGNATION',
+            'PAID DAYS', 'ABSENT DAYS', 'DAILY WAGE',
+            'FIXED MONTHLY CTC', 'EARNED BASIC & ALLOWANCES', 'EXTRAS & INCENTIVES',
+            'GROSS EARNED', 'TOTAL DEDUCTIONS', 'PENALTIES', 'NET PAYOUT',
+            'BANK NAME', 'ACCOUNT NUMBER', 'IFSC CODE'
+        ])
+
+        for s in payslips:
+            emp = s.employee
+            bank = getattr(emp, 'bank_detail', None)
+            writer.writerow([
+                emp.employee_code,
+                emp.full_name,
+                emp.department.name if emp.department else '—',
+                emp.designation.title if emp.designation else '—',
+                s.paid_days,
+                s.absent_days,
+                s.daily_wage,
+                s.gross_salary,
+                s.total_earnings - s.extra_earning,
+                s.extra_earning,
+                s.total_earnings,
+                s.total_deductions,
+                s.penalty_deduction,
+                s.net_pay,
+                bank.bank_name if bank else '—',
+                bank.account_number if bank else '—',
+                bank.ifsc_code if bank else '—',
+            ])
+
+        return response
 
 # ---------------------------------------------------------------------------
 # Payslips — HR sees all (filterable); employee sees only their own
@@ -3757,6 +5127,41 @@ class PaySlipListView(LoginRequiredMixin, SidebarContextMixin, ListView):
         if employee is None:
             return m.PaySlip.objects.none()
         return qs.filter(employee=employee)
+
+    def get_queryset(self):
+        qs = m.PaySlip.objects.select_related('employee', 'payroll_run').order_by(
+            '-payroll_run__year', '-payroll_run__month')
+
+        # Base Filtering based on Role
+        if not is_hr_or_above(self.request.user):
+            employee = get_employee_profile(self.request.user)
+            if employee is None:
+                return m.PaySlip.objects.none()
+            qs = qs.filter(employee=employee)
+
+        # Apply Search and Date Filters
+        search_query = self.request.GET.get('search')
+        employee_id = self.request.GET.get('employee')
+        month = self.request.GET.get('month')
+        year = self.request.GET.get('year')
+
+        if search_query:
+            qs = qs.filter(
+                Q(employee__first_name__icontains=search_query) |
+                Q(employee__last_name__icontains=search_query) |
+                Q(employee__employee_code__icontains=search_query)
+            )
+
+        if employee_id:
+            qs = qs.filter(employee_id=employee_id)
+
+        if month:
+            qs = qs.filter(payroll_run__month=month)
+
+        if year:
+            qs = qs.filter(payroll_run__year=year)
+
+        return qs
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)

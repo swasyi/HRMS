@@ -1,37 +1,20 @@
 """
-Payroll processing engine — kept out of views.py, same pattern as
-attendance_logic.py / leave_logic.py.
-
-BUSINESS LOGIC:
-1. Daily Wage = (EmployeeSalary.ctc_annual / 12) / total_days_in_month
-2. Attendance breakdown for given month:
-   - Full Days, Half Days (0.5), Comp-Off (1.0 for worked Sundays/Holidays)
-   - Off Days (paid non-working Sundays/Holidays)
-   - Paid Leave Days (approved paid leaves)
-   - Absent Days = total_days_in_month - paid_days
-3. Full-Time:
-   - Earnings = Basic + HRA + Special Allowance + Extra Earnings
-   - Deductions = PF + ESIC + Professional Tax + TDS + Loan Installment
-   - Penalty Deduction = Absent Days * Daily Wage
-   - Net Pay = Total Earnings - Total Deductions - Penalty Deduction
-4. Interns:
-   - Earnings = Stipend (CTC / 12) + Extra Earnings
-   - Deductions = TDS + Loan Installment (no PF/ESIC/PT)
-   - Penalty Deduction = Absent Days * Daily Wage
-   - Net Pay = Total Earnings - Total Deductions - Penalty Deduction
+Payroll processing engine — kept out of views.py.
+Synchronized with attendance_logic.py, leave_logic.py, and AttendancePenalty.
 """
 import calendar
-from datetime import date, datetime, timedelta, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from . import models as m
 
 
 class PayrollError(Exception):
-    """Raised for run-level problems (e.g. no company/period)."""
+    """Raised for run-level problems."""
 
 
 TWO_DP = Decimal('0.01')
@@ -39,7 +22,7 @@ TWO_DP = Decimal('0.01')
 
 def _q(value, places=TWO_DP):
     """Rounds Decimal value to two decimal places."""
-    return Decimal(str(value)).quantize(places, rounding=ROUND_HALF_UP)
+    return Decimal(str(value or 0.0)).quantize(places, rounding=ROUND_HALF_UP)
 
 
 def get_active_salary(employee, as_of):
@@ -54,7 +37,7 @@ def get_active_salary(employee, as_of):
 
 
 def get_employee_holidays(employee, year, month):
-    """Fetches holidays specific to the employee's assigned regional calendar or company."""
+    """Fetches holiday dates specific to the employee's assigned regional calendar or company."""
     if employee.holiday_calendar:
         return set(
             m.Holiday.objects.filter(
@@ -76,35 +59,59 @@ def get_employee_holidays(employee, year, month):
 
 def compute_attendance_breakdown(employee, year, month):
     """
-    The 'Smart Engine': Calculates attendance breakdown using punch times
-    and versioned office policy, matching attendance rules exactly.
+    Computes exact paid days and absence breakdown based on attendance records,
+    holidays, approved leaves, and company policies.
     """
     total_days_in_month = calendar.monthrange(year, month)[1]
     comp = employee.company
-
-    # Regional holidays for this employee
     holidays = get_employee_holidays(employee, year, month)
+
+    month_start = date(year, month, 1)
+    month_end = date(year, month, total_days_in_month)
 
     records = {
         r.attendance_date: r
         for r in m.AttendanceRecord.objects.filter(
-            employee=employee, attendance_date__year=year, attendance_date__month=month
+            employee=employee,
+            attendance_date__year=year,
+            attendance_date__month=month
         )
     }
 
-    full_days = Decimal('0')
-    half_days = Decimal('0')
-    comp_off_days = Decimal('0')
-    off_days = Decimal('0')
-    paid_leave_days = Decimal('0')
-    unaccounted_working_days = Decimal('0')
+    # Pre-fetch approved leaves covering this month
+    leaves = m.LeaveApplication.objects.filter(
+        employee=employee,
+        status=m.LeaveApplication.Status.APPROVED,
+        start_date__lte=month_end,
+        end_date__gte=month_start
+    ).select_related('leave_type')
+
+    leave_map = {}
+    for l in leaves:
+        c = max(l.start_date, month_start)
+        while c <= min(l.end_date, month_end):
+            is_half = getattr(l, 'day_type', 'full') == 'half'
+            leave_map[c] = {
+                'code': (l.leave_type.code or '').upper(),
+                'is_paid': l.leave_type.is_paid,
+                'is_half': is_half,
+            }
+            c += timedelta(days=1)
+
+    full_days = Decimal('0.0')
+    half_days = Decimal('0.0')
+    comp_off_days = Decimal('0.0')
+    off_days = Decimal('0.0')
+    paid_leave_days = Decimal('0.0')
+    unpaid_leave_days = Decimal('0.0')
+    absent_days = Decimal('0.0')
+
     grace_used_count = 0
 
     for day_num in range(1, total_days_in_month + 1):
         d = date(year, month, day_num)
 
-        # Versioned policy for this date
-        policy = comp.get_policy_for_date(d) if hasattr(comp, 'get_policy_for_date') else comp
+        policy = comp.get_policy_for_date(d) if (comp and hasattr(comp, 'get_policy_for_date')) else comp
         off_start = getattr(policy, 'office_start_time', None) or time(10, 0)
         off_end = getattr(policy, 'office_end_time', None) or time(18, 0)
         grace_mins = getattr(policy, 'grace_minutes', 15)
@@ -114,8 +121,9 @@ def compute_attendance_breakdown(employee, year, month):
 
         is_holiday_or_sun = (d.weekday() == 6) or (d in holidays)
         record = records.get(d)
+        leave_info = leave_map.get(d)
 
-        # 1. Sundays and Holidays
+        # 1. Weekly Offs (Sundays) and Holidays
         if is_holiday_or_sun:
             if record and record.check_in:
                 comp_off_days += Decimal('1.0')
@@ -123,94 +131,72 @@ def compute_attendance_breakdown(employee, year, month):
                 off_days += Decimal('1.0')
             continue
 
-        # 2. Working Days with Attendance Punches
-        if record and record.check_in:
-            # Check for Status 'on_leave'
-            if record.status == m.AttendanceRecord.Status.ON_LEAVE:
-                if record.remarks != "LWP" and employee.employment_type != 'intern':
-                    paid_leave_days += Decimal('1.0')
+        # 2. Approved Leaves without punches
+        if not (record and record.check_in) and leave_info:
+            if leave_info['is_paid'] and employee.employment_type != 'intern':
+                if leave_info['is_half']:
+                    paid_leave_days += Decimal('0.5')
+                    absent_days += Decimal('0.5')
                 else:
-                    unaccounted_working_days += Decimal('1.0')
+                    paid_leave_days += Decimal('1.0')
+            else:
+                unpaid_leave_days += Decimal('0.5' if leave_info['is_half'] else '1.0')
+                absent_days += Decimal('0.5' if leave_info['is_half'] else '1.0')
+            continue
+
+        # 3. Working Days with Attendance Punches
+        if record and record.check_in:
+            if record.status == m.AttendanceRecord.Status.ON_LEAVE:
+                if leave_info and leave_info['is_paid'] and employee.employment_type != 'intern':
+                    paid_leave_days += Decimal('0.5' if leave_info['is_half'] else '1.0')
+                else:
+                    unpaid_leave_days += Decimal('1.0')
+                    absent_days += Decimal('1.0')
                 continue
 
-            local_in = timezone.localtime(record.check_in) if timezone.is_aware(record.check_in) else record.check_in
-            local_out = timezone.localtime(record.check_out) if record.check_out and timezone.is_aware(record.check_out) else record.check_out
-            p_in = local_in.time()
-            p_out = local_out.time() if local_out else off_start
+            local_in = timezone.localtime(record.check_in).time() if timezone.is_aware(record.check_in) else record.check_in.time()
+            local_out = timezone.localtime(record.check_out).time() if (record.check_out and timezone.is_aware(record.check_out)) else (record.check_out.time() if record.check_out else None)
 
-            # Effective working hours calculation
+            p_in = local_in
+            p_out = local_out if local_out else off_start
+
             eff_s = max(p_in, off_start)
             eff_e = min(p_out, off_end) if local_out else off_start
             eff_hours = max(0.0, (datetime.combine(d, eff_e) - datetime.combine(d, eff_s)).total_seconds() / 3600)
             grace_deadline = (datetime.combine(d, off_start) + timedelta(minutes=grace_mins)).time()
 
+            is_fd = False
             if p_in <= off_start:
-                if eff_hours >= full_threshold:
-                    full_days += Decimal('1.0')
-                elif eff_hours >= half_threshold:
-                    half_days += Decimal('1.0')
-                    if employee.employment_type == 'full_time':
-                        half_leave = m.LeaveApplication.objects.filter(
-                            employee=employee, status=m.LeaveApplication.Status.APPROVED,
-                            start_date=d, day_type='half', leave_type__is_paid=True
-                        ).first()
-                        if half_leave:
-                            paid_leave_days += Decimal('0.5')
-                else:
-                    unaccounted_working_days += Decimal('1.0')
-
+                is_fd = (eff_hours >= full_threshold) or (local_out and p_out >= off_end)
             elif p_in <= grace_deadline:
                 if local_out and p_out >= off_end:
                     if grace_used_count < grace_limit:
                         grace_used_count += 1
-                        full_days += Decimal('1.0')  # Grace forgiven
+                        is_fd = True
                     else:
-                        half_days += Decimal('1.0')  # Grace exhausted
-                        if employee.employment_type == 'full_time':
-                            half_leave = m.LeaveApplication.objects.filter(
-                                employee=employee, status=m.LeaveApplication.Status.APPROVED,
-                                start_date=d, day_type='half', leave_type__is_paid=True
-                            ).first()
-                            if half_leave:
-                                paid_leave_days += Decimal('0.5')
+                        is_fd = False
                 else:
-                    half_days += Decimal('1.0')  # Came late, left early
-                    if employee.employment_type == 'full_time':
-                        half_leave = m.LeaveApplication.objects.filter(
-                            employee=employee, status=m.LeaveApplication.Status.APPROVED,
-                            start_date=d, day_type='half', leave_type__is_paid=True
-                        ).first()
-                        if half_leave:
-                            paid_leave_days += Decimal('0.5')
-
+                    is_fd = False
             else:
-                half_days += Decimal('1.0')  # Late arrival past grace window
-                if employee.employment_type == 'full_time':
-                    half_leave = m.LeaveApplication.objects.filter(
-                        employee=employee, status=m.LeaveApplication.Status.APPROVED,
-                        start_date=d, day_type='half', leave_type__is_paid=True
-                    ).first()
-                    if half_leave:
-                        paid_leave_days += Decimal('0.5')
+                is_fd = False
 
+            if is_fd:
+                full_days += Decimal('1.0')
+            else:
+                half_days += Decimal('1.0')
+                # Check if other half was covered by an approved half-day leave
+                if leave_info and leave_info['is_paid'] and leave_info['is_half'] and employee.employment_type != 'intern':
+                    paid_leave_days += Decimal('0.5')
+                else:
+                    absent_days += Decimal('0.5')
         else:
-            # 3. No Punch -> Check Leave Applications
-            leave = m.LeaveApplication.objects.filter(
-                employee=employee, status=m.LeaveApplication.Status.APPROVED,
-                start_date__lte=d, end_date__gte=d
-            ).first()
-            if leave and leave.leave_type.is_paid and employee.employment_type != 'intern':
-                l_days = Decimal(str(leave.total_days)) if leave.day_type == 'full' else Decimal('0.5')
-                paid_leave_days += l_days
-                if l_days < Decimal('1.0'):
-                    unaccounted_working_days += (Decimal('1.0') - l_days)
-            else:
-                unaccounted_working_days += Decimal('1.0')
+            # 4. No Punch and No Leave = Full Absent
+            absent_days += Decimal('1.0')
 
     max_days = Decimal(str(total_days_in_month))
-    total_worked = full_days + (half_days * Decimal('0.5')) + comp_off_days + off_days
-    paid_days = min(max_days, total_worked + paid_leave_days)
-    absent_days = max(Decimal('0'), max_days - paid_days)
+    total_paid = full_days + (half_days * Decimal('0.5')) + comp_off_days + off_days + paid_leave_days
+    paid_days = min(max_days, max(Decimal('0.0'), total_paid))
+    final_absent_days = max(Decimal('0.0'), max_days - paid_days)
 
     return {
         'full_days': full_days,
@@ -218,117 +204,159 @@ def compute_attendance_breakdown(employee, year, month):
         'comp_off_days': comp_off_days,
         'off_days': off_days,
         'paid_leave_days': paid_leave_days,
-        'absent_days': absent_days,
+        'unpaid_leave_days': unpaid_leave_days,
+        'absent_days': final_absent_days,
         'paid_days': paid_days,
         'total_days_in_month': total_days_in_month,
     }
 
 
 def get_loan_deduction(employee):
-    """Sums this month's installment across all active loans, returns (total_deduction, [(loan, installment)])."""
+    """Sums this month's installment across active loans: returns (total_deduction, [(loan, installment)])."""
     loans = list(m.LoanAdvance.objects.filter(employee=employee, is_active=True))
-    total = Decimal('0')
+    total = Decimal('0.0')
     touched = []
     for loan in loans:
-        installment = min(loan.monthly_installment, loan.remaining_balance)
-        if installment > 0:
+        installment = min(Decimal(str(loan.monthly_installment or 0.0)), Decimal(str(loan.remaining_balance or 0.0)))
+        if installment > Decimal('0.0'):
             total += installment
             touched.append((loan, installment))
     return total, touched
 
 
 def get_pending_extras(employee):
-    """Returns unconsumed extras for the employee: (total_extra, [extra_objects])."""
+    """Returns unconsumed extras/incentives for the employee: (total_extra, [extra_objects])."""
     extras = list(m.PayrollExtra.objects.filter(employee=employee, is_consumed=False))
-    total = sum((e.amount for e in extras), Decimal('0'))
+    total = sum((Decimal(str(e.amount or 0.0)) for e in extras), Decimal('0.0'))
     return total, extras
 
 
+def get_unsettled_penalties(employee, year, month):
+    """Sums direct intern salary deductions and unpaid penalty deductions."""
+    penalties = m.AttendancePenalty.objects.filter(
+        employee=employee,
+        penalty_date__year=year,
+        penalty_date__month=month
+    )
+    direct_deduction = penalties.filter(
+        is_intern_penalty=True
+    ).aggregate(total=Sum('salary_deduction_amount'))['total'] or Decimal('0.0')
+
+    return Decimal(str(direct_deduction))
+
+
 def process_employee(employee, payroll_run, year, month):
-    """Computes and saves (create-or-update) one employee's PaySlip for this run.
-    Returns (payslip, warning_or_None)."""
+    """
+    Computes and saves (create-or-update) one employee's PaySlip for this run.
+    Returns (payslip, warning_or_None).
+    """
     period_end = date(year, month, calendar.monthrange(year, month)[1])
     salary = get_active_salary(employee, period_end)
     if salary is None:
-        return None, f'{employee.full_name} — no active salary structure configured, skipped.'
+        return None, f'{employee.full_name} ({employee.employee_code}) — no active salary structure configured, skipped.'
 
     breakdown = compute_attendance_breakdown(employee, year, month)
     total_days = breakdown['total_days_in_month']
+    paid_days = breakdown['paid_days']
 
-    monthly_ctc = salary.ctc_annual / Decimal('12')
-    daily_wage = _q(monthly_ctc / Decimal(total_days))
-    penalty_deduction = _q(breakdown['absent_days'] * daily_wage)
+    # Proration multiplier
+    proration_factor = (paid_days / Decimal(str(total_days))) if total_days > 0 else Decimal('0.0')
+
+    monthly_ctc = Decimal(str(salary.ctc_annual or 0.0)) / Decimal('12.0')
+    daily_wage = _q(monthly_ctc / Decimal(str(total_days)))
+    absence_penalty = _q(breakdown['absent_days'] * daily_wage)
 
     loan_deduction, touched_loans = get_loan_deduction(employee)
     extra_earning, touched_extras = get_pending_extras(employee)
+    penalty_salary_deduction = get_unsettled_penalties(employee, year, month)
 
-    is_intern = (employee.employment_type == 'intern')
+    is_intern = (employee.employment_type in ['intern', 'trainee'])
 
     if is_intern:
-        # Intern Stipend Model: no PF, ESIC, or PT
-        total_earnings = _q(monthly_ctc + extra_earning)
-        total_deductions = _q(salary.tds + loan_deduction)
+        # Intern Stipend Model: Pro-rated stipend + extra earnings
+        earned_stipend = _q(monthly_ctc * proration_factor)
+        total_earnings = _q(earned_stipend + extra_earning)
+        total_deductions = _q(Decimal(str(salary.tds or 0.0)) + loan_deduction + penalty_salary_deduction)
+        net_pay = _q(max(Decimal('0.0'), total_earnings - total_deductions))
     else:
-        # Full-time Employee Model
-        total_earnings = _q(salary.basic + salary.hra + salary.special_allowance + extra_earning)
-        total_deductions = _q(
-            salary.pf_employee + salary.esic_employee + salary.professional_tax
-            + salary.tds + loan_deduction
+        # Full-time Employee Model: Prorated components
+        earned_basic = _q(Decimal(str(salary.basic or 0.0)) * proration_factor)
+        earned_hra = _q(Decimal(str(salary.hra or 0.0)) * proration_factor)
+        earned_special = _q(Decimal(str(salary.special_allowance or 0.0)) * proration_factor)
+
+        total_earnings = _q(earned_basic + earned_hra + earned_special + extra_earning)
+
+        # Statutory deductions (Prorated)
+        pf = _q(Decimal(str(salary.pf_employee or 0.0)) * proration_factor)
+        esic = _q(Decimal(str(salary.esic_employee or 0.0)) * proration_factor)
+        pt = Decimal(str(salary.professional_tax or 0.0))
+        tds = Decimal(str(salary.tds or 0.0))
+
+        total_deductions = _q(pf + esic + pt + tds + loan_deduction + penalty_salary_deduction)
+        net_pay = _q(max(Decimal('0.0'), total_earnings - total_deductions))
+
+    with transaction.atomic():
+        payslip, _ = m.PaySlip.objects.update_or_create(
+            payroll_run=payroll_run,
+            employee=employee,
+            defaults={
+                'full_days': breakdown['full_days'],
+                'half_days': breakdown['half_days'],
+                'comp_off_days': breakdown['comp_off_days'],
+                'off_days': breakdown['off_days'],
+                'paid_leave_days': breakdown['paid_leave_days'],
+                'absent_days': breakdown['absent_days'],
+                'paid_days': breakdown['paid_days'],
+                'total_days_in_month': total_days,
+                'daily_wage': daily_wage,
+                'penalty_deduction': absence_penalty + penalty_salary_deduction,
+                'loan_deduction': _q(loan_deduction),
+                'extra_earning': _q(extra_earning),
+                'total_earnings': total_earnings,
+                'total_deductions': total_deductions,
+                'net_pay': net_pay,
+            },
         )
 
-    net_pay = _q(total_earnings - total_deductions - penalty_deduction)
+        # Deduct installment from loans
+        for loan, installment in touched_loans:
+            loan.remaining_balance = max(Decimal('0.0'), Decimal(str(loan.remaining_balance)) - installment)
+            if loan.remaining_balance <= Decimal('0.0'):
+                loan.remaining_balance = Decimal('0.0')
+                loan.is_active = False
+            loan.save(update_fields=['remaining_balance', 'is_active', 'updated_at'])
 
-    payslip, _ = m.PaySlip.objects.update_or_create(
-        payroll_run=payroll_run, employee=employee,
-        defaults={
-            'full_days': breakdown['full_days'],
-            'half_days': breakdown['half_days'],
-            'comp_off_days': breakdown['comp_off_days'],
-            'off_days': breakdown['off_days'],
-            'paid_leave_days': breakdown['paid_leave_days'],
-            'absent_days': breakdown['absent_days'],
-            'paid_days': breakdown['paid_days'],
-            'total_days_in_month': total_days,
-            'daily_wage': daily_wage,
-            'penalty_deduction': penalty_deduction,
-            'loan_deduction': _q(loan_deduction),
-            'extra_earning': _q(extra_earning),
-            'total_earnings': total_earnings,
-            'total_deductions': total_deductions,
-            'net_pay': net_pay,
-        },
-    )
-
-    # Consume loans and extras
-    for loan, installment in touched_loans:
-        loan.remaining_balance = loan.remaining_balance - installment
-        if loan.remaining_balance <= 0:
-            loan.remaining_balance = Decimal('0')
-            loan.is_active = False
-        loan.save(update_fields=['remaining_balance', 'is_active', 'updated_at'])
-
-    for extra in touched_extras:
-        extra.is_consumed = True
-        extra.payroll_run = payroll_run
-        extra.save(update_fields=['is_consumed', 'payroll_run', 'updated_at'])
+        # Mark extra earnings as consumed in this payroll run
+        for extra in touched_extras:
+            extra.is_consumed = True
+            extra.payroll_run = payroll_run
+            extra.save(update_fields=['is_consumed', 'payroll_run', 'updated_at'])
 
     return payslip, None
 
 
 def process_payroll(company, year, month, user=None):
-    """Loops through all ACTIVE employees of `company`, computes their PaySlip
-    for (year, month), and creates/updates the PayrollRun + PaySlips.
-    Returns (payroll_run, warnings list)."""
+    """
+    Processes payroll for all active employees of the given company.
+    Creates or updates the PayrollRun batch and returns (payroll_run, warnings).
+    """
     payroll_run, _ = m.PayrollRun.objects.get_or_create(
-        company=company, month=month, year=year,
-        defaults={'status': m.PayrollRun.Status.PROCESSING, 'created_by': user},
+        company=company,
+        month=month,
+        year=year,
+        defaults={
+            'status': m.PayrollRun.Status.PROCESSING,
+            'created_by': user,
+        },
     )
     payroll_run.status = m.PayrollRun.Status.PROCESSING
-    payroll_run.created_by = user or payroll_run.created_by
+    if user:
+        payroll_run.created_by = user
     payroll_run.save(update_fields=['status', 'created_by', 'updated_at'])
 
     warnings = []
     employees = m.Employee.objects.filter(company=company, status=m.Employee.Status.ACTIVE)
+
     for employee in employees:
         _, warning = process_employee(employee, payroll_run, year, month)
         if warning:
