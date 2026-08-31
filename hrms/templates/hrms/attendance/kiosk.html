@@ -1,0 +1,90 @@
+{% extends 'hrms/base.html' %}
+{% load static %}
+
+{% block title %}Delhi Office Attendance Kiosk{% endblock %}
+
+<!--Delhi Office Kiosk Mode-->
+
+
+{% block content %}
+<div class="container py-4">
+    <div class="card shadow border-0 mx-auto text-center" style="max-width: 580px; border-radius: 16px;">
+        <div class="card-header bg-dark text-white py-3">
+            <h4 class="mb-0 font-weight-bold">Office Reception Kiosk</h4>
+            <small class="text-light">Look directly at the screen to punch in/out</small>
+        </div>
+        <div class="card-body p-4">
+            
+            <div class="position-relative bg-black rounded mb-3 overflow-hidden shadow-inner" style="height: 360px;">
+                <video id="kioskCam" autoplay playsinline class="w-100 h-100" style="object-fit: cover; transform: scaleX(-1);"></video>
+                <canvas id="kioskCanvas" style="display: none;"></canvas>
+            </div>
+
+            <div id="kioskMessage" class="alert alert-secondary py-2" style="font-size: 16px; font-weight: 500;">
+                Ready. Stand in front of the camera and click Scan.
+            </div>
+
+            <button id="scanBtn" class="btn btn-primary btn-lg w-100 font-weight-bold py-3 shadow" onclick="triggerKioskScan()">
+                Scan My Face (Punch In)
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+const kioskVideo = document.getElementById('kioskCam');
+const kioskCanvas = document.getElementById('kioskCanvas');
+const kioskMsg = document.getElementById('kioskMessage');
+const scanBtn = document.getElementById('scanBtn');
+
+navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 640 } })
+    .then(stream => kioskVideo.srcObject = stream)
+    .catch(err => {
+        kioskMsg.className = 'alert alert-danger py-2';
+        kioskMsg.innerText = 'Unable to access kiosk camera.';
+        scanBtn.disabled = true;
+    });
+
+function triggerKioskScan() {
+    scanBtn.disabled = true;
+    kioskMsg.className = 'alert alert-warning py-2';
+    kioskMsg.innerText = 'Analyzing face against employee records...';
+
+    kioskCanvas.width = kioskVideo.videoWidth || 640;
+    kioskCanvas.height = kioskVideo.videoHeight || 640;
+    kioskCanvas.getContext('2d').drawImage(kioskVideo, 0, 0);
+
+    kioskCanvas.toBlob(blob => {
+        const formData = new FormData();
+        formData.append('punch_photo', blob, 'kiosk_scan.jpg');
+
+        fetch('{% url "hrms:api_kiosk_punch" %}', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json().then(data => ({ status: res.status, body: data })))
+        .then(response => {
+            if (response.status === 200) {
+                kioskMsg.className = 'alert alert-success py-2';
+                kioskMsg.innerHTML = `Welcome, <b>${response.body.employee_name}</b>!<br>Punched at ${response.body.check_in}`;
+            } else {
+                kioskMsg.className = 'alert alert-danger py-2';
+                kioskMsg.innerText = response.body.error || 'Face not recognized.';
+            }
+
+            // Auto-reset kiosk state after 4 seconds
+            setTimeout(() => {
+                kioskMsg.className = 'alert alert-secondary py-2';
+                kioskMsg.innerText = 'Ready. Stand in front of the camera and click Scan.';
+                scanBtn.disabled = false;
+            }, 4000);
+        })
+        .catch(err => {
+            kioskMsg.className = 'alert alert-danger py-2';
+            kioskMsg.innerText = 'Server communication error.';
+            setTimeout(() => { scanBtn.disabled = false; }, 3000);
+        });
+    }, 'image/jpeg', 0.9);
+}
+</script>
+{% endblock %}

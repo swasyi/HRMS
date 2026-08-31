@@ -1,0 +1,467 @@
+{% extends "hrms/base.html" %}
+{% load static %}
+
+{% block title %}Attendance Matrix — HRMS{% endblock %}
+
+{% block content %}
+
+<style>
+  /* 1. The Container - must have overflow: auto */
+  .table-responsive {
+    max-height: 75vh;
+    overflow: auto;
+    position: relative;
+  }
+
+  /* 2. THE CRITICAL FIX: Sticky won't work without this */
+  .matrix-table {
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+  }
+
+  /* 3. Freeze Header Row (Vertical Scroll) */
+  .matrix-table thead th {
+    position: sticky !important;
+    top: 0;
+    z-index: 10;
+    background-color: #212529 !important; /* Dark background so it's not transparent */
+    color: white !important;
+  }
+
+  /* 4. Freeze Columns (Horizontal Scroll) */
+  .sticky-col {
+    position: sticky !important;
+    background-color: white !important; /* Prevents seeing rows behind while scrolling */
+    z-index: 5;
+    outline: 0.1px solid #dee2e6; /* Restores the grid line that 'separate' removes */
+  }
+
+  /* 5. Set the specific offsets for the first 3 columns */
+  .sticky-col-1 { left: 0px !important; }
+  .sticky-col-2 { left: 90px !important; }
+  .sticky-col-3 { left: 250px !important; }
+
+  /* 6. THE CORNER: Freeze the top-left intersection cells */
+  /* These cells must stay in place when scrolling both ways */
+  thead th.sticky-col {
+    z-index: 20 !important;
+    top: 0 !important;
+    background-color: #212529 !important;
+  }
+
+  /* Add a shadow to the 3rd column to show depth when scrolling */
+  .sticky-col-3 {
+    box-shadow: 5px 0 5px -3px rgba(0,0,0,0.2);
+  }
+
+  /* Make sure row hover works with sticky columns */
+  .table-hover tbody tr:hover td.sticky-col {
+    background-color: #f8f9fa !important;
+  }
+</style>
+
+<div class="container-fluid px-4 py-3">
+
+  <!-- Header & Filters -->
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+    <div>
+      <h3 class="fw-bold mb-1"><i class="bi bi-grid-3x3-gap text-primary me-2"></i>Attendance Matrix</h3>
+      <p class="text-muted small mb-0">Monthly attendance grid with live punches, grace tracking &amp; audit records</p>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{% url 'hrms:attendance_records' %}" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+        <i class="bi bi-list-ul me-1"></i>List View
+      </a>
+      <a href="{% url 'hrms:regularization_list' %}" class="btn btn-outline-warning btn-sm rounded-pill px-3">
+        <i class="bi bi-clock-history me-1"></i>Regularizations
+      </a>
+      <a href="{% url 'hrms:attendance_record_add' %}" class="btn btn-primary btn-sm rounded-pill px-3">
+        <i class="bi bi-plus-circle me-1"></i>Add Record
+      </a>
+    </div>
+  </div>
+
+  <!-- Metric Stat Cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-4 col-xl-2">
+      <div class="card border-0 shadow-sm rounded-4 h-100 bg-primary-subtle text-primary p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div>
+            <div class="text-muted small fw-semibold">Present Days</div>
+            <h4 class="fw-bold mb-0 text-primary">{{ stats.total_present }}</h4>
+          </div>
+          <div class="fs-3"><i class="bi bi-check-circle-fill"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4 col-xl-2">
+      <div class="card border-0 shadow-sm rounded-4 h-100 bg-info-subtle text-info p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div>
+            <div class="text-muted small fw-semibold">Half Days</div>
+            <h4 class="fw-bold mb-0 text-info">{{ stats.total_half_day }}</h4>
+          </div>
+          <div class="fs-3"><i class="bi bi-pie-chart-fill"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4 col-xl-2">
+      <div class="card border-0 shadow-sm rounded-4 h-100 bg-primary-subtle text-primary p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div>
+            <div class="text-muted small fw-semibold">On Leave</div>
+            <h4 class="fw-bold mb-0 text-primary">{{ stats.total_on_leave }}</h4>
+          </div>
+          <div class="fs-3"><i class="bi bi-calendar-event-fill"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4 col-xl-2">
+      <div class="card border-0 shadow-sm rounded-4 h-100 bg-danger-subtle text-danger p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div>
+            <div class="text-muted small fw-semibold">Absent</div>
+            <h4 class="fw-bold mb-0 text-danger">{{ stats.total_absent }}</h4>
+          </div>
+          <div class="fs-3"><i class="bi bi-x-circle-fill"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4 col-xl-2">
+      <div class="card border-0 shadow-sm rounded-4 h-100 bg-secondary-subtle text-secondary p-3">
+        <div class="d-flex align-items-center justify-content-between">
+          <div>
+            <div class="text-muted small fw-semibold">Holidays</div>
+            <h4 class="fw-bold mb-0 text-secondary">{{ stats.total_holidays }}</h4>
+          </div>
+          <div class="fs-3"><i class="bi bi-flag-fill"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4 col-xl-2">
+      <div class="card border-0 shadow-sm rounded-4 h-100 bg-light p-3 border">
+        <div class="d-flex align-items-center justify-content-between">
+          <div>
+            <div class="text-muted small fw-semibold">Active Staff</div>
+            <h4 class="fw-bold mb-0 text-dark">{{ matrix_rows|length }}</h4>
+          </div>
+          <div class="fs-3 text-secondary"><i class="bi bi-people-fill"></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter Card -->
+  <div class="card border-0 shadow-sm rounded-4 mb-4">
+    <div class="card-body p-3">
+      <form method="get" class="row g-2 align-items-center">
+        <div class="col-auto">
+          <label class="form-label small text-muted mb-0 fw-bold">Month:</label>
+        </div>
+        <div class="col-auto">
+          <select name="month" class="form-select form-select-sm rounded-3">
+            {% for m_num, m_name in months_choices %}
+              <option value="{{ m_num }}" {% if m_num == sel_month %}selected{% endif %}>{{ m_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <label class="form-label small text-muted mb-0 fw-bold">Year:</label>
+        </div>
+        <div class="col-auto">
+          <select name="year" class="form-select form-select-sm rounded-3">
+            {% for yr in year_choices %}
+              <option value="{{ yr }}" {% if yr == sel_year %}selected{% endif %}>{{ yr }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <select name="department" class="form-select form-select-sm rounded-3">
+            <option value="">All Departments</option>
+            {% for d in departments %}
+              <option value="{{ d.id }}" {% if filters.department == d.id|stringformat:"s" %}selected{% endif %}>{{ d.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <select name="employee" class="form-select form-select-sm rounded-3">
+            <option value="">All Employees</option>
+            {% for emp in employees_list %}
+              <option value="{{ emp.id }}" {% if filters.employee == emp.id|stringformat:"s" %}selected{% endif %}>{{ emp.full_name }} ({{ emp.employee_code }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-primary btn-sm rounded-3 px-3">
+            <i class="bi bi-filter me-1"></i>Filter
+          </button>
+          <a href="{% url 'hrms:attendance_matrix' %}" class="btn btn-outline-secondary btn-sm rounded-3 ms-1">Reset</a>
+        </div>
+        <!-- Legend Indicator -->
+        <div class="col-12 mt-2 pt-2 border-top d-flex flex-wrap gap-3 align-items-center small text-muted">
+          <span class="fw-bold">Legend:</span>
+          <span><span class="badge bg-success-subtle text-success border border-success-subtle px-2">P</span> Present</span>
+          <span><span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2">G1</span> Grace Punch</span>
+          <span><span class="badge bg-info-subtle text-info border border-info-subtle px-2">HD</span> Half Day</span>
+          <span><span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2">CL/EL/SL</span> On Leave</span>
+          <span><span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2">H</span> Holiday</span>
+          <span><span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2">A</span> Absent</span>
+          <span><i class="bi bi-pencil-fill text-warning"></i> Edited (Audit Tracked)</span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Matrix Table with Frozen Columns -->
+  <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+    <div class="table-responsive" style="max-height: 70vh;">
+      <table class="table table-bordered table-hover align-middle mb-0 matrix-table" style="font-size: 0.82rem;">
+        <thead class="table-dark sticky-top" style="z-index: 5;">
+          <tr>
+            <!-- Frozen Left Columns Header -->
+            <th class="sticky-col sticky-col-1 bg-dark text-white text-center" style="width: 90px; min-width: 90px;">Code</th>
+            <th class="sticky-col sticky-col-2 bg-dark text-white" style="width: 160px; min-width: 160px;">Employee</th>
+            <th class="sticky-col sticky-col-3 bg-dark text-white" style="width: 130px; min-width: 130px;">Designation</th>
+            <!-- Month Days Columns -->
+            {% for d in date_list %}
+              <th class="text-center {% if d.weekday == 6 %}bg-secondary text-white-50{% endif %}" style="min-width: 52px; width: 52px;">
+                <div class="fw-bold">{{ d|date:"d" }}</div>
+                <div style="font-size: 0.68rem;" class="opacity-75">{{ d|date:"D"|slice:":2" }}</div>
+              </th>
+            {% endfor %}
+            <th class="text-center bg-dark text-white" style="width: 60px;">P</th>
+            <th class="text-center bg-dark text-white" style="width: 60px;">HD</th>
+            <th class="text-center bg-dark text-white" style="width: 60px;">LV</th>
+            <th class="text-center bg-dark text-white" style="width: 60px;">AB</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in matrix_rows %}
+            <tr>
+              <!-- Frozen Columns Cells -->
+              <td class="sticky-col sticky-col-1 bg-white fw-bold text-center text-primary">
+                {{ row.employee.employee_code }}
+              </td>
+
+<td class="sticky-col sticky-col-2 bg-white">
+  <a href="{% url 'hrms:employee_punch_report' emp_id=row.employee.id month=sel_month year=sel_year %}"
+     class="fw-semibold text-dark link-primary text-decoration-none text-truncate d-block"
+     style="max-width: 150px;"
+     title="View Full Report">
+    {{ row.employee.full_name }}
+  </a>
+</td>
+              <td class="sticky-col sticky-col-3 bg-white text-muted text-truncate" style="max-width: 120px;">
+                {{ row.employee.designation.title|default:"—" }}
+              </td>
+
+              <!-- Daily Punch Cells -->
+              {% for cell in row.cells %}
+                <td class="text-center p-1 position-relative cell-punch {% if cell.date.weekday == 6 %}bg-light text-muted{% endif %}"
+                    data-bs-toggle="tooltip"
+                    data-bs-html="true"
+                    title="<b>{{ row.employee.full_name }}</b><br>{{ cell.date|date:'d M Y' }}<br>Status: <b>{{ cell.label }}</b>{% if cell.check_in %}<br>In: {{ cell.check_in }} | Out: {{ cell.check_out|default:'—' }}{% endif %}{% if cell.is_edited %}<br><span class='text-warning'>{{ cell.edit_tooltip }}</span>{% endif %}"
+                    onclick="openEditModal('{{ cell.record_id|default:'' }}', '{{ row.employee.id }}', '{{ row.employee.full_name }}', '{{ cell.date|date:'Y-m-d' }}', '{{ cell.check_in|default:'' }}', '{{ cell.check_out|default:'' }}', '{{ cell.status }}')"
+                    style="cursor: pointer;">
+                  <span class="badge {{ cell.badge_class }} py-1 px-1 d-block" style="font-size: 0.72rem;">
+                    {{ cell.badge }}
+                  </span>
+                  {% if cell.is_edited %}
+                    <span class="position-absolute top-0 end-0 p-1">
+                      <i class="bi bi-pencil-fill text-warning" style="font-size: 0.6rem;"></i>
+                    </span>
+                  {% endif %}
+                </td>
+              {% endfor %}
+
+              <!-- Row Summary Stats -->
+              <td class="text-center fw-bold text-success bg-light">{{ row.stats.present }}</td>
+              <td class="text-center fw-bold text-info bg-light">{{ row.stats.half_day }}</td>
+              <td class="text-center fw-bold text-primary bg-light">{{ row.stats.on_leave }}</td>
+              <td class="text-center fw-bold text-danger bg-light">{{ row.stats.absent }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="{{ date_list|length|add:7 }}" class="text-center py-5 text-muted">
+                <i class="bi bi-inbox fs-1 d-block mb-2 text-secondary"></i>
+                No active employees found matching criteria.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Modal: Quick Punch Edit with Mandatory Reason -->
+<div class="modal fade" id="quickEditModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content rounded-4 border-0 shadow">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title fw-bold">
+          <i class="bi bi-pencil-square text-primary me-2"></i>Edit Attendance Punch
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body py-3">
+        <input type="hidden" id="editRecordId">
+        <input type="hidden" id="editEmpId">
+        <input type="hidden" id="editDate">
+
+        <div class="alert alert-light border mb-3 py-2 small">
+          <div>Employee: <strong id="modalEmpName">—</strong></div>
+          <div>Date: <strong id="modalDateDisplay">—</strong></div>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label small fw-semibold">Check-In Time</label>
+            <input type="time" id="editCheckIn" class="form-control rounded-3">
+          </div>
+          <div class="col-6">
+            <label class="form-label small fw-semibold">Check-Out Time</label>
+            <input type="time" id="editCheckOut" class="form-control rounded-3">
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Status Override</label>
+          <select id="editStatusSelect" class="form-select rounded-3">
+            <option value="present">Present</option>
+            <option value="half_day">Half Day</option>
+            <option value="on_leave">On Leave</option>
+            <option value="absent">Absent</option>
+            <option value="holiday">Holiday</option>
+            <option value="week_off">Week Off</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small fw-semibold text-danger">Reason for Manual Edit (Mandatory Audit Trail)*</label>
+          <textarea id="editAuditReason" class="form-control rounded-3" rows="3" placeholder="Explain why this punch is being manually modified..." required></textarea>
+        </div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary rounded-pill px-4" id="savePunchBtn" onclick="savePunchEdit()">
+          <i class="bi bi-check-lg me-1"></i>Save &amp; Audit
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Sticky Frozen Left Columns */
+  .matrix-table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .sticky-col {
+    position: sticky;
+    z-index: 2;
+  }
+  .sticky-col-1 {
+    left: 0;
+    z-index: 3;
+    box-shadow: 2px 0 4px rgba(0,0,0,0.04);
+  }
+  .sticky-col-2 {
+    left: 90px;
+    z-index: 3;
+    box-shadow: 2px 0 4px rgba(0,0,0,0.04);
+  }
+  .sticky-col-3 {
+    left: 250px;
+    z-index: 3;
+    box-shadow: 3px 0 5px rgba(0,0,0,0.06);
+  }
+  thead .sticky-col-1, thead .sticky-col-2, thead .sticky-col-3 {
+    z-index: 6 !important;
+  }
+  .cell-punch:hover {
+    filter: brightness(0.95);
+  }
+</style>
+
+<script>
+  let editModalInstance = null;
+
+  function openEditModal(recordId, empId, empName, dateStr, checkIn, checkOut, status) {
+    document.getElementById('editRecordId').value = recordId;
+    document.getElementById('editEmpId').value = empId;
+    document.getElementById('editDate').value = dateStr;
+    document.getElementById('modalEmpName').innerText = empName;
+    document.getElementById('modalDateDisplay').innerText = dateStr;
+    document.getElementById('editCheckIn').value = checkIn || '';
+    document.getElementById('editCheckOut').value = checkOut || '';
+    if (status) {
+      document.getElementById('editStatusSelect').value = status;
+    }
+    document.getElementById('editAuditReason').value = '';
+
+    if (!editModalInstance) {
+      editModalInstance = new bootstrap.Modal(document.getElementById('quickEditModal'));
+    }
+    editModalInstance.show();
+  }
+
+  function savePunchEdit() {
+    const reason = document.getElementById('editAuditReason').value.trim();
+    if (!reason) {
+      alert('Please provide a mandatory reason for this manual punch modification.');
+      document.getElementById('editAuditReason').focus();
+      return;
+    }
+
+    const payload = {
+      record_id: document.getElementById('editRecordId').value || null,
+      employee_id: document.getElementById('editEmpId').value,
+      date: document.getElementById('editDate').value,
+      check_in: document.getElementById('editCheckIn').value,
+      check_out: document.getElementById('editCheckOut').value,
+      status: document.getElementById('editStatusSelect').value,
+      edit_reason: reason,
+    };
+
+    const btn = document.getElementById('savePunchBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving...';
+
+    fetch("{% url 'hrms:manual_punch_edit_ajax' %}", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": "{{ csrf_token }}"
+      },
+      body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save &amp; Audit';
+      if (data.success) {
+        editModalInstance.hide();
+        window.location.reload();
+      } else {
+        alert(data.error || 'Failed to update punch.');
+      }
+    })
+    .catch(err => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save &amp; Audit';
+      alert('Network error: ' + err);
+    });
+  }
+
+  // Initialize tooltips
+  document.addEventListener("DOMContentLoaded", function() {
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+      return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+  });
+</script>
+{% endblock %}

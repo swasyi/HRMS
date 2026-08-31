@@ -1,0 +1,141 @@
+{% extends 'hrms/base.html' %}
+{% load static %}
+
+{% block title %}Enroll Employee Face{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="card shadow-sm border-0 mx-auto" style="max-width: 550px; border-radius: 12px;">
+        <div class="card-header bg-dark text-white py-3 text-center">
+            <h5 class="mb-0 font-weight-bold">Employee Face Biometric Enrollment</h5>
+            <small class="text-white-50">Capture directly with webcam or upload a clear photo</small>
+        </div>
+        <div class="card-body p-4">
+
+            <form id="enrollForm" enctype="multipart/form-data">
+                {% csrf_token %}
+
+                <div class="mb-3">
+                    <label for="employeeSelect" class="form-label font-weight-bold">Select Employee</label>
+                    <select class="form-select form-control" id="employeeSelect" name="employee_id" required>
+                        <option value="">-- Choose Employee --</option>
+                        {% for emp in employees %}
+                            <option value="{{ emp.id }}">{{ emp.employee_code }} - {{ emp.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Live Camera Preview & Snapshot -->
+                <div class="mb-3 text-center">
+                    <label class="form-label font-weight-bold d-block text-start">Capture or Upload Face</label>
+                    <div class="position-relative bg-dark rounded overflow-hidden mb-2" style="height: 260px;">
+                        <video id="enrollVideo" autoplay playsinline class="w-100 h-100" style="object-fit: cover;"></video>
+                        <canvas id="enrollCanvas" style="display: none;"></canvas>
+                    </div>
+
+                    <button type="button" class="btn btn-outline-secondary btn-sm mb-2 w-100" onclick="takeWebcamSnapshot()">
+                        <i class="bi bi-camera me-1"></i> Capture Live Photo From Webcam
+                    </button>
+
+                    <div class="text-muted small mb-2">- OR Choose File -</div>
+                    <input class="form-control form-control-sm" type="file" id="facePhoto" name="photo" accept="image/*">
+                </div>
+
+                <div id="enrollStatus" class="alert d-none py-2" style="font-size: 14px;"></div>
+
+                <button type="submit" id="submitBtn" class="btn btn-primary w-100 font-weight-bold py-2 mt-2">
+                    Extract Biometrics & Register
+                </button>
+            </form>
+
+        </div>
+    </div>
+</div>
+
+<script>
+const video = document.getElementById('enrollVideo');
+const canvas = document.getElementById('enrollCanvas');
+const fileInput = document.getElementById('facePhoto');
+const form = document.getElementById('enrollForm');
+const statusBox = document.getElementById('enrollStatus');
+const submitBtn = document.getElementById('submitBtn');
+
+let capturedBlob = null;
+
+// Start camera stream
+navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 640 } })
+    .then(stream => video.srcObject = stream)
+    .catch(err => console.log('Camera preview optional.'));
+
+function takeWebcamSnapshot() {
+    canvas.width = video.videoWidth || 480;
+    canvas.height = video.videoHeight || 480;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+
+    canvas.toBlob(blob => {
+        capturedBlob = blob;
+        fileInput.value = ''; // clear manual file selection
+        statusBox.className = 'alert alert-success py-2';
+        statusBox.innerText = 'Live photo captured! Click "Extract Biometrics & Register" below.';
+        statusBox.classList.remove('d-none');
+    }, 'image/jpeg', 0.95);
+}
+
+fileInput.addEventListener('change', () => {
+    capturedBlob = null; // reset webcam capture if file is picked
+    statusBox.classList.add('d-none');
+});
+
+form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const employeeId = document.getElementById('employeeSelect').value;
+    if (!employeeId) {
+        alert('Please select an employee.');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('employee_id', employeeId);
+    formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+
+    if (capturedBlob) {
+        formData.append('photo', capturedBlob, 'captured_face.jpg');
+    } else if (fileInput.files.length > 0) {
+        formData.append('photo', fileInput.files[0]);
+    } else {
+        alert('Please capture a photo using the webcam or select an image file.');
+        return;
+    }
+
+    submitBtn.disabled = true;
+    statusBox.className = 'alert alert-info py-2';
+    statusBox.innerText = 'Extracting facial vectors...';
+    statusBox.classList.remove('d-none');
+
+    try {
+        const response = await fetch('{% url "hrms:enroll_face" %}', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            statusBox.className = 'alert alert-success py-2';
+            statusBox.innerText = data.message || 'Face registered successfully!';
+            capturedBlob = null;
+            form.reset();
+        } else {
+            statusBox.className = 'alert alert-danger py-2';
+            statusBox.innerText = data.error || 'Failed to detect face. Ensure good lighting and look straight at the camera.';
+        }
+    } catch (err) {
+        statusBox.className = 'alert alert-danger py-2';
+        statusBox.innerText = 'Server error processing the image.';
+    } finally {
+        submitBtn.disabled = false;
+    }
+});
+</script>
+{% endblock %}

@@ -632,6 +632,11 @@ def dashboard(request):
         date_of_birth__month=target_date.month
     ).order_by('date_of_birth')[:4]
 
+    # Inside your Dashboard View in hrms/views.py
+    total_active_employees = Employee.objects.filter(status='active').count()
+    enrolled_biometrics_count = EmployeeBiometric.objects.filter(employee__status='active').count()
+    pending_biometrics_count = total_active_employees - enrolled_biometrics_count
+
     context.update({
         'available_companies': available_companies,
         'active_company_id': active_company_id,
@@ -653,6 +658,10 @@ def dashboard(request):
         'on_leave_employees': on_leave_employees,
         'upcoming_birthdays': upcoming_birthdays,
         'open_jobs_list': open_jobs_list,
+        'enrolled_biometrics': enrolled_biometrics_count,
+        'pending_biometrics': pending_biometrics_count,
+        'total_employees': total_active_employees,
+
     })
     template = 'hrms/dashboard_hr.html'
 
@@ -4833,6 +4842,136 @@ class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
             'year': year,
         })
         return ctx
+
+
+class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
+    model = m.Employee
+    template_name = 'hrms/attendance/punch_report.html'
+    context_object_name = 'target_employee'
+    pk_url_kwarg = 'emp_id'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        emp = self.object
+        month = int(self.kwargs['month'])
+        year = int(self.kwargs['year'])
+        comp = emp.company
+
+        days_in_month = calendar.monthrange(year, month)[1]
+        report_data = []
+
+        stats = {'FD': 0, 'HD': 0, 'ABS': 0, 'Grace': 0, 'Leave': 0}
+
+        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
+            employee=emp, attendance_date__year=year, attendance_date__month=month)}
+
+        holiday_dates = []
+        if emp.holiday_calendar:
+            holiday_dates = m.Holiday.objects.filter(
+                calendar=emp.holiday_calendar, date__year=year, date__month=month
+            ).values_list('date', flat=True)
+
+        leaves = m.LeaveApplication.objects.filter(
+            employee=emp, status='approved',
+            start_date__lte=date(year, month, days_in_month),
+            end_date__gte=date(year, month, 1)
+        ).select_related('leave_type')
+
+        leave_map = {dt: l.leave_type.code.upper() for l in leaves for dt in
+                     [l.start_date + timedelta(days=x) for x in range((l.end_date - l.start_date).days + 1)]
+                     if dt.month == month and dt.year == year}
+
+        grace_used = 0
+
+        for d in range(1, days_in_month + 1):
+            dt = date(year, month, d)
+            policy = comp.get_policy_for_date(dt)
+
+            off_start = policy.office_start_time
+            off_end = policy.office_end_time
+            grace_limit = policy.grace_allowed_count
+            full_thresh = float(policy.full_day_threshold_hours)
+
+            rec = records.get(dt)
+            leave_code = leave_map.get(dt)
+            is_holiday = dt in holiday_dates
+            is_sunday = dt.weekday() == 6
+
+            day_info = {
+                'date': dt, 'in': None, 'out': None, 'hours': 0,
+                'status': 'ABS', 'label': '', 'css': 'mark-abs',
+                'in_lat': None, 'in_lng': None,
+                'out_lat': None, 'out_lng': None,
+                'punch_source': None, 'photo': None
+            }
+
+            if is_holiday or is_sunday:
+                day_info.update({'status': 'HOL' if is_holiday else 'SUN', 'css': 'mark-sun'})
+
+            elif rec and rec.check_in:
+                local_in = timezone.localtime(rec.check_in)
+                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
+
+                day_info.update({
+                    'in': local_in,
+                    'out': local_out,
+                    'in_lat': rec.punch_in_latitude,
+                    'in_lng': rec.punch_in_longitude,
+                    'out_lat': rec.punch_out_latitude,
+                    'out_lng': rec.punch_out_longitude,
+                    'punch_source': getattr(rec, 'punch_source', 'mobile'),
+                    'photo': rec.punch_in_photo.url if rec.punch_in_photo else None
+                })
+
+                p_in = local_in.time()
+                p_out = local_out.time() if local_out else off_start
+                eff_hours = (datetime.combine(dt, min(p_out, off_end)) -
+                             datetime.combine(dt, max(p_in, off_start))).total_seconds() / 3600
+                day_info['hours'] = round(eff_hours, 2)
+
+                grace_deadline = (datetime.combine(dt, off_start) + timedelta(minutes=policy.grace_minutes)).time()
+
+                if p_in <= off_start:
+                    if day_info['hours'] >= full_thresh:
+                        day_info.update({'status': 'FD', 'css': 'mark-fd'})
+                        stats['FD'] += 1
+                    else:
+                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Short Duration'})
+                        stats['HD'] += 1
+                elif p_in <= grace_deadline:
+                    if local_out and local_out.time() >= off_end:
+                        if grace_used < grace_limit:
+                            grace_used += 1
+                            day_info.update(
+                                {'status': 'FD', 'css': 'mark-fd', 'label': f'Grace Used ({grace_used}/{grace_limit})'})
+                            stats['FD'] += 1
+                            stats['Grace'] += 1
+                        else:
+                            day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Grace Exhausted'})
+                            stats['HD'] += 1
+                    else:
+                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Late + Early Out'})
+                        stats['HD'] += 1
+                else:
+                    day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Late Arrival'})
+                    stats['HD'] += 1
+
+            elif leave_code:
+                day_info.update({'status': leave_code, 'css': 'mark-leave', 'label': 'Approved Leave'})
+                stats['Leave'] += 1
+            else:
+                stats['ABS'] += 1
+
+            report_data.append(day_info)
+
+        ctx.update({
+            'report': report_data,
+            'stats': stats,
+            'month_name': calendar.month_name[month],
+            'year': year,
+        })
+        return ctx
+
 # ---------------------------------------------------------------------------
 # Loans/Advances & Payroll Extras (Incentives) — HR/Admin manage
 # ---------------------------------------------------------------------------
@@ -7081,3 +7220,268 @@ class LeaveReapplyView(LoginRequiredMixin, SidebarContextMixin, FormView):
         except lv.LeaveError as e:
             form.add_error(None, str(e))
             return self.form_invalid(form)
+# ---------------------------
+
+import json
+from django.views.generic import TemplateView, View
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import JsonResponse
+from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from .models import Employee, EmployeeBiometric, AttendanceRecord, EmployeeLocationLog
+from .biometrics import verify_1_to_1, match_1_to_n, extract_face_encoding
+
+
+# 1. ENROLL EMPLOYEE FACE (HR / Admin Action)
+# class EnrollFaceBiometricView(LoginRequiredMixin, View):
+#     def post(self, request, *args, **kwargs):
+#         employee_id = request.POST.get('employee_id')
+#         photo = request.FILES.get('photo')
+#
+#         if not employee_id or not photo:
+#             return JsonResponse({'error': 'Employee ID and photo required.'}, status=400)
+#
+#         employee = Employee.objects.filter(id=employee_id).first()
+#         if not employee:
+#             return JsonResponse({'error': 'Employee not found.'}, status=404)
+#
+#         encoding = extract_face_encoding(photo)
+#         if not encoding:
+#             return JsonResponse({'error': 'Could not detect a clear face in the photo.'}, status=400)
+#
+#         EmployeeBiometric.objects.update_or_create(
+#             employee=employee,
+#             defaults={'face_encoding': encoding, 'registered_photo': photo}
+#         )
+#         return JsonResponse({'status': 'success', 'message': f'Face enrolled for {employee.full_name}'})
+
+# In hrms/views.py
+class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
+    template_name = 'hrms/attendance/enroll_face.html'
+
+    def get_context_data(self, **kwargs):
+        """GET request: Loads the HTML page with the employee dropdown."""
+        context = super().get_context_data(**kwargs)
+        context['employees'] = Employee.objects.filter(status='active').order_by('first_name')
+        return context
+
+    def post(self, request, *args, **kwargs):
+        """POST request: Receives image, extracts vector, and saves biometrics."""
+        employee_id = request.POST.get('employee_id')
+        photo = request.FILES.get('photo')
+
+        if not employee_id or not photo:
+            return JsonResponse({'error': 'Employee ID and photo required.'}, status=400)
+
+        employee = Employee.objects.filter(id=employee_id).first()
+        if not employee:
+            return JsonResponse({'error': 'Employee not found.'}, status=404)
+
+        encoding = extract_face_encoding(photo)
+        if not encoding:
+            return JsonResponse({'error': 'Could not detect a clear face in the photo.'}, status=400)
+
+        EmployeeBiometric.objects.update_or_create(
+            employee=employee,
+            defaults={'face_encoding': encoding, 'registered_photo': photo}
+        )
+        return JsonResponse({'status': 'success', 'message': f'Face enrolled for {employee.full_name}'})
+# 2. REMOTE / MOBILE WORKER PUNCH VIEW (1:1 Verification)
+class MobilePunchInView(LoginRequiredMixin, View):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        try:
+            employee = request.user.employee_profile
+        except AttributeError:
+            return JsonResponse({'error': 'No linked employee profile found.'}, status=400)
+
+        photo = request.FILES.get('punch_photo')
+        lat = request.POST.get('latitude')
+        lng = request.POST.get('longitude')
+
+        if not photo or not lat or not lng:
+            return JsonResponse({'error': 'Photo and GPS coordinates are required.'}, status=400)
+
+        biometric = getattr(employee, 'biometric', None)
+        if not biometric:
+            return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
+
+        is_match, msg = verify_1_to_1(photo, biometric.face_encoding)
+        if not is_match:
+            return JsonResponse({'error': f'Face verification failed: {msg}'}, status=401)
+
+        today = timezone.localdate()
+        attendance, created = AttendanceRecord.objects.get_or_create(
+            employee=employee,
+            attendance_date=today,
+            defaults={
+                'check_in': timezone.now(),
+                'punch_in_latitude': lat,
+                'punch_in_longitude': lng,
+                'punch_in_photo': photo,
+                'is_face_verified': True,
+                'punch_source': 'mobile',
+                'status': AttendanceRecord.Status.PRESENT,
+            }
+        )
+
+        if not created and not attendance.check_in:
+            attendance.check_in = timezone.now()
+            attendance.punch_in_latitude = lat
+            attendance.punch_in_longitude = lng
+            attendance.punch_in_photo = photo
+            attendance.is_face_verified = True
+            attendance.punch_source = 'mobile'
+            attendance.status = AttendanceRecord.Status.PRESENT
+            attendance.save()
+
+        return JsonResponse({
+            'status': 'success',
+            'attendance_id': attendance.id,
+            'check_in': attendance.check_in.strftime('%I:%M %p')
+        })
+
+
+# 3. DELHI OFFICE SHARED KIOSK PUNCH VIEW (1:N Matching)
+class KioskPunchInView(View):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        photo = request.FILES.get('punch_photo')
+        if not photo:
+            return JsonResponse({'error': 'Camera frame required.'}, status=400)
+
+        all_biometrics = EmployeeBiometric.objects.select_related('employee').all()
+        matched_employee, msg = match_1_to_n(photo, all_biometrics)
+
+        if not matched_employee:
+            return JsonResponse({'error': 'Face not recognized.'}, status=401)
+
+        today = timezone.localdate()
+        attendance, created = AttendanceRecord.objects.get_or_create(
+            employee=matched_employee,
+            attendance_date=today,
+            defaults={
+                'check_in': timezone.now(),
+                'punch_in_photo': photo,
+                'is_face_verified': True,
+                'punch_source': 'kiosk',
+                'status': AttendanceRecord.Status.PRESENT,
+            }
+        )
+
+        if not created and not attendance.check_in:
+            attendance.check_in = timezone.now()
+            attendance.punch_in_photo = photo
+            attendance.is_face_verified = True
+            attendance.punch_source = 'kiosk'
+            attendance.status = AttendanceRecord.Status.PRESENT
+            attendance.save()
+
+        return JsonResponse({
+            'status': 'success',
+            'employee_name': matched_employee.full_name,
+            'check_in': attendance.check_in.strftime('%I:%M %p')
+        })
+
+
+# 4. LOCATION PING API (Background Tracking Loop)
+class LocationPingView(LoginRequiredMixin, View):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        try:
+            data = json.loads(request.body)
+            EmployeeLocationLog.objects.create(
+                employee=request.user.employee_profile,
+                attendance_record_id=data.get('attendance_id'),
+                latitude=data.get('latitude'),
+                longitude=data.get('longitude'),
+                accuracy_meters=data.get('accuracy')
+            )
+            return JsonResponse({'status': 'Location logged.'})
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+
+
+# 5. LIVE TRACKING DASHBOARD & DATA FEED
+class LiveTrackingDashboardView(LoginRequiredMixin, TemplateView):
+    template_name = 'hrms/attendance/live_tracking.html'
+
+# 6
+class LiveTrackingFeedAPIView(LoginRequiredMixin, View):
+    def get(self, request, *args, **kwargs):
+        today = timezone.localdate()
+        records = AttendanceRecord.objects.filter(attendance_date=today, check_in__isnull=False).select_related(
+            'employee')
+
+        feed = []
+        for att in records:
+            logs = att.locations.all().order_by('recorded_at')
+            path = [[float(l.latitude), float(l.longitude)] for l in logs]
+            last_log = logs.last()
+
+            lat = float(last_log.latitude) if last_log else (
+                float(att.punch_in_latitude) if att.punch_in_latitude else None)
+            lng = float(last_log.longitude) if last_log else (
+                float(att.punch_in_longitude) if att.punch_in_longitude else None)
+
+            if lat and lng:
+                feed.append({
+                    'name': att.employee.full_name,
+                    'code': att.employee.employee_code,
+                    'check_in': att.check_in.strftime('%I:%M %p'),
+                    'last_seen': last_log.recorded_at.strftime('%I:%M %p') if last_log else att.check_in.strftime(
+                        '%I:%M %p'),
+                    'coords': [lat, lng],
+                    'photo': att.punch_in_photo.url if att.punch_in_photo else None,
+                    'route': path
+                })
+
+        return JsonResponse({'active_staff': feed})
+
+# 7
+class PunchInPageView(LoginRequiredMixin, TemplateView):
+    template_name = 'hrms/attendance/punch_in.html'
+# 8
+class KioskPageView(TemplateView):
+    template_name = 'hrms/attendance/kiosk.html'
+
+
+from django.views.generic import TemplateView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from .models import Employee, EmployeeBiometric
+
+
+class BiometricStatusListView(LoginRequiredMixin, TemplateView):
+    template_name = 'hrms/attendance/biometric_list.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        # Fetch active employees and annotate biometric existence
+        employees = Employee.objects.filter(status='active').select_related('biometric', 'department', 'designation')
+
+        enrolled_list = []
+        pending_list = []
+
+        for emp in employees:
+            if hasattr(emp, 'biometric') and emp.biometric:
+                enrolled_list.append(emp)
+            else:
+                pending_list.append(emp)
+
+        context['enrolled_employees'] = enrolled_list
+        context['pending_employees'] = pending_list
+        context['total_count'] = len(employees)
+        context['enrolled_count'] = len(enrolled_list)
+        context['pending_count'] = len(pending_list)
+        return context

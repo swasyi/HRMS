@@ -195,4 +195,24 @@ urlpatterns = [
     path('performance/<int:pk>/', views.PerformanceReviewDetailView.as_view(), name='performance_detail'),
     path('performance/<int:pk>/edit/', views.PerformanceReviewUpdateView.as_view(), name='performance_edit'),
     path('performance/<int:pk>/acknowledge/', views.PerformanceAcknowledgeView.as_view(), name='performance_acknowledge'),
+
+
+# Punch-In Endpoints (CBVs)
+# Mobile camera & GPS screen for remote staff.
+    path('attendance/punch-in/', views.PunchInPageView.as_view(template_name='hrms/attendance/punch_in.html'), name='punch_in_page'),
+
+# Shared tablet screen at the Delhi office
+    path('attendance/kiosk/', views.KioskPageView.as_view(template_name='hrms/attendance/kiosk.html'), name='kiosk_page'),
+
+    # APIs
+    path('attendance/api/mobile-punch/', views.MobilePunchInView.as_view(), name='api_mobile_punch'),  # .
+    path('attendance/api/kiosk-punch/', views.KioskPunchInView.as_view(), name='api_kiosk_punch'),  #.
+    path('attendance/api/location-ping/', views.LocationPingView.as_view(), name='api_location_ping'),
+    # path('attendance/api/enroll-face/', views.EnrollFaceBiometricView.as_view(), name='api_enroll_face'),
+    path('attendance/enroll-face/', views.FaceEnrollmentView.as_view(), name='enroll_face'),
+    # Admin Monitoring
+    path('attendance/live-tracking/', views.LiveTrackingDashboardView.as_view(), name='live_tracking_dashboard'),
+    path('attendance/api/live-feed/', views.LiveTrackingFeedAPIView.as_view(), name='api_live_feed'),
+    path('attendance/biometrics/', views.BiometricStatusListView.as_view(), name='biometric_status_list'),
+
 ]

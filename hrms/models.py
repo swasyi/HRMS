@@ -762,6 +762,20 @@ class AttendanceRecord(TimeStampedModel):
     is_half_day = models.BooleanField(default=False)
     is_overtime = models.BooleanField(default=False)
     remarks = models.CharField(max_length=255, blank=True)
+
+    # --- GEOLOCATION & BIOMETRICS FIELDS ---
+    punch_in_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    punch_in_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    punch_out_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    punch_out_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    punch_in_photo = models.ImageField(upload_to='attendance/punches/', null=True, blank=True)
+    is_face_verified = models.BooleanField(default=False)
+    punch_source = models.CharField(
+        max_length=20,
+        choices=[('kiosk', 'Office Kiosk'), ('mobile', 'Remote/Mobile')],
+        default='mobile'
+    )
+
     # Module D: Audit trail for manual punch edits
     edited_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -855,6 +869,33 @@ class AttendanceRecord(TimeStampedModel):
         # This logic assumes policy is accessible; otherwise, use a threshold
         # For template logic, we'll check if late_minutes > 0 and a penalty wasn't applied
         return self.late_minutes > 0 and self.late_minutes <= 15 # Replace 15 with policy.grace_minutes
+
+# --- NEW MODEL: BIOMETRIC PROFILES ---
+class EmployeeBiometric(TimeStampedModel):
+    """Stores the reference 128-dimensional facial encoding vector for an employee."""
+    employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name='biometric')
+    face_encoding = models.JSONField(help_text="128-dimensional biometric facial embedding array")
+    registered_photo = models.ImageField(upload_to='employees/faces/')
+
+    def __str__(self):
+        return f"Biometric Profile - {self.employee.full_name}"
+
+
+# --- NEW MODEL:  LIVE BREADCRUMB LOCATION LOGS ---
+class EmployeeLocationLog(TimeStampedModel):
+    """Continuous GPS tracking coordinates logged while the employee is on duty."""
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='location_logs')
+    attendance_record = models.ForeignKey(AttendanceRecord, on_delete=models.CASCADE, related_name='locations')
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    accuracy_meters = models.FloatField(null=True, blank=True)
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-recorded_at']
+
+    def __str__(self):
+        return f"{self.employee.full_name} @ {self.recorded_at.strftime('%I:%M %p')}"
 
 
 class GraceUsageTracker(TimeStampedModel):

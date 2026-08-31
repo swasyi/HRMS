@@ -281,20 +281,21 @@
         </div>
 
         <!-- Card 5: Pending Biometrics -->
+<!-- Card 5: Biometric Status Card -->
         <div class="col-12 col-md-6 col-xl">
-            <a href="{% url 'hrms:attendance_records' %}" class="stat-link">
+            <a href="{% url 'hrms:biometric_status_list' %}" class="stat-link">
                 <div class="card attendo-card shadow-sm h-100 p-3">
                     <div class="d-flex align-items-center justify-content-between">
                         <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Pending Biometrics</span>
-                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ pending_biometrics }}</h2>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Face Biometrics</span>
+                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ enrolled_biometrics }} <span class="text-muted fw-normal" style="font-size: 1rem;">/ {{ total_employees }}</span></h2>
                         </div>
                         <div class="icon-box icon-box-rose">
                             <i class="bi bi-fingerprint"></i>
                         </div>
                     </div>
                     <div class="mt-2 pt-1 small text-danger fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
-                        <span>Hardware Sync</span> <i class="bi bi-arrow-right-short"></i>
+                        <span>{{ pending_biometrics }} Pending Enrollment</span> <i class="bi bi-arrow-right-short"></i>
                     </div>
                 </div>
             </a>

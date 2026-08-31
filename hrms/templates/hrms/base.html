@@ -79,6 +79,7 @@
               {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:employee_list' %}" class="{% if active_item == 'employee_list' %}current{% endif %}">Directory</a></li>
                 <li><a href="{% url 'hrms:employee_add' %}" class="{% if active_item == 'employee_add' %}current{% endif %}">Add Employee</a></li>
+                <li><a href="{% url 'hrms:enroll_face' %}" class="{% if active_item == 'enroll_face' %}current{% endif %}"><i class="bi bi-camera-fill me-1 text-primary"></i> Enroll Face Biometric</a></li>
               {% else %}
                 <li><a href="{% url 'hrms:my_profile' %}" class="{% if active_item == 'my_profile' %}current{% endif %}">My Profile</a></li>
                 <li><a href="{% url 'hrms:my_documents' %}" class="{% if active_item == 'my_documents' %}current{% endif %}">My Documents</a></li>
@@ -116,7 +117,24 @@
           </a>
           <div class="collapse {% if active_group == 'attendance' %}show{% endif %}" id="navAttendance">
             <ul class="nav flex-column hrms-sublist">
+              <!-- Smart Punch Options -->
+              <li>
+                <a href="{% url 'hrms:punch_in_page' %}" class="{% if active_item == 'punch_in' %}current{% endif %} text-primary fw-bold">
+                  <i class="bi bi-camera me-1"></i> Face / GPS Punch In
+                </a>
+              </li>
               {% if hrms_is_hr or request.user.is_superuser %}
+                <li>
+                  <a href="{% url 'hrms:kiosk_page' %}" class="{% if active_item == 'kiosk' %}current{% endif %} text-dark fw-bold">
+                    <i class="bi bi-tablet me-1"></i> Office Kiosk Mode
+                  </a>
+                </li>
+                <li>
+                  <a href="{% url 'hrms:live_tracking_dashboard' %}" class="{% if active_item == 'live_tracking' %}current{% endif %} text-success fw-bold">
+                    <i class="bi bi-geo-alt-fill me-1"></i> Live Field Tracking
+                  </a>
+                </li>
+                <li><hr class="dropdown-divider my-1"></li>
                 <li><a href="{% url 'hrms:attendance_matrix' %}" class="{% if active_item == 'attendance_matrix' %}current{% endif %}">Attendance Matrix</a></li>
                 <li><a href="{% url 'hrms:attendance_records' %}" class="{% if active_item == 'attendance_records' %}current{% endif %}">All Records</a></li>
                 <li><a href="{% url 'hrms:attendance_policy' %}" class="{% if active_item == 'attendance_policy' %}current{% endif %}">Policy Settings</a></li>
@@ -140,7 +158,7 @@
           <div class="collapse {% if active_group == 'leave' %}show{% endif %}" id="navLeave">
             <ul class="nav flex-column hrms-sublist">
               <li><a href="{% url 'hrms:my_leave' %}" class="{% if active_item == 'my_leave' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}Leave Applications{% else %}Apply / My Leave{% endif %}</a></li>
-              <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>
+<!--              <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>-->
               {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
               {% endif %}
@@ -149,7 +167,7 @@
           </div>
         </li>
 
-        <!-- Payroll Portal (Visible strictly to HR, Superadmin, or Finance/Accounts) -->
+        <!-- Payroll Portal -->
         {% if request.user.is_superuser or hrms_is_hr or is_finance_user or request.user.is_finance or request.user.is_accountant or request.user.employee.department.name == 'Accounts and operations Department' %}
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'payroll' %}active{% endif %}"
@@ -188,6 +206,7 @@
               <li><a href="{% url 'hrms:notice_list' %}" class="{% if active_item == 'notice' %}current{% endif %}">Company Notices</a></li>
             </ul>
           </div>
+
         </li>
 
         <!-- Assets -->
