@@ -24,37 +24,35 @@
     position: sticky !important;
     top: 0;
     z-index: 10;
-    background-color: #212529 !important; /* Dark background so it's not transparent */
+    background-color: #212529 !important;
     color: white !important;
   }
 
   /* 4. Freeze Columns (Horizontal Scroll) */
   .sticky-col {
     position: sticky !important;
-    background-color: white !important; /* Prevents seeing rows behind while scrolling */
+    background-color: white !important;
     z-index: 5;
-    outline: 0.1px solid #dee2e6; /* Restores the grid line that 'separate' removes */
+    outline: 0.1px solid #dee2e6;
   }
 
-  /* 5. Set the specific offsets for the first 3 columns */
-  .sticky-col-1 { left: 0px !important; }
-  .sticky-col-2 { left: 90px !important; }
-  .sticky-col-3 { left: 250px !important; }
+  /* 5. Set the specific offsets for the frozen columns */
+  .sticky-col-0 { left: 0px !important; width: 42px; min-width: 42px; text-align: center; }
+  .sticky-col-1 { left: 42px !important; width: 90px; min-width: 90px; }
+  .sticky-col-2 { left: 132px !important; width: 160px; min-width: 160px; }
+  .sticky-col-3 { left: 292px !important; width: 130px; min-width: 130px; }
 
-  /* 6. THE CORNER: Freeze the top-left intersection cells */
-  /* These cells must stay in place when scrolling both ways */
+  /* 6. THE CORNER: Freeze top-left intersection cells */
   thead th.sticky-col {
     z-index: 20 !important;
     top: 0 !important;
     background-color: #212529 !important;
   }
 
-  /* Add a shadow to the 3rd column to show depth when scrolling */
   .sticky-col-3 {
     box-shadow: 5px 0 5px -3px rgba(0,0,0,0.2);
   }
 
-  /* Make sure row hover works with sticky columns */
   .table-hover tbody tr:hover td.sticky-col {
     background-color: #f8f9fa !important;
   }
@@ -69,6 +67,10 @@
       <p class="text-muted small mb-0">Monthly attendance grid with live punches, grace tracking &amp; audit records</p>
     </div>
     <div class="d-flex gap-2">
+      <!-- Auto-Approve Leave Action Button -->
+      <button type="button" class="btn btn-warning btn-sm rounded-pill px-3 shadow-sm fw-bold" onclick="submitBulkLeaveApproval()">
+        <i class="bi bi-check-all me-1"></i>Auto-Approve Leaves
+      </button>
       <a href="{% url 'hrms:attendance_records' %}" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
         <i class="bi bi-list-ul me-1"></i>List View
       </a>
@@ -212,86 +214,98 @@
     </div>
   </div>
 
-  <!-- Matrix Table with Frozen Columns -->
-  <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
-    <div class="table-responsive" style="max-height: 70vh;">
-      <table class="table table-bordered table-hover align-middle mb-0 matrix-table" style="font-size: 0.82rem;">
-        <thead class="table-dark sticky-top" style="z-index: 5;">
-          <tr>
-            <!-- Frozen Left Columns Header -->
-            <th class="sticky-col sticky-col-1 bg-dark text-white text-center" style="width: 90px; min-width: 90px;">Code</th>
-            <th class="sticky-col sticky-col-2 bg-dark text-white" style="width: 160px; min-width: 160px;">Employee</th>
-            <th class="sticky-col sticky-col-3 bg-dark text-white" style="width: 130px; min-width: 130px;">Designation</th>
-            <!-- Month Days Columns -->
-            {% for d in date_list %}
-              <th class="text-center {% if d.weekday == 6 %}bg-secondary text-white-50{% endif %}" style="min-width: 52px; width: 52px;">
-                <div class="fw-bold">{{ d|date:"d" }}</div>
-                <div style="font-size: 0.68rem;" class="opacity-75">{{ d|date:"D"|slice:":2" }}</div>
+  <!-- Form for Bulk Leave Approval -->
+  <form id="bulkAutoLeaveForm" method="POST" action="{% url 'hrms:auto_approve_absent_leaves' %}">
+    {% csrf_token %}
+    <input type="hidden" name="month" value="{{ sel_month }}">
+    <input type="hidden" name="year" value="{{ sel_year }}">
+
+    <!-- Matrix Table with Frozen Columns -->
+    <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+      <div class="table-responsive" style="max-height: 70vh;">
+        <table class="table table-bordered table-hover align-middle mb-0 matrix-table" style="font-size: 0.82rem;">
+          <thead class="table-dark sticky-top" style="z-index: 5;">
+            <tr>
+              <!-- Master Checkbox -->
+              <th class="sticky-col sticky-col-0 bg-dark text-white text-center">
+                <input type="checkbox" id="selectAllEmployees" class="form-check-input" title="Select All">
               </th>
-            {% endfor %}
-            <th class="text-center bg-dark text-white" style="width: 60px;">P</th>
-            <th class="text-center bg-dark text-white" style="width: 60px;">HD</th>
-            <th class="text-center bg-dark text-white" style="width: 60px;">LV</th>
-            <th class="text-center bg-dark text-white" style="width: 60px;">AB</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in matrix_rows %}
-            <tr>
-              <!-- Frozen Columns Cells -->
-              <td class="sticky-col sticky-col-1 bg-white fw-bold text-center text-primary">
-                {{ row.employee.employee_code }}
-              </td>
-
-<td class="sticky-col sticky-col-2 bg-white">
-  <a href="{% url 'hrms:employee_punch_report' emp_id=row.employee.id month=sel_month year=sel_year %}"
-     class="fw-semibold text-dark link-primary text-decoration-none text-truncate d-block"
-     style="max-width: 150px;"
-     title="View Full Report">
-    {{ row.employee.full_name }}
-  </a>
-</td>
-              <td class="sticky-col sticky-col-3 bg-white text-muted text-truncate" style="max-width: 120px;">
-                {{ row.employee.designation.title|default:"—" }}
-              </td>
-
-              <!-- Daily Punch Cells -->
-              {% for cell in row.cells %}
-                <td class="text-center p-1 position-relative cell-punch {% if cell.date.weekday == 6 %}bg-light text-muted{% endif %}"
-                    data-bs-toggle="tooltip"
-                    data-bs-html="true"
-                    title="<b>{{ row.employee.full_name }}</b><br>{{ cell.date|date:'d M Y' }}<br>Status: <b>{{ cell.label }}</b>{% if cell.check_in %}<br>In: {{ cell.check_in }} | Out: {{ cell.check_out|default:'—' }}{% endif %}{% if cell.is_edited %}<br><span class='text-warning'>{{ cell.edit_tooltip }}</span>{% endif %}"
-                    onclick="openEditModal('{{ cell.record_id|default:'' }}', '{{ row.employee.id }}', '{{ row.employee.full_name }}', '{{ cell.date|date:'Y-m-d' }}', '{{ cell.check_in|default:'' }}', '{{ cell.check_out|default:'' }}', '{{ cell.status }}')"
-                    style="cursor: pointer;">
-                  <span class="badge {{ cell.badge_class }} py-1 px-1 d-block" style="font-size: 0.72rem;">
-                    {{ cell.badge }}
-                  </span>
-                  {% if cell.is_edited %}
-                    <span class="position-absolute top-0 end-0 p-1">
-                      <i class="bi bi-pencil-fill text-warning" style="font-size: 0.6rem;"></i>
-                    </span>
-                  {% endif %}
-                </td>
+              <th class="sticky-col sticky-col-1 bg-dark text-white text-center">Code</th>
+              <th class="sticky-col sticky-col-2 bg-dark text-white">Employee</th>
+              <th class="sticky-col sticky-col-3 bg-dark text-white">Designation</th>
+              <!-- Month Days Columns -->
+              {% for d in date_list %}
+                <th class="text-center {% if d.weekday == 6 %}bg-secondary text-white-50{% endif %}" style="min-width: 52px; width: 52px;">
+                  <div class="fw-bold">{{ d|date:"d" }}</div>
+                  <div style="font-size: 0.68rem;" class="opacity-75">{{ d|date:"D"|slice:":2" }}</div>
+                </th>
               {% endfor %}
+              <th class="text-center bg-dark text-white" style="width: 60px;">P</th>
+              <th class="text-center bg-dark text-white" style="width: 60px;">HD</th>
+              <th class="text-center bg-dark text-white" style="width: 60px;">LV</th>
+              <th class="text-center bg-dark text-white" style="width: 60px;">AB</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in matrix_rows %}
+              <tr>
+                <!-- Employee Row Checkbox -->
+                <td class="sticky-col sticky-col-0 bg-white text-center">
+                  <input type="checkbox" name="selected_employees" value="{{ row.employee.id }}" class="form-check-input emp-checkbox">
+                </td>
+                <td class="sticky-col sticky-col-1 bg-white fw-bold text-center text-primary">
+                  {{ row.employee.employee_code }}
+                </td>
+                <td class="sticky-col sticky-col-2 bg-white">
+                  <a href="{% url 'hrms:employee_punch_report' emp_id=row.employee.id month=sel_month year=sel_year %}"
+                     class="fw-semibold text-dark link-primary text-decoration-none text-truncate d-block"
+                     style="max-width: 150px;"
+                     title="View Full Report">
+                    {{ row.employee.full_name }}
+                  </a>
+                </td>
+                <td class="sticky-col sticky-col-3 bg-white text-muted text-truncate" style="max-width: 120px;">
+                  {{ row.employee.designation.title|default:"—" }}
+                </td>
 
-              <!-- Row Summary Stats -->
-              <td class="text-center fw-bold text-success bg-light">{{ row.stats.present }}</td>
-              <td class="text-center fw-bold text-info bg-light">{{ row.stats.half_day }}</td>
-              <td class="text-center fw-bold text-primary bg-light">{{ row.stats.on_leave }}</td>
-              <td class="text-center fw-bold text-danger bg-light">{{ row.stats.absent }}</td>
-            </tr>
-          {% empty %}
-            <tr>
-              <td colspan="{{ date_list|length|add:7 }}" class="text-center py-5 text-muted">
-                <i class="bi bi-inbox fs-1 d-block mb-2 text-secondary"></i>
-                No active employees found matching criteria.
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+                <!-- Daily Punch Cells -->
+                {% for cell in row.cells %}
+                  <td class="text-center p-1 position-relative cell-punch {% if cell.date.weekday == 6 %}bg-light text-muted{% endif %}"
+                      data-bs-toggle="tooltip"
+                      data-bs-html="true"
+                      title="<b>{{ row.employee.full_name }}</b><br>{{ cell.date|date:'d M Y' }}<br>Status: <b>{{ cell.label }}</b>{% if cell.check_in %}<br>In: {{ cell.check_in }} | Out: {{ cell.check_out|default:'—' }}{% endif %}{% if cell.is_edited %}<br><span class='text-warning'>{{ cell.edit_tooltip }}</span>{% endif %}"
+                      onclick="openEditModal('{{ cell.record_id|default:'' }}', '{{ row.employee.id }}', '{{ row.employee.full_name }}', '{{ cell.date|date:'Y-m-d' }}', '{{ cell.check_in|default:'' }}', '{{ cell.check_out|default:'' }}', '{{ cell.status }}')"
+                      style="cursor: pointer;">
+                    <span class="badge {{ cell.badge_class }} py-1 px-1 d-block" style="font-size: 0.72rem;">
+                      {{ cell.badge }}
+                    </span>
+                    {% if cell.is_edited %}
+                      <span class="position-absolute top-0 end-0 p-1">
+                        <i class="bi bi-pencil-fill text-warning" style="font-size: 0.6rem;"></i>
+                      </span>
+                    {% endif %}
+                  </td>
+                {% endfor %}
+
+                <!-- Row Summary Stats -->
+                <td class="text-center fw-bold text-success bg-light">{{ row.stats.present }}</td>
+                <td class="text-center fw-bold text-info bg-light">{{ row.stats.half_day }}</td>
+                <td class="text-center fw-bold text-primary bg-light">{{ row.stats.on_leave }}</td>
+                <td class="text-center fw-bold text-danger bg-light">{{ row.stats.absent }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="{{ date_list|length|add:8 }}" class="text-center py-5 text-muted">
+                  <i class="bi bi-inbox fs-1 d-block mb-2 text-secondary"></i>
+                  No active employees found matching criteria.
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
-  </div>
+  </form>
 
 </div>
 
@@ -353,40 +367,25 @@
   </div>
 </div>
 
-<style>
-  /* Sticky Frozen Left Columns */
-  .matrix-table {
-    border-collapse: separate;
-    border-spacing: 0;
-  }
-  .sticky-col {
-    position: sticky;
-    z-index: 2;
-  }
-  .sticky-col-1 {
-    left: 0;
-    z-index: 3;
-    box-shadow: 2px 0 4px rgba(0,0,0,0.04);
-  }
-  .sticky-col-2 {
-    left: 90px;
-    z-index: 3;
-    box-shadow: 2px 0 4px rgba(0,0,0,0.04);
-  }
-  .sticky-col-3 {
-    left: 250px;
-    z-index: 3;
-    box-shadow: 3px 0 5px rgba(0,0,0,0.06);
-  }
-  thead .sticky-col-1, thead .sticky-col-2, thead .sticky-col-3 {
-    z-index: 6 !important;
-  }
-  .cell-punch:hover {
-    filter: brightness(0.95);
-  }
-</style>
-
 <script>
+  // Master Checkbox Toggle
+  document.getElementById('selectAllEmployees')?.addEventListener('change', function() {
+    const checkboxes = document.querySelectorAll('.emp-checkbox');
+    checkboxes.forEach(cb => cb.checked = this.checked);
+  });
+
+  // Bulk Leave Approval Submission
+  function submitBulkLeaveApproval() {
+    const checked = document.querySelectorAll('.emp-checkbox:checked');
+    if (checked.length === 0) {
+      alert('Please select at least one employee using the row checkboxes.');
+      return;
+    }
+    if (confirm(`Convert absents into CL/EL (or LWP if balance is 0) for ${checked.length} selected employee(s)?`)) {
+      document.getElementById('bulkAutoLeaveForm').submit();
+    }
+  }
+
   let editModalInstance = null;
 
   function openEditModal(recordId, empId, empName, dateStr, checkIn, checkOut, status) {

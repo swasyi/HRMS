@@ -4972,6 +4972,65 @@ class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
         })
         return ctx
 
+
+# ------------------autoapprovalleavelogic-----------------------------
+
+from django.views import View
+from django.shortcuts import redirect
+from django.contrib import messages
+from .permissions import HRRequiredMixin
+from .leave_logic import auto_convert_absent_to_leaves
+
+class AutoApproveAbsentLeaveView(HRRequiredMixin, View):
+    """POST endpoint to convert absent days to CL/EL/LWP for selected employees."""
+
+    def post(self, request, *args, **kwargs):
+        emp_ids = request.POST.getlist('selected_employees')
+        year = int(request.POST.get('year', date.today().year))
+        month = int(request.POST.get('month', date.today().month))
+
+        if not emp_ids:
+            messages.warning(request, "No employees selected for auto-approval.")
+            return redirect(request.META.get('HTTP_REFERER', 'hrms:attendance-matrix'))
+
+        results = auto_convert_absent_to_leaves(emp_ids, year, month, request.user)
+
+        messages.success(
+            request,
+            f"Successfully processed {results['total_employees']} confirmed employees. "
+            f"Converted {results['converted_days']} absent days "
+            f"(CL: {results['cl_deducted']}, EL: {results['el_deducted']}, LWP: {results['lwp_count']})."
+        )
+        return redirect(f"/hrms/attendance/matrix/?month={month}&year={year}")
+
+class AutoApproveAbsentLeaveView(HRRequiredMixin, View):
+    """POST endpoint to convert absent days to CL/EL/LWP for selected employees."""
+
+    def post(self, request, *args, **kwargs):
+        emp_ids = request.POST.getlist('selected_employees')
+        year = int(request.POST.get('year', date.today().year))
+        month = int(request.POST.get('month', date.today().month))
+
+        if not emp_ids:
+            messages.warning(request, "No employees selected for auto-approval.")
+            return redirect(request.META.get('HTTP_REFERER', 'hrms:attendance-matrix'))
+
+        results = auto_convert_absent_to_leaves(emp_ids, year, month, request.user)
+
+        # Retrieve values safely with fallback defaults
+        total_emp = results.get('total_employees', 0)
+        converted = results.get('converted_days', 0)
+        cl = results.get('cl_deducted', results.get('cl_count', results.get('cl', 0)))
+        el = results.get('el_deducted', results.get('el_count', results.get('el', 0)))
+        lwp = results.get('lwp_count', results.get('lwp_deducted', results.get('lwp', 0)))
+
+        messages.success(
+            request,
+            f"Successfully processed {total_emp} confirmed employees. "
+            f"Converted {converted} absent days "
+            f"(CL: {cl}, EL: {el}, LWP: {lwp})."
+        )
+        return redirect(f"/hrms/attendance/matrix/?month={month}&year={year}")
 # ---------------------------------------------------------------------------
 # Loans/Advances & Payroll Extras (Incentives) — HR/Admin manage
 # ---------------------------------------------------------------------------
@@ -5162,13 +5221,12 @@ class PayrollRunDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
         )
 
         ctx['payslips'] = payslips
-        ctx['total_net'] = totals['total_net'] or 0
-        ctx['total_earnings'] = totals['total_earnings'] or 0
-        ctx['total_deductions'] = totals['total_deductions'] or 0
-        ctx['total_penalties'] = totals['total_penalties'] or 0
-        ctx['total_paid_days'] = totals['total_paid_days'] or 0
-        ctx['total_liability'] = totals['total_liability'] or 0
-
+        ctx['total_net'] = round(totals['total_net'] or 0, 2)
+        ctx['total_earnings'] = round(totals['total_earnings'] or 0, 2)
+        ctx['total_deductions'] = round(totals['total_deductions'] or 0, 2)
+        ctx['total_penalties'] = round(totals['total_penalties'] or 0, 2)
+        ctx['total_paid_days'] = round(totals['total_paid_days'] or 0, 2)
+        ctx['total_liability'] = round(totals['total_liability'] or 0, 2)
         ctx['total_employees_count'] = payslips.count()
 
         # 4. Filter Dropdown Choices scoped to this Company
@@ -6123,65 +6181,68 @@ class FinalizeHiringActionView(HRRequiredMixin, View):
 # ===========================================================================
 # ASSET MANAGEMENT
 # ===========================================================================
-class AssetListView(CompanyFilterMixin,LoginRequiredMixin, SidebarContextMixin, ListView):
+import json
+from django.db import transaction
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse_lazy
+from django.views import View
+from django.views.generic import ListView, DetailView, CreateView, UpdateView
+from . import models as m
+from . import forms as f
+from django.contrib.auth.mixins import LoginRequiredMixin
+from .permissions import HRRequiredMixin, is_hr_or_above, get_employee_profile
+# ---------------------------------------------------------------------------
+# ASSET COMMAND CENTER & INVENTORY
+# ---------------------------------------------------------------------------
+
+class AssetListView(HRRequiredMixin, SidebarContextMixin, ListView):
+    """Command Center listing all assets grouped cleanly by Category."""
     model = m.Asset
     template_name = 'hrms/asset/asset_list.html'
     context_object_name = 'assets'
     active_group, active_item = 'asset', 'asset'
-    paginate_by = 30
 
     def get_queryset(self):
-        # Start with standard relations
-        qs = m.Asset.objects.select_related('employee', 'company')
-
-        # 1. HR/ADMIN LOGIC
-        if is_hr_or_above(self.request.user):
-            status = self.request.GET.get('status')
-            if status:
-                qs = qs.filter(status=status)
-            return qs.order_by('-created_at')
-
-        # 2. EMPLOYEE LOGIC (Restrict strictly to their own assets)
-        employee = get_employee_profile(self.request.user)
-        if employee is None:
-            return m.Asset.objects.none()
-
-        # FIX: We filter the queryset so it ONLY contains assets assigned to this employee
-        return qs.filter(employee=employee).order_by('asset_type', '-created_at')
+        # Optimization: select related company, category, and employee to prevent N+1 queries
+        qs = m.Asset.objects.select_related('company', 'category', 'employee')
+        active_company_id = self.request.session.get('active_company_id')
+        if active_company_id and active_company_id != 'all':
+            qs = qs.filter(company_id=active_company_id)
+        return qs.order_by('category__name', '-created_at')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         base_qs = self.get_queryset()
 
-        # 1. Top Stat Cards
+        # 1. Top Inventory Stat Cards
         ctx['total_count'] = base_qs.count()
-        ctx['available_count'] = base_qs.filter(employee__isnull=True).count()
-        ctx['assigned_count'] = base_qs.filter(employee__isnull=False).count()
-        ctx['repair_count'] = base_qs.filter(status='under_repair').count()
+        ctx['available_count'] = base_qs.filter(status=m.Asset.Status.AVAILABLE).count()
+        ctx['assigned_count'] = base_qs.filter(status=m.Asset.Status.ASSIGNED).count()
+        ctx['repair_count'] = base_qs.filter(status=m.Asset.Status.UNDER_REPAIR).count()
 
-        # 2. PROPER GROUPING (Prevents Duplicates)
-        # We manually group them here to be 100% safe from casing or ordering issues
-        asset_types = base_qs.values_list('asset_type', flat=True).distinct()
-
+        # 2. Category-wise Accordion Grouping
+        categories = m.AssetCategory.objects.all().order_by('name')
         structured_data = []
-        for a_type in sorted(list(set(asset_types))):  # Set ensures true uniqueness
-            type_qs = base_qs.filter(asset_type=a_type)
-            structured_data.append({
-                'name': a_type or "General Assets",
-                'assets': type_qs,
-                'total': type_qs.count(),
-                'available': type_qs.filter(employee__isnull=True).count(),
-                'assigned': type_qs.filter(employee__isnull=False).count(),
-            })
+        for cat in categories:
+            cat_assets = base_qs.filter(category=cat)
+            if cat_assets.exists():
+                structured_data.append({
+                    'id': cat.id,
+                    'name': cat.name,
+                    'assets': cat_assets,
+                    'total': cat_assets.count(),
+                    'available': cat_assets.filter(status=m.Asset.Status.AVAILABLE).count(),
+                    'assigned': cat_assets.filter(status=m.Asset.Status.ASSIGNED).count(),
+                })
 
         ctx['structured_assets'] = structured_data
+        # 3. Dynamic Category configuration map passed to modal
+        ctx['category_configs_json'] = json.dumps({
+            str(c.id): c.required_fields for c in categories
+        })
         return ctx
 
-
-import json
-
-
-import json
 
 class AssetListView(CompanyFilterMixin, LoginRequiredMixin, SidebarContextMixin, ListView):
     model = m.Asset
@@ -6191,217 +6252,233 @@ class AssetListView(CompanyFilterMixin, LoginRequiredMixin, SidebarContextMixin,
     paginate_by = 30
 
     def get_queryset(self):
-        # Optimization: select_related category and employee to avoid N+1 queries
+        # Optimization: prefetch relations
         qs = m.Asset.objects.select_related('employee', 'company', 'category')
 
-        if is_hr_or_above(self.request.user):
-            status = self.request.GET.get('status')
-            if status:
-                qs = qs.filter(status=status)
-            return qs.order_by('category__name', '-created_at')
+        # 1. Scope query by active company or employee profile
+        if not is_hr_or_above(self.request.user):
+            employee = get_employee_profile(self.request.user)
+            if employee is None:
+                return m.Asset.objects.none()
+            qs = qs.filter(employee=employee)
 
-        employee = get_employee_profile(self.request.user)
-        if employee is None:
-            return m.Asset.objects.none()
-
-        return qs.filter(employee=employee).order_by('category__name', '-created_at')
+        return qs.order_by('category__name', '-created_at')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        base_qs = self.get_queryset()
+        all_assets_qs = self.get_queryset()
 
-        # 1. Stat Cards using Model Status Choices
-        ctx['total_count'] = base_qs.count()
-        ctx['available_count'] = base_qs.filter(status='available').count()
-        ctx['assigned_count'] = base_qs.filter(status='assigned').count()
-        ctx['repair_count'] = base_qs.filter(status='under_repair').count()
+        # 1. Stat Cards (Always un-filtered counts across full inventory)
+        ctx['total_count'] = all_assets_qs.count()
+        ctx['available_count'] = all_assets_qs.filter(status=m.Asset.Status.AVAILABLE).count()
+        ctx['assigned_count'] = all_assets_qs.filter(status=m.Asset.Status.ASSIGNED).count()
+        ctx['repair_count'] = all_assets_qs.filter(status=m.Asset.Status.UNDER_REPAIR).count()
 
-        # 2. CATEGORY-WISE GROUPING
-        # We loop through existing categories to build the structure
-        categories = m.AssetCategory.objects.all()
+        # 2. Apply status filter from clicked card query parameter (?status=available / assigned / under_repair)
+        status_filter = self.request.GET.get('status', '').strip()
+        filtered_qs = all_assets_qs
+        if status_filter:
+            filtered_qs = filtered_qs.filter(status=status_filter)
+
+        ctx['current_status_filter'] = status_filter
+
+        # 3. Build Category-wise Grouping using the filtered items
+        categories = m.AssetCategory.objects.all().order_by('name')
         structured_data = []
 
         for cat in categories:
-            type_qs = base_qs.filter(category=cat)
+            type_qs = filtered_qs.filter(category=cat)
             if type_qs.exists():
                 structured_data.append({
                     'id': cat.id,
                     'name': cat.name,
                     'assets': type_qs,
-                    'total': type_qs.count(),
-                    'available': type_qs.filter(status='available').count(),
-                    'assigned': type_qs.filter(status='assigned').count(),
+                    'total': all_assets_qs.filter(category=cat).count(),
+                    'available': all_assets_qs.filter(category=cat, status=m.Asset.Status.AVAILABLE).count(),
+                    'assigned': all_assets_qs.filter(category=cat, status=m.Asset.Status.ASSIGNED).count(),
                 })
 
-        # Catch assets that have no category assigned yet
-        uncategorized = base_qs.filter(category__isnull=True)
-        if uncategorized.exists():
-            structured_data.append({
-                'id': 'general',
-                'name': "General Assets",
-                'assets': uncategorized,
-                'total': uncategorized.count(),
-                'available': uncategorized.filter(status='available').count(),
-                'assigned': uncategorized.filter(status='assigned').count(),
-            })
-
         ctx['structured_assets'] = structured_data
+        ctx['hrms_is_hr'] = is_hr_or_above(self.request.user)
+        return ctx
 
-        # 3. For the Create Category Modal to work on this page
+
+
+class AssetCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
+    """Creates an asset and auto-opens an assignment history log if issued on creation."""
+    model = m.Asset
+    form_class = f.AssetForm
+    template_name = 'hrms/asset/asset_form.html'
+    success_url = reverse_lazy('hrms:asset_list')
+    active_group, active_item = 'asset', 'asset'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # JSON dictionary passed to JavaScript to toggle fields dynamically per category
+        categories = m.AssetCategory.objects.all()
         ctx['category_configs_json'] = json.dumps({
             str(c.id): c.required_fields for c in categories
         })
         return ctx
-class AssetCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
-    model = m.Asset
-    form_class = f.AssetForm
-    template_name = 'hrms/asset/asset_form.html'
-    success_url = reverse_lazy('hrms:asset_list')
-    active_group, active_item = 'asset', 'asset'
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-
-        # Create a dictionary mapping Category ID to its required_fields string
-        # Example: { "1": "serial_number,device_password", "2": "sim,phone_number" }
-        categories = m.AssetCategory.objects.all()
-        config_map = {str(cat.id): cat.required_fields for cat in categories}
-
-        context['category_configs_json'] = json.dumps(config_map)
-        return context
 
     def form_valid(self, form):
-        messages.success(self.request, 'Asset added.')
-        return super().form_valid(form)
+        with transaction.atomic():
+            self.object = form.save()
+            # If an employee was selected during creation, create the initial custody history record
+            if self.object.employee:
+                m.AssetAssignmentHistory.objects.create(
+                    asset=self.object,
+                    employee=self.object.employee,
+                    assigned_date=self.object.assigned_on or timezone.localdate(),
+                    is_still_using=True,
+                    assignment_notes=f"Initial issuance during asset registration: {self.object.remarks or ''}"
+                )
+        from django.contrib import messages
+        messages.success(self.request, f"Asset '{self.object.name}' registered successfully.")
+        return redirect(self.success_url)
 
-
-import json
-from django.http import JsonResponse
-
-
-def create_category_ajax(request):
-    if request.method == "POST":
-        try:
-            data = json.loads(request.body)
-            name = data.get('name')
-            fields = data.get('fields', '')
-
-            if not name:
-                return JsonResponse({'success': False, 'error': 'Name is required'})
-
-            category = m.AssetCategory.objects.create(
-                name=name,
-                required_fields=fields
-            )
-            return JsonResponse({
-                'success': True,
-                'id': category.id,
-                'name': category.name,
-                'fields': category.required_fields
-            })
-        except Exception as e:
-            return JsonResponse({'success': False, 'error': str(e)})
-    return JsonResponse({'success': False, 'error': 'Invalid request'}, status=400)
 
 class AssetUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
+    """Updates specifications and safely handles reassignments or unassignments."""
     model = m.Asset
     form_class = f.AssetForm
     template_name = 'hrms/asset/asset_form.html'
     success_url = reverse_lazy('hrms:asset_list')
     active_group, active_item = 'asset', 'asset'
-
-    def form_valid(self, form):
-        messages.success(self.request, 'Asset updated.')
-        return super().form_valid(form)
-class AssetDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
-    model = m.Asset
-    template_name = 'hrms/asset/asset_detail.html'
-    context_object_name = 'asset'
-    active_group, active_item = 'asset', 'asset'
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['history'] = self.object.history.all().select_related('employee')
-        return context
-
-
-class AssetDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
-    model = m.Asset
-    template_name = 'hrms/asset/asset_detail.html'
-    context_object_name = 'asset'
-    active_group, active_item = 'asset', 'asset'
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-
-        # If user is HR/Admin, let them see everything
-        if self.request.user.is_staff:
-            return qs
-
-        # If regular employee, only allow access if the asset is linked to their User
-        return qs.filter(employee__user=self.request.user)
-
-    def get_object(self, queryset=None):
-        obj = super().get_object(queryset)
-        user = self.request.user
-
-        # PERMISSION CHECK:
-        # If user is NOT HR/Superadmin AND the asset is NOT assigned to them, block access.
-        if not is_hr_or_above(user):
-            employee = getattr(user, 'employee_profile', None)
-            if obj.employee != employee:
-                raise PermissionDenied("You do not have permission to view this asset's details.")
-        return obj
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        # Pass a boolean to the template to handle sensitive UI elements
-        ctx['is_hr'] = is_hr_or_above(self.request.user)
-        # ctx['history'] = self.object.history.all().select_related('employee')
-        ctx['history'] = self.object.history.all().order_by('-assigned_date')
+        categories = m.AssetCategory.objects.all()
+        ctx['category_configs_json'] = json.dumps({
+            str(c.id): c.required_fields for c in categories
+        })
+        return ctx
 
+    def form_valid(self, form):
+        old_asset = m.Asset.objects.get(pk=self.object.pk)
+        old_emp = old_asset.employee
+
+        with transaction.atomic():
+            self.object = form.save()
+            new_emp = self.object.employee
+
+            # Custody Change Scenario: Employee changed in form
+            if old_emp != new_emp:
+                today = timezone.localdate()
+                # 1. Close active custody record for the previous employee
+                if old_emp:
+                    m.AssetAssignmentHistory.objects.filter(
+                        asset=self.object,
+                        employee=old_emp,
+                        is_still_using=True
+                    ).update(
+                        returned_date=today,
+                        is_still_using=False,
+                        returned_in_good_condition=True,
+                        return_remarks="Reassigned via Asset Edit Specification form."
+                    )
+
+                # 2. Open new custody record for the new employee
+                if new_emp:
+                    m.AssetAssignmentHistory.objects.create(
+                        asset=self.object,
+                        employee=new_emp,
+                        assigned_date=self.object.assigned_on or today,
+                        is_still_using=True,
+                        assignment_notes=f"Reassigned from {old_emp.full_name if old_emp else 'Warehouse'}."
+                    )
+
+        from django.contrib import messages
+        messages.success(self.request, f"Asset '{self.object.name}' updated successfully.")
+        return redirect(self.success_url)
+
+
+class AssetDetailView(LoginRequiredMixin, SidebarContextMixin, DetailView):
+    """Shows full specs, invoice downloads, security credentials, and custody lifecycle."""
+    model = m.Asset
+    template_name = 'hrms/asset/asset_detail.html'
+    context_object_name = 'asset'
+    active_group, active_item = 'asset', 'asset'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['is_hr'] = is_hr_or_above(self.request.user)
+        # Fetch full chronological custody history with employee relations
+        ctx['history'] = self.object.history.select_related('employee').order_by('-assigned_date')
         return ctx
 
 
 class AssetReturnView(HRRequiredMixin, View):
-    """Unassign an asset, record return condition and remarks in custody history, and set Available."""
+    """Explicit return endpoint triggered from modal to unassign hardware and log condition."""
     def post(self, request, pk):
         asset = get_object_or_404(m.Asset, pk=pk)
 
         if asset.employee:
-            good_cond_raw = request.POST.get('returned_in_good_condition', 'yes')
-            is_good = (good_cond_raw == 'yes' or good_cond_raw is True or good_cond_raw == 'True')
+            good_cond_val = request.POST.get('returned_in_good_condition', 'yes')
+            is_good = (good_cond_val == 'yes' or good_cond_val is True or good_cond_val == 'True')
             remarks = (request.POST.get('return_remarks') or '').strip()
 
+            from django.contrib import messages
             if not is_good and not remarks:
-                messages.error(request, "Return remarks are mandatory when an asset is returned in damaged/non-good condition.")
+                messages.error(request, "Return remarks are mandatory when an asset is returned in damaged condition.")
                 return redirect('hrms:asset_detail', pk=pk)
 
-            # Update latest active history
-            m.AssetAssignmentHistory.objects.filter(
-                asset=asset,
-                employee=asset.employee,
-                is_still_using=True
-            ).update(
-                returned_date=timezone.localdate(),
-                is_still_using=False,
-                returned_in_good_condition=is_good,
-                return_remarks=remarks,
-            )
+            with transaction.atomic():
+                # 1. Close the active assignment record in history
+                m.AssetAssignmentHistory.objects.filter(
+                    asset=asset,
+                    employee=asset.employee,
+                    is_still_using=True
+                ).update(
+                    returned_date=timezone.localdate(),
+                    is_still_using=False,
+                    returned_in_good_condition=is_good,
+                    return_remarks=remarks or "Returned in good condition."
+                )
 
-            prev_emp = asset.employee.full_name
-            asset.employee = None
-            asset.status = m.Asset.Status.AVAILABLE
-            asset.assigned_on = None
-            asset.save()
+                # 2. Reset Asset to Available state
+                prev_holder = asset.employee.full_name
+                asset.employee = None
+                asset.assigned_on = None
+                asset.status = m.Asset.Status.AVAILABLE if is_good else m.Asset.Status.UNDER_REPAIR
+                asset.save()
 
-            messages.success(request, f"Asset '{asset.name}' successfully returned from {prev_emp} and marked Available.")
+            messages.success(request, f"Asset successfully returned from {prev_holder} and moved to {asset.get_status_display()}.")
         else:
-            messages.info(request, "Asset is already unassigned.")
+            from django.contrib import messages
+            messages.info(request, "Asset is already stored in warehouse.")
 
         return redirect('hrms:asset_detail', pk=pk)
 
 
+def create_category_ajax(request):
+    """AJAX endpoint for instant category creation from modal with duplicate prevention."""
+    if not is_hr_or_above(request.user):
+        return JsonResponse({'success': False, 'error': 'Permission denied.'}, status=403)
+
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            name = (data.get('name') or '').strip()
+            fields = (data.get('fields') or '').strip()
+
+            if not name:
+                return JsonResponse({'success': False, 'error': 'Category name cannot be empty.'})
+
+            # Check case-insensitive duplication
+            if m.AssetCategory.objects.filter(name__iexact=name).exists():
+                return JsonResponse({'success': False, 'error': f"Category '{name}' already exists."})
+
+            cat = m.AssetCategory.objects.create(name=name, required_fields=fields)
+            return JsonResponse({
+                'success': True,
+                'id': cat.id,
+                'name': cat.name,
+                'fields': cat.required_fields
+            })
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=400)
+    return JsonResponse({'success': False, 'error': 'Invalid HTTP method.'}, status=405)
 
 
 # ===========================================================================
@@ -7344,6 +7421,71 @@ class MobilePunchInView(LoginRequiredMixin, View):
             'attendance_id': attendance.id,
             'check_in': attendance.check_in.strftime('%I:%M %p')
         })
+class MobilePunchInView(LoginRequiredMixin, View):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        try:
+            employee = request.user.employee_profile
+        except AttributeError:
+            return JsonResponse({'error': 'No linked employee profile found.'}, status=400)
+
+        # ---------------------------------------------------------------------
+        # ADDED: Security check for Attendance Mode
+        # ---------------------------------------------------------------------
+        if employee.attendance_mode != Employee.AttendanceMode.REMOTE_FIELD:
+            return JsonResponse({
+                'error': 'Remote mobile punch is disabled for your profile. Please punch using the office tablet at reception.'
+            }, status=403)
+        # ---------------------------------------------------------------------
+
+        photo = request.FILES.get('punch_photo')
+        lat = request.POST.get('latitude')
+        lng = request.POST.get('longitude')
+
+        if not photo or not lat or not lng:
+            return JsonResponse({'error': 'Photo and GPS coordinates are required.'}, status=400)
+
+        biometric = getattr(employee, 'biometric', None)
+        if not biometric:
+            return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
+
+        is_match, msg = verify_1_to_1(photo, biometric.face_encoding)
+        if not is_match:
+            return JsonResponse({'error': f'Face verification failed: {msg}'}, status=401)
+
+        today = timezone.localdate()
+        attendance, created = AttendanceRecord.objects.get_or_create(
+            employee=employee,
+            attendance_date=today,
+            defaults={
+                'check_in': timezone.now(),
+                'punch_in_latitude': lat,
+                'punch_in_longitude': lng,
+                'punch_in_photo': photo,
+                'is_face_verified': True,
+                'punch_source': 'mobile',
+                'status': AttendanceRecord.Status.PRESENT,
+            }
+        )
+
+        if not created and not attendance.check_in:
+            attendance.check_in = timezone.now()
+            attendance.punch_in_latitude = lat
+            attendance.punch_in_longitude = lng
+            attendance.punch_in_photo = photo
+            attendance.is_face_verified = True
+            attendance.punch_source = 'mobile'
+            attendance.status = AttendanceRecord.Status.PRESENT
+            attendance.save()
+
+        return JsonResponse({
+            'status': 'success',
+            'attendance_id': attendance.id,
+            'check_in': attendance.check_in.strftime('%I:%M %p')
+        })
 
 
 # 3. DELHI OFFICE SHARED KIOSK PUNCH VIEW (1:N Matching)
@@ -7451,6 +7593,13 @@ class LiveTrackingFeedAPIView(LoginRequiredMixin, View):
 # 7
 class PunchInPageView(LoginRequiredMixin, TemplateView):
     template_name = 'hrms/attendance/punch_in.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        emp = getattr(self.request.user, 'employee_profile', None)
+        # Pass remote permission status to template
+        ctx['is_remote_allowed'] = emp.attendance_mode == Employee.AttendanceMode.REMOTE_FIELD if emp else False
+        return ctx
 # 8
 class KioskPageView(TemplateView):
     template_name = 'hrms/attendance/kiosk.html'

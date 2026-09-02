@@ -1,6 +1,6 @@
 from django import forms
 from django.forms import inlineformset_factory
-
+from django.utils import timezone
 from . import models as m
 
 
@@ -74,7 +74,7 @@ class EmployeeForm(BootstrapModelForm):
             'company', 'department', 'designation', 'employee_code', 'first_name', 'last_name',
             'email', 'phone', 'gender', 'date_of_birth', 'father_name', 'mother_name', 'address',
             'emergency_contact', 'date_of_joining', 'date_of_confirmation', 'employment_type', 'status',
-            'is_manager', 'reporting_manager',
+            'is_manager', 'reporting_manager','attendance_mode',
         ]
         widgets = {
             'date_of_birth': forms.DateInput(attrs={'type': 'date'}),
@@ -82,6 +82,7 @@ class EmployeeForm(BootstrapModelForm):
             'date_of_confirmation': forms.DateInput(attrs={'type': 'date'}),
             'address': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Enter full address...'}),
             'emergency_contact': forms.Textarea(attrs={'rows': 2, 'placeholder': 'Name, Relationship, Phone number'}),
+            'attendance_mode': forms.Select(attrs={'class': 'form-select form-control'}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -602,45 +603,120 @@ class ConvertToEmployeeForm(forms.Form):
 # ---------------------------------------------------------------------------
 # Asset Management
 # ---------------------------------------------------------------------------
-class AssetForm(BootstrapModelForm):
+
+
+from django import forms
+from . import models as m
+
+class AssetCategoryForm(forms.ModelForm):
+    class Meta:
+        model = m.AssetCategory
+        fields = ['name', 'required_fields']
+        widgets = {
+            # Standard Bootstrap styled input
+            'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. Laptop, Mobile, SIM Card'}),
+            # Helpful placeholder showing exact field names accepted by the dynamic UI
+            'required_fields': forms.TextInput(attrs={
+                'class': 'form-control',
+                'placeholder': 'model_number, serial_number, device_password, additional_details'
+            }),
+        }
+
+    def clean_name(self):
+        # Prevent creating duplicates with different casing
+        name = self.cleaned_data.get('name', '').strip()
+        qs = m.AssetCategory.objects.filter(name__iexact=name)
+        if self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise forms.ValidationError("A category with this name already exists.")
+        return name
+
+
+class AssetForm(forms.ModelForm):
     class Meta:
         model = m.Asset
         fields = [
-            'company', 'category', 'name', 'asset_type', 'serial_number',
-            'sim', 'phone_number', 'device_password', 'additional_details', 'employee',
-            'status', 'purchase_date', 'assigned_on', 'warranty_expiry',
-            'vendor_name', 'vendor_contact', 'invoice_document', 'remarks'
+            # Group 1: Categorization & Ownership
+            'company', 'category', 'name', 'model_number',
+            # Group 2: Dynamic Category-Belonging Fields
+            'serial_number', 'sim', 'phone_number', 'device_password', 'additional_details',
+            # Group 3: Custody & Status
+            'employee', 'status', 'assigned_on',
+            # Group 4: Vendor, Procurement & Warranty
+            'vendor_name', 'vendor_contact', 'purchase_date', 'warranty_expiry', 'invoice_document',
+            # Group 5: Remarks
+            'remarks'
         ]
 
         widgets = {
-            'purchase_date': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
-            'assigned_on': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
-            'warranty_expiry': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
-            'device_password': forms.TextInput(attrs={
-                'placeholder': 'Enter login password or PIN',
-                'class': 'form-control'
-            }),
-            'name': forms.TextInput(attrs={'placeholder': 'e.g. MacBook Pro / Dell Latitude'}),
-            'asset_type': forms.TextInput(attrs={'placeholder': 'e.g. Laptop, Mobile, Tablet'}),
-            'serial_number': forms.TextInput(attrs={'placeholder': 'Enter Unique Serial Number'}),
-            'sim': forms.TextInput(attrs={'placeholder': 'SIM Number or Provider'}),
-            'phone_number': forms.TextInput(attrs={'placeholder': 'Phone number associated'}),
-            'vendor_name': forms.TextInput(attrs={'placeholder': 'Vendor / Supplier name'}),
-            'vendor_contact': forms.TextInput(attrs={'placeholder': 'Vendor phone or email'}),
-            'additional_details': forms.Textarea(attrs={'rows': 2, 'placeholder': 'OS, RAM, Processor, etc.'}),
-            'remarks': forms.Textarea(attrs={'rows': 2, 'placeholder': 'Optional notes about asset condition...'}),
+            # Company and Category selections
             'company': forms.Select(attrs={'class': 'form-select'}),
-            'category': forms.Select(attrs={'class': 'form-select'}),
+            'category': forms.Select(attrs={'class': 'form-select', 'id': 'id_category'}),
+            # Asset naming & specs
+            'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. MacBook Pro 14" / iPhone 15'}),
+            'model_number': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. A2992 / Latitude 5420'}),
+            'serial_number': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Unique hardware serial number'}),
+            'sim': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. Jio / Airtel (ICCID number)'}),
+            'phone_number': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. +91 9876543210'}),
+            'device_password': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Login PIN or Master password'}),
+            'additional_details': forms.Textarea(attrs={'class': 'form-control', 'rows': 2, 'placeholder': 'RAM, SSD, accessories...'}),
+            # Custody
             'employee': forms.Select(attrs={'class': 'form-select'}),
             'status': forms.Select(attrs={'class': 'form-select'}),
+            'assigned_on': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
+            # Procurement & Warranty
+            'vendor_name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. Apple India / Croma'}),
+            'vendor_contact': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Vendor phone or support email'}),
+            'purchase_date': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
+            'warranty_expiry': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
+            'invoice_document': forms.FileInput(attrs={'class': 'form-control'}),
+            'remarks': forms.Textarea(attrs={'class': 'form-control', 'rows': 2, 'placeholder': 'Condition notes, scratch report...'}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['category'].queryset = m.AssetCategory.objects.all()
-        self.fields['employee'].empty_label = "--- Select Employee (Leave blank if unassigned) ---"
+        # Clear empty label so HR knows employee assignment is optional (stored in warehouse if blank)
+        self.fields['employee'].empty_label = "--- Keep in Warehouse (Unassigned) ---"
+
+        # Always order categories alphabetically
+        self.fields['category'].queryset = m.AssetCategory.objects.all().order_by('name')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['employee'].empty_label = "--- Keep in Warehouse (Unassigned) ---"
+        self.fields['category'].queryset = m.AssetCategory.objects.all().order_by('name')
+
+        # Filter dropdown to show ONLY active employees
+        emp_qs = m.Employee.objects.filter(status=m.Employee.Status.ACTIVE)
+
+        # If editing an asset currently held by an employee, keep them in queryset
+        if self.instance and self.instance.pk and self.instance.employee:
+            emp_qs = m.Employee.objects.filter(
+                models.Q(status=m.Employee.Status.ACTIVE) | models.Q(pk=self.instance.employee.pk)
+            )
+
+        self.fields['employee'].queryset = emp_qs.order_by('first_name', 'last_name')
 
 
+    def clean(self):
+        cleaned_data = super().clean()
+        employee = cleaned_data.get('employee')
+        status = cleaned_data.get('status')
+        assigned_on = cleaned_data.get('assigned_on')
+
+        # Auto-synchronize status based on employee assignment
+        if employee and status == m.Asset.Status.AVAILABLE:
+            # If an employee is chosen, status cannot remain 'Available'
+            cleaned_data['status'] = m.Asset.Status.ASSIGNED
+            if not assigned_on:
+                cleaned_data['assigned_on'] = timezone.localdate()
+        elif not employee and status == m.Asset.Status.ASSIGNED:
+            # If no employee is assigned, asset cannot be in 'Assigned' state
+            cleaned_data['status'] = m.Asset.Status.AVAILABLE
+            cleaned_data['assigned_on'] = None
+
+        return cleaned_data
 class AssetReturnForm(forms.Form):
     """Form used when returning/unassigning an asset."""
     returned_in_good_condition = forms.ChoiceField(

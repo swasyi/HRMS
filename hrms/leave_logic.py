@@ -1491,3 +1491,91 @@ def cancel_leave(application, requested_by_employee, is_hr=False):
     performer = getattr(requested_by_employee, 'user', None)
     _log_action(application, 'cancelled', performed_by=performer, remarks='Withdrawn by Employee' if not is_hr else 'Cancelled by HR')
     return application
+
+from datetime import date
+from django.db import transaction
+from . import models as m
+
+def auto_convert_absent_to_leaves(employee_ids, year, month, user):
+    """
+    Finds 'absent' records for confirmed employees in the target month/year.
+    Deducts: CL -> EL -> LWP fallback.
+    Updates AttendanceRecord and creates an approved LeaveApplication.
+    """
+    summary = {
+        'total_employees': 0,
+        'converted_days': 0,
+        'cl_count': 0,
+        'el_count': 0,
+        'lwp_count': 0,
+        'skipped_unconfirmed': 0,
+    }
+
+    # Fetch Leave Types by code or name
+    cl_type = m.LeaveType.objects.filter(code__iexact='CL').first() or m.LeaveType.objects.filter(name__icontains='Casual').first()
+    el_type = m.LeaveType.objects.filter(code__iexact='EL').first() or m.LeaveType.objects.filter(name__icontains='Earned').first()
+    lwp_type = m.LeaveType.objects.filter(code__iexact='LWP').first() or m.LeaveType.objects.filter(name__icontains='Without').first()
+
+    # Confirmed employees filter
+    employees = m.Employee.objects.filter(id__in=employee_ids)
+    confirmed_employees = [e for e in employees if getattr(e, 'employment_status', '').lower() in ['confirmed', 'permanent']]
+    summary['skipped_unconfirmed'] = len(employees) - len(confirmed_employees)
+    summary['total_employees'] = len(confirmed_employees)
+
+    with transaction.atomic():
+        for emp in confirmed_employees:
+            # Get leave balances for the year
+            cl_bal = m.EmployeeLeaveBalance.objects.filter(employee=emp, leave_type=cl_type, year=year).first() if cl_type else None
+            el_bal = m.EmployeeLeaveBalance.objects.filter(employee=emp, leave_type=el_type, year=year).first() if el_type else None
+
+            # Fetch all absent records for this month
+            absents = m.AttendanceRecord.objects.filter(
+                employee=emp,
+                date__year=year,
+                date__month=month,
+                status='absent'
+            ).order_by('date')
+
+            for rec in absents:
+                target_type = None
+                leave_code = 'LWP'
+
+                # Hierarchy: 1. CL -> 2. EL -> 3. LWP
+                if cl_bal and (cl_bal.closing_balance or 0) >= 1.0:
+                    cl_bal.closing_balance -= 1.0
+                    cl_bal.save()
+                    target_type = cl_type
+                    leave_code = 'CL'
+                    summary['cl_count'] += 1
+                elif el_bal and (el_bal.closing_balance or 0) >= 1.0:
+                    el_bal.closing_balance -= 1.0
+                    el_bal.save()
+                    target_type = el_type
+                    leave_code = 'EL'
+                    summary['el_count'] += 1
+                else:
+                    target_type = lwp_type
+                    leave_code = 'LWP'
+                    summary['lwp_count'] += 1
+
+                # Update attendance record status
+                rec.status = 'on_leave'
+                rec.notes = (rec.notes or '') + f" [Auto-approved as {leave_code} by {user.username}]"
+                rec.save()
+
+                # Create Approved Leave Application for payroll & audit sync
+                if target_type:
+                    m.LeaveApplication.objects.create(
+                        employee=emp,
+                        leave_type=target_type,
+                        start_date=rec.date,
+                        end_date=rec.date,
+                        number_of_days=1.0,
+                        status='approved',
+                        approved_by=user,
+                        reason=f"Auto-approved absence conversion to {leave_code}"
+                    )
+
+                summary['converted_days'] += 1
+
+    return summary

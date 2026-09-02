@@ -153,7 +153,16 @@
                   {{ form.holiday_calendar }}
                   {% if form.holiday_calendar.errors %}<div class="text-danger small mt-1">{{ form.holiday_calendar.errors|striptags }}</div>{% endif %}
                 </div>
+
+            <!-- ADD THIS BLOCK RIGHT HERE -->
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Attendance Punch Mode*</label>
+                {{ form.attendance_mode }}
+                <div class="form-text small text-muted">Office Only (Reception Tablet) vs Remote/Field Allowed (Personal Phone)</div>
+                {% if form.attendance_mode.errors %}<div class="text-danger small mt-1">{{ form.attendance_mode.errors|striptags }}</div>{% endif %}
               </div>
+              <!-- END OF ADDED BLOCK -->
+
             </div>
 
             <!-- SECTION 4: Managerial Hierarchy -->

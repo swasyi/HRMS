@@ -111,7 +111,9 @@ urlpatterns = [
     path('attendance/report/<int:emp_id>/<int:month>/<int:year>/', views.EmployeePunchReportView.as_view(), name='employee_punch_report'),
     path('attendance/calendars/manage/', views.HolidayCalendarManageView.as_view(), name='holiday_calendar_manage'),
     path('attendance/penalties/', views.PenaltyListView.as_view(), name='attendance_penalties'),
-
+    path(
+        'attendance/matrix/auto-approve-leaves/', views.AutoApproveAbsentLeaveView.as_view(),
+        name='auto_approve_absent_leaves'),
     # --- Manager ---
     path('manager/dashboard/', views.ManagerDashboardView.as_view(), name='manager_dashboard'),
     path('manager/leave/<int:pk>/approve/', views.ManagerLeaveApproveView.as_view(), name='manager_leave_approve'),

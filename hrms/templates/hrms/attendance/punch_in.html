@@ -1,10 +1,8 @@
+<!-- In hrms/templates/hrms/attendance/punch_in.html -->
 {% extends 'hrms/base.html' %}
 {% load static %}
 
 {% block title %}Mobile Punch In{% endblock %}
-
-
-<!--Remote / Field Worker Punch-In (-->
 
 {% block content %}
 <div class="container py-4">
@@ -14,26 +12,40 @@
             <small class="text-white-50">1:1 Face Verification & GPS Geotagging</small>
         </div>
         <div class="card-body p-4 text-center">
-            
-            <!-- Camera Viewfinder -->
-            <div class="position-relative bg-dark rounded mb-3 overflow-hidden" style="height: 300px;">
-                <video id="webcam" autoplay playsinline class="w-100 h-100" style="object-fit: cover;"></video>
-                <canvas id="snapshotCanvas" style="display: none;"></canvas>
-            </div>
 
-            <!-- Status Alert Box -->
-            <div id="statusBox" class="alert alert-info py-2" style="font-size: 14px;">
-                Allow Camera and GPS permissions to proceed.
-            </div>
+            <!-- ========================================================= -->
+            <!-- ADDED: Permission Check Warning Block                     -->
+            <!-- ========================================================= -->
+            {% if not is_remote_allowed %}
+                <div class="alert alert-danger text-start py-3">
+                    <h6 class="fw-bold mb-1"><i class="bi bi-shield-lock-fill me-2"></i>In-Office Employee Notice</h6>
+                    <p class="small mb-0">Your profile is configured for <b>In-Office Attendance Only</b>. Please mark your attendance using the office tablet stationed at the reception.</p>
+                </div>
+            {% else %}
+            <!-- ========================================================= -->
 
-            <!-- Punch Button -->
-            <button id="punchBtn" class="btn btn-success btn-lg w-100 font-weight-bold shadow-sm" onclick="handleMobilePunch()">
-                Verify Face & Check In
-            </button>
+                <!-- Camera Viewfinder -->
+                <div class="position-relative bg-dark rounded mb-3 overflow-hidden" style="height: 300px;">
+                    <video id="webcam" autoplay playsinline class="w-100 h-100" style="object-fit: cover;"></video>
+                    <canvas id="snapshotCanvas" style="display: none;"></canvas>
+                </div>
+
+                <!-- Status Alert Box -->
+                <div id="statusBox" class="alert alert-info py-2" style="font-size: 14px;">
+                    Allow Camera and GPS permissions to proceed.
+                </div>
+
+                <!-- Punch Button -->
+                <button id="punchBtn" class="btn btn-success btn-lg w-100 font-weight-bold shadow-sm" onclick="handleMobilePunch()">
+                    Verify Face & Check In
+                </button>
+
+            {% endif %}
         </div>
     </div>
 </div>
 
+{% if is_remote_allowed %}
 <script>
 let currentAttendanceId = null;
 const video = document.getElementById('webcam');
@@ -41,7 +53,6 @@ const canvas = document.getElementById('snapshotCanvas');
 const statusBox = document.getElementById('statusBox');
 const punchBtn = document.getElementById('punchBtn');
 
-// Initialize device camera
 navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 480, height: 480 } })
     .then(stream => video.srcObject = stream)
     .catch(err => {
@@ -72,9 +83,9 @@ function handleMobilePunch() {
 }
 
 function executeSubmission(lat, lng) {
-    canvas.width = video.videoWidth || 480;
-    canvas.height = video.videoHeight || 480;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.width = 480;
+    canvas.height = 480;
+    canvas.getContext('2d').drawImage(video, 0, 0, 480, 480);
 
     canvas.toBlob(blob => {
         const formData = new FormData();
@@ -108,13 +119,11 @@ function executeSubmission(lat, lng) {
     }, 'image/jpeg', 0.9);
 }
 
-// Background Location Ping every 3 minutes
 function startTrackingLoop() {
     setInterval(() => {
         if (!currentAttendanceId) return;
 
         navigator.geolocation.getCurrentPosition(pos => {
-
             fetch('{% url "hrms:api_location_ping" %}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -129,4 +138,5 @@ function startTrackingLoop() {
     }, 180000);
 }
 </script>
+{% endif %}
 {% endblock %}

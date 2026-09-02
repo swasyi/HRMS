@@ -247,6 +247,19 @@ class Employee(TimeStampedModel):
         help_text="Assign regional holiday template to this employee"
     )
 
+    # ADDED: Attendance Policy Mode (Office Kiosk vs Remote/Field Allowed)
+    # =========================================================================
+    class AttendanceMode(models.TextChoices):
+        OFFICE_ONLY = 'office_only', 'In-Office Kiosk Only (Delhi)'
+        REMOTE_FIELD = 'remote_field', 'Remote / Field Allowed (Mobile)'
+
+    attendance_mode = models.CharField(
+        max_length=20,
+        choices=AttendanceMode.choices,
+        default=AttendanceMode.OFFICE_ONLY,
+        help_text="Office Only: Punch via office tablet at reception. Remote/Field: Can punch via personal phone."
+    )
+
     def is_holiday(self, target_date):
         """Helper to check if a specific date is a holiday for this employee."""
         if not self.holiday_calendar:
@@ -1556,105 +1569,140 @@ class NoticeRead(TimeStampedModel):
 # ---------------------------------------------------------------------------
 # 8. ASSET MANAGEMENT (bonus)
 # ---------------------------------------------------------------------------
+
+# ===========================================================================
+# 8. ASSET MANAGEMENT & CUSTODY TRACKING ENGINE
+# ===========================================================================
+
 class AssetCategory(TimeStampedModel):
+    # Enforce database-level uniqueness for category names (prevents duplicate categories)
     name = models.CharField(max_length=100, unique=True)
-    # e.g., "serial_number,device_password,additional_details"
-    required_fields = models.TextField(blank=True, help_text="Comma separated field names to show in the form")
+    # Stores comma-separated list of dynamic fields needed for this specific hardware type
+    # e.g., "serial_number,device_password,model_number" for Laptops; "sim,phone_number" for SIM Cards
+    required_fields = models.TextField(
+        blank=True,
+        help_text="Comma-separated field identifiers to show dynamically on the creation form"
+    )
+
+    class Meta:
+        verbose_name_plural = "Asset Categories"
+        ordering = ['name'] # Keep categories alphabetically sorted in all dropdowns
 
     def __str__(self):
         return self.name
 
-    class Meta:
-        verbose_name_plural = "Asset Categories"
-
-
+    def clean(self):
+        # Case-insensitive validation: prevents creating 'laptop' if 'Laptop' already exists
+        self.name = self.name.strip()
+        if AssetCategory.objects.filter(name__iexact=self.name).exclude(pk=self.pk).exists():
+            from django.core.exceptions import ValidationError
+            raise ValidationError({'name': f"An asset category named '{self.name}' already exists."})
 
 
 class Asset(TimeStampedModel):
     class Status(models.TextChoices):
-        AVAILABLE = 'available', 'Available'
-        ASSIGNED = 'assigned', 'Assigned'
-        UNDER_REPAIR = 'under_repair', 'Under Repair'
-        RETIRED = 'retired', 'Retired'
+        AVAILABLE = 'available', 'Available in Warehouse' # Asset is unassigned and ready to issue
+        ASSIGNED = 'assigned', 'Issued / In Active Use'   # Asset is currently with an employee
+        UNDER_REPAIR = 'under_repair', 'Under Repair'     # Asset is sent for servicing/maintenance
+        RETIRED = 'retired', 'Retired / Disposed'         # Asset is written off or scrapped
 
+    # Scope asset ownership to company for multi-tenant isolation
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='assets')
-    category = models.ForeignKey(AssetCategory, on_delete=models.PROTECT, related_name='assets', null=True)
-    employee = models.ForeignKey(Employee, on_delete=models.SET_NULL, null=True, blank=True,
-                                  related_name='assets')
-    name = models.CharField(max_length=150)
-    asset_type = models.CharField(max_length=100, blank=True)
-    serial_number = models.CharField(max_length=100, blank=True)
-    sim = models.CharField(max_length=100, null=True, blank=True, help_text="SIM card number or provider details")
-    phone_number = models.CharField(max_length=20, null=True, blank=True, help_text="Phone number associated with the SIM/Device")
+    # Link to category; PROTECT prevents deleting a category that still contains active assets
+    category = models.ForeignKey(AssetCategory, on_delete=models.PROTECT, related_name='assets',null=True, blank=True)
+    # Current holder: Nullable because asset can be unassigned in warehouse
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assets',
+        help_text="Currently assigned employee. Leave empty if stored in office/warehouse."
+    )
 
-    device_password = models.CharField(max_length=255, blank=True, help_text="Login password or PIN for the device")
-    additional_details = models.TextField(blank=True, help_text="OS version, RAM, etc.")
-    purchase_date = models.DateField(null=True, blank=True)
+    # Core identification fields
+    name = models.CharField(max_length=150, help_text="e.g., MacBook Pro M3, Dell Latitude 5420")
+    model_number = models.CharField(max_length=100, blank=True, help_text="Manufacturer Model Number")
+    serial_number = models.CharField(max_length=100, blank=True, help_text="Unique hardware serial number / Service tag")
+
+    # Dynamic / Category-specific hardware specs
+    sim = models.CharField(max_length=100, null=True, blank=True, help_text="SIM Provider / ICCID Number")
+    phone_number = models.CharField(max_length=20, null=True, blank=True, help_text="Associated mobile phone number")
+    device_password = models.CharField(max_length=255, blank=True, help_text="PIN / Master login password")
+    additional_details = models.TextField(blank=True, help_text="RAM, SSD Capacity, Processor, Accessories included")
+
+    # Procurement & Vendor lifecycle tracking
+    vendor_name = models.CharField(max_length=200, blank=True, help_text="Supplier / Dealer company name")
+    vendor_contact = models.CharField(max_length=100, blank=True, help_text="Supplier phone, email, or representative name")
+    purchase_date = models.DateField(null=True, blank=True, help_text="Date of procurement")
+    warranty_expiry = models.DateField(null=True, blank=True, help_text="Warranty end date for claim tracking")
+    invoice_document = models.FileField(
+        upload_to='assets/invoices/',
+        null=True,
+        blank=True,
+        help_text="Upload scanned tax invoice or procurement bill (PDF/JPG)"
+    )
+
+    # Status & Handover details
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.AVAILABLE)
-    assigned_on = models.DateField(null=True, blank=True)
-    remarks = models.CharField(max_length=255, blank=True)
-    # Module G: Asset lifecycle fields
-    warranty_expiry = models.DateField(null=True, blank=True, help_text='Warranty expiry date')
-    vendor_name = models.CharField(max_length=200, blank=True, help_text='Vendor/Supplier name')
-    vendor_contact = models.CharField(max_length=100, blank=True, help_text='Vendor phone or email')
-    invoice_document = models.FileField(upload_to='assets/invoices/', null=True, blank=True, help_text='Purchase invoice PDF/Image')
+    assigned_on = models.DateField(null=True, blank=True, help_text="Date when current holder received the asset")
+    remarks = models.TextField(blank=True, help_text="Internal notes on physical condition, scratches, or upgrades")
+
+    class Meta:
+        ordering = ['-created_at']
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.serial_number or 'No SN'})"
 
+    def is_under_warranty(self):
+        """Helper to quickly check warranty status on UI cards."""
+        if self.warranty_expiry:
+            return self.warranty_expiry >= date.today()
+        return False
 
-    def save(self, *args, **kwargs):
-        # Capture whether this is a brand new record BEFORE saving
-        is_new = self.pk is None
-
-        if not is_new:
-            old_asset = Asset.objects.get(pk=self.pk)
-            if old_asset.employee != self.employee:
-                # Close old assignment history
-                if old_asset.employee:
-                    AssetAssignmentHistory.objects.filter(
-                        asset=self,
-                        employee=old_asset.employee,
-                        is_still_using=True
-                    ).update(
-                        returned_date=models.functions.Now(),
-                        is_still_using=False
-                    )
-                # Start new assignment history
-                if self.employee:
-                    AssetAssignmentHistory.objects.create(
-                        asset=self,
-                        employee=self.employee,
-                        is_still_using=True
-                    )
-
-        super().save(*args, **kwargs)
-
-        # Handle first-time creation with an assigned employee
-        if is_new and self.employee:
-            AssetAssignmentHistory.objects.create(
-                asset=self,
-                employee=self.employee,
-                is_still_using=True
-            )
 
 class AssetAssignmentHistory(TimeStampedModel):
+    """
+    Tracks complete lifecycle custody: who held the asset, from when,
+    until when, return condition, and exact duration handled.
+    """
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='history')
-    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
-    assigned_date = models.DateField(auto_now_add=True)
-    returned_date = models.DateField(null=True, blank=True)
-    is_still_using = models.BooleanField(default=True)
-    # Module G: Return condition tracking
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='asset_history')
+    # Handover date
+    assigned_date = models.DateField(default=timezone.localdate, help_text="Date handover occurred")
+    # Return date (null while employee is actively using the asset)
+    returned_date = models.DateField(null=True, blank=True, help_text="Date returned to company custody")
+    # Active flag to easily find the open custody session
+    is_still_using = models.BooleanField(default=True, help_text="True if asset is currently with this employee")
+    # Return verification audit
     returned_in_good_condition = models.BooleanField(
-        null=True, blank=True, help_text='Was the asset returned in good condition?'
+        null=True,
+        blank=True,
+        help_text="True if returned working with no physical damage; False if damaged/defective"
     )
-    return_remarks = models.TextField(
-        blank=True, help_text='Mandatory remarks if not returned in good condition'
-    )
-    assignment_notes = models.TextField(blank=True, help_text='Notes at time of assignment')
+    return_remarks = models.TextField(blank=True, help_text="Mandatory audit notes if returned damaged or parts missing")
+    assignment_notes = models.TextField(blank=True, help_text="Condition remarks at time of issuance")
 
     class Meta:
         ordering = ['-assigned_date']
+
+    def __str__(self):
+        return f"{self.asset.name} -> {self.employee.full_name} ({self.assigned_date})"
+
+    @property
+    def duration_display(self):
+        """Calculates and returns human-readable tenure the employee held the asset."""
+        end = self.returned_date or timezone.localdate()
+        start = self.assigned_date
+        if not start:
+            return "--"
+        days_count = (end - start).days
+        if days_count < 30:
+            return f"{days_count} day(s)"
+        months = days_count // 30
+        remaining_days = days_count % 30
+        return f"{months} mo, {remaining_days} days"
+
 
 # ---------------------------------------------------------------------------
 # 9. PERFORMANCE (bonus)
