@@ -3,6 +3,55 @@
 
 {% block title %}Delhi Office Attendance Kiosk{% endblock %}
 
+{% block extra_css %}
+<style>
+    .kiosk-viewport { position: relative; height: 330px; background: #0f172a; border-radius: 16px; overflow: hidden; }
+    .kiosk-viewport video { width: 100%; height: 100%; object-fit: cover; transition: filter 0.3s ease; }
+    .kiosk-viewport.scanning video { filter: blur(2px) brightness(0.5); }
+
+    /* Scanning overlay */
+    .kiosk-overlay {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 14px; z-index: 5;
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .kiosk-overlay.active { opacity: 1; pointer-events: all; }
+
+    /* Scanning pulse ring */
+    .scan-ring {
+        width: 80px; height: 80px;
+        border: 4px solid rgba(99, 102, 241, 0.25);
+        border-top-color: #6366f1;
+        border-radius: 50%;
+        animation: scan-spin 0.7s linear infinite;
+    }
+    @keyframes scan-spin { to { transform: rotate(360deg); } }
+
+    /* Result card that appears inside viewport */
+    .result-card {
+        padding: 16px 24px;
+        border-radius: 12px;
+        text-align: center;
+        animation: slideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    .result-card.success { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .result-card.error { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); }
+    @keyframes slideUp { to { transform: translateY(0); opacity: 1; } }
+
+    .result-icon { font-size: 40px; }
+    .result-name { color: #fff; font-size: 18px; font-weight: 700; margin: 6px 0 2px; }
+    .result-action { color: rgba(255,255,255,0.7); font-size: 13px; font-weight: 600; }
+    .result-time { color: #10b981; font-size: 22px; font-weight: 800; letter-spacing: 0.02em; }
+    .result-time.out { color: #f59e0b; }
+    .scan-text { color: rgba(255,255,255,0.75); font-size: 13px; font-weight: 600; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container py-4">
     <div class="card shadow-sm border-0 mx-auto" style="max-width: 520px; border-radius: 16px; overflow: hidden;">
@@ -13,13 +62,19 @@
 
         <div class="card-body p-4 text-center">
             <!-- Viewfinder -->
-            <div class="position-relative bg-black rounded-4 overflow-hidden mb-3" style="height: 330px;">
-                <video id="kioskVideo" autoplay playsinline class="w-100 h-100" style="object-fit: cover;"></video>
+            <div class="kiosk-viewport mb-3" id="viewport">
+                <video id="kioskVideo" autoplay playsinline></video>
                 <canvas id="kioskCanvas" style="display: none;"></canvas>
-            </div>
 
-            <!-- Status Box -->
-            <div id="kioskStatus" class="alert d-none py-2 fw-semibold" style="font-size: 14px;"></div>
+                <!-- Scanning overlay -->
+                <div class="kiosk-overlay" id="scanOverlay">
+                    <div class="scan-ring"></div>
+                    <div class="scan-text">Identifying face…</div>
+                </div>
+
+                <!-- Result overlay -->
+                <div class="kiosk-overlay" id="resultOverlay"></div>
+            </div>
 
             <!-- Action Button -->
             <button id="scanBtn" class="btn btn-primary btn-lg w-100 fw-bold py-2 rounded-pill shadow-sm" onclick="scanFace()">
@@ -32,8 +87,10 @@
 <script>
 const video = document.getElementById('kioskVideo');
 const canvas = document.getElementById('kioskCanvas');
-const statusBox = document.getElementById('kioskStatus');
 const scanBtn = document.getElementById('scanBtn');
+const viewport = document.getElementById('viewport');
+const scanOverlay = document.getElementById('scanOverlay');
+const resultOverlay = document.getElementById('resultOverlay');
 
 // Initialize camera feed
 navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 480, height: 480 } })
@@ -41,19 +98,25 @@ navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 480, h
         video.srcObject = stream;
     })
     .catch(err => {
-        statusBox.className = 'alert alert-danger py-2';
-        statusBox.innerText = 'Camera access blocked. Please allow browser camera access.';
-        statusBox.classList.remove('d-none');
+        resultOverlay.innerHTML = `
+            <div class="result-card error">
+                <div class="result-icon">📷</div>
+                <div class="result-name">Camera Blocked</div>
+                <div class="result-action">Please allow browser camera access.</div>
+            </div>`;
+        resultOverlay.classList.add('active');
         scanBtn.disabled = true;
     });
 
 function scanFace() {
     scanBtn.disabled = true;
-    statusBox.className = 'alert alert-info py-2';
-    statusBox.innerText = 'Capturing & Verifying...';
-    statusBox.classList.remove('d-none');
 
-    // Freeze snapshot at 400x400 for sub-second network transfer
+    // Show scanning state
+    viewport.classList.add('scanning');
+    scanOverlay.classList.add('active');
+    resultOverlay.classList.remove('active');
+
+    // Capture frame
     canvas.width = 400;
     canvas.height = 400;
     canvas.getContext('2d').drawImage(video, 0, 0, 400, 400);
@@ -70,24 +133,48 @@ function scanFace() {
 
             const data = await res.json();
 
+            // Hide scanning state
+            scanOverlay.classList.remove('active');
+            viewport.classList.remove('scanning');
+
             if (res.ok) {
                 const isPunchIn = data.action === "Punch In";
-                statusBox.className = isPunchIn ? 'alert alert-success py-2' : 'alert alert-warning py-2';
-                statusBox.innerHTML = `<strong>${data.employee_name}</strong>: ${data.action} at ${data.time}`;
+                resultOverlay.innerHTML = `
+                    <div class="result-card success">
+                        <div class="result-icon">${isPunchIn ? '✅' : '👋'}</div>
+                        <div class="result-name">${data.employee_name}</div>
+                        <div class="result-action">${data.action}</div>
+                        <div class="result-time ${isPunchIn ? '' : 'out'}">${data.time}</div>
+                    </div>`;
             } else {
-                statusBox.className = 'alert alert-danger py-2';
-                statusBox.innerText = data.error || 'Face not recognized.';
+                resultOverlay.innerHTML = `
+                    <div class="result-card error">
+                        <div class="result-icon">❌</div>
+                        <div class="result-name">${data.error || 'Face not recognized.'}</div>
+                        <div class="result-action">Please try again.</div>
+                    </div>`;
             }
+
+            resultOverlay.classList.add('active');
+
         } catch (e) {
-            statusBox.className = 'alert alert-danger py-2';
-            statusBox.innerText = 'Server error. Please try again.';
-        } finally {
-            // Reset for the next person after 3 seconds
-            setTimeout(() => {
-                scanBtn.disabled = false;
-                statusBox.classList.add('d-none');
-            }, 3000);
+            scanOverlay.classList.remove('active');
+            viewport.classList.remove('scanning');
+            resultOverlay.innerHTML = `
+                <div class="result-card error">
+                    <div class="result-icon">⚠️</div>
+                    <div class="result-name">Server Error</div>
+                    <div class="result-action">Please try again.</div>
+                </div>`;
+            resultOverlay.classList.add('active');
         }
+
+        // Auto-reset for next person after 4 seconds
+        setTimeout(() => {
+            scanBtn.disabled = false;
+            resultOverlay.classList.remove('active');
+        }, 4000);
+
     }, 'image/jpeg', 0.85);
 }
 </script>

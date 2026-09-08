@@ -3,6 +3,53 @@
 
 {% block title %}Enroll Employee Face{% endblock %}
 
+{% block extra_css %}
+<style>
+    .enroll-viewport { position: relative; height: 260px; background: #0f172a; border-radius: 10px; overflow: hidden; }
+    .enroll-viewport video { width: 100%; height: 100%; object-fit: cover; transition: filter 0.3s ease; }
+
+    .enroll-overlay {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 10px; z-index: 5;
+        background: rgba(15, 23, 42, 0.8);
+        backdrop-filter: blur(4px);
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.3s ease;
+    }
+    .enroll-overlay.active { opacity: 1; pointer-events: all; }
+
+    .enroll-spinner {
+        width: 44px; height: 44px;
+        border: 3px solid rgba(99, 102, 241, 0.25);
+        border-top-color: #6366f1;
+        border-radius: 50%;
+        animation: espin 0.7s linear infinite;
+    }
+    @keyframes espin { to { transform: rotate(360deg); } }
+
+    .enroll-check {
+        width: 52px; height: 52px; border-radius: 50%;
+        background: #10b981;
+        display: flex; align-items: center; justify-content: center;
+        animation: ePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        transform: scale(0);
+    }
+    .enroll-check i { font-size: 26px; color: #fff; }
+    @keyframes ePop { to { transform: scale(1); } }
+
+    .ov-text { color: rgba(255,255,255,0.8); font-size: 12px; font-weight: 600; text-align: center; }
+
+    /* Snapshot flash effect */
+    .flash { animation: flashAnim 0.3s ease-out; }
+    @keyframes flashAnim {
+        0% { filter: brightness(3); }
+        100% { filter: brightness(1); }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container py-4">
     <div class="card shadow-sm border-0 mx-auto" style="max-width: 550px; border-radius: 12px;">
@@ -28,9 +75,23 @@
                 <!-- Live Camera Preview & Snapshot -->
                 <div class="mb-3 text-center">
                     <label class="form-label font-weight-bold d-block text-start">Capture or Upload Face</label>
-                    <div class="position-relative bg-dark rounded overflow-hidden mb-2" style="height: 260px;">
-                        <video id="enrollVideo" autoplay playsinline class="w-100 h-100" style="object-fit: cover;"></video>
+                    <div class="enroll-viewport mb-2" id="enrollViewport">
+                        <video id="enrollVideo" autoplay playsinline></video>
                         <canvas id="enrollCanvas" style="display: none;"></canvas>
+
+                        <!-- Processing overlay -->
+                        <div class="enroll-overlay" id="processOverlay">
+                            <div class="enroll-spinner"></div>
+                            <div class="ov-text">Extracting facial vectors…</div>
+                        </div>
+
+                        <!-- Success overlay -->
+                        <div class="enroll-overlay" id="enrollSuccessOverlay">
+                            <div class="enroll-check">
+                                <i class="bi bi-check-lg"></i>
+                            </div>
+                            <div class="ov-text" id="enrollSuccessText">Enrolled!</div>
+                        </div>
                     </div>
 
                     <button type="button" class="btn btn-outline-secondary btn-sm mb-2 w-100" onclick="takeWebcamSnapshot()">
@@ -59,18 +120,36 @@ const fileInput = document.getElementById('facePhoto');
 const form = document.getElementById('enrollForm');
 const statusBox = document.getElementById('enrollStatus');
 const submitBtn = document.getElementById('submitBtn');
+const processOverlay = document.getElementById('processOverlay');
+const enrollSuccessOverlay = document.getElementById('enrollSuccessOverlay');
+const viewport = document.getElementById('enrollViewport');
 
 let capturedBlob = null;
+let enrollStream = null;
 
 // Start camera stream
 navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 640 } })
-    .then(stream => video.srcObject = stream)
+    .then(stream => {
+        enrollStream = stream;
+        video.srcObject = stream;
+    })
     .catch(err => console.log('Camera preview optional.'));
+
+function stopEnrollCamera() {
+    if (enrollStream) {
+        enrollStream.getTracks().forEach(track => track.stop());
+        enrollStream = null;
+    }
+}
 
 function takeWebcamSnapshot() {
     canvas.width = video.videoWidth || 480;
     canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0);
+
+    // Flash effect
+    video.classList.add('flash');
+    setTimeout(() => video.classList.remove('flash'), 300);
 
     canvas.toBlob(blob => {
         capturedBlob = blob;
@@ -109,8 +188,12 @@ form.addEventListener('submit', async function(e) {
     }
 
     submitBtn.disabled = true;
+
+    // Show processing overlay
+    processOverlay.classList.add('active');
+    enrollSuccessOverlay.classList.remove('active');
     statusBox.className = 'alert alert-info py-2';
-    statusBox.innerText = 'Extracting facial vectors...';
+    statusBox.innerText = 'Extracting facial vectors…';
     statusBox.classList.remove('d-none');
 
     try {
@@ -121,16 +204,38 @@ form.addEventListener('submit', async function(e) {
 
         const data = await response.json();
 
+        processOverlay.classList.remove('active');
+
         if (response.ok) {
+            // Show success overlay and stop camera
+            document.getElementById('enrollSuccessText').innerText =
+                data.message || 'Face registered successfully!';
+            enrollSuccessOverlay.classList.add('active');
+            stopEnrollCamera();
+
             statusBox.className = 'alert alert-success py-2';
             statusBox.innerText = data.message || 'Face registered successfully!';
             capturedBlob = null;
             form.reset();
         } else {
-            statusBox.className = 'alert alert-danger py-2';
-            statusBox.innerText = data.error || 'Failed to detect face. Ensure good lighting and look straight at the camera.';
+            // Enhanced error messaging
+            let errorMsg = data.error || 'Failed to detect face.';
+            if (response.status === 409) {
+                statusBox.className = 'alert alert-warning py-2';
+            } else {
+                statusBox.className = 'alert alert-danger py-2';
+                if (!data.error) {
+                    errorMsg = 'Could not detect a face. Tips:\n'
+                        + '• Ensure good, even lighting\n'
+                        + '• Look straight at the camera\n'
+                        + '• Remove sunglasses or hats\n'
+                        + '• Avoid tilting your head';
+                }
+            }
+            statusBox.innerText = errorMsg;
         }
     } catch (err) {
+        processOverlay.classList.remove('active');
         statusBox.className = 'alert alert-danger py-2';
         statusBox.innerText = 'Server error processing the image.';
     } finally {

@@ -7426,31 +7426,74 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import Employee, EmployeeBiometric, AttendanceRecord, EmployeeLocationLog
 from .biometrics import verify_1_to_1, match_1_to_n, extract_face_encoding
 
+import io
+import logging
+from concurrent.futures import ThreadPoolExecutor
 
-# 1. ENROLL EMPLOYEE FACE (HR / Admin Action)
-# class EnrollFaceBiometricView(LoginRequiredMixin, View):
-#     def post(self, request, *args, **kwargs):
-#         employee_id = request.POST.get('employee_id')
-#         photo = request.FILES.get('photo')
-#
-#         if not employee_id or not photo:
-#             return JsonResponse({'error': 'Employee ID and photo required.'}, status=400)
-#
-#         employee = Employee.objects.filter(id=employee_id).first()
-#         if not employee:
-#             return JsonResponse({'error': 'Employee not found.'}, status=404)
-#
-#         encoding = extract_face_encoding(photo)
-#         if not encoding:
-#             return JsonResponse({'error': 'Could not detect a clear face in the photo.'}, status=400)
-#
-#         EmployeeBiometric.objects.update_or_create(
-#             employee=employee,
-#             defaults={'face_encoding': encoding, 'registered_photo': photo}
-#         )
-#         return JsonResponse({'status': 'success', 'message': f'Face enrolled for {employee.full_name}'})
+_bio_logger = logging.getLogger('hrms.biometrics')
 
-# In hrms/views.py
+# Background thread pool for async face verification (3 workers for peak hour)
+_BIO_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix='bio-verify')
+
+
+# ─────────────────────────────────────────────────────────────
+# Background Verification Helpers
+# ─────────────────────────────────────────────────────────────
+def _verify_mobile_async(record_id, photo_bytes, reference_encoding):
+    """
+    Runs in a background thread after the HTTP response has already been sent.
+    Verifies the captured face against the employee's registered embedding.
+    """
+    from django.db import connection
+    try:
+        is_match, msg = verify_1_to_1(photo_bytes, reference_encoding)
+        record = AttendanceRecord.objects.get(pk=record_id)
+
+        if is_match:
+            record.is_face_verified = True
+            record.save(update_fields=['is_face_verified', 'updated_at'])
+            _bio_logger.info("[Async Verify] Record %s — MATCH (%s)", record_id, msg)
+        else:
+            record.remarks = f"Biometric mismatch – Flagged for HR review ({msg})"
+            record.save(update_fields=['remarks', 'updated_at'])
+            _bio_logger.warning("[Async Verify] Record %s — MISMATCH (%s)", record_id, msg)
+
+    except Exception as exc:
+        _bio_logger.error("[Async Verify] Record %s — ERROR: %s", record_id, exc)
+    finally:
+        connection.close()
+
+
+def _verify_kiosk_async(record_id, photo_bytes, matched_employee_id):
+    """
+    Runs in a background thread to re-confirm kiosk match and update record.
+    The kiosk already identified the employee via vectorized 1:N; this re-verifies 1:1.
+    """
+    from django.db import connection
+    try:
+        biometric = EmployeeBiometric.objects.filter(employee_id=matched_employee_id).first()
+        if not biometric:
+            return
+
+        is_match, msg = verify_1_to_1(photo_bytes, biometric.face_encoding)
+        record = AttendanceRecord.objects.get(pk=record_id)
+
+        if is_match:
+            record.is_face_verified = True
+            record.save(update_fields=['is_face_verified', 'updated_at'])
+        else:
+            record.remarks = f"Kiosk re-verify mismatch ({msg}) – Flagged for HR"
+            record.save(update_fields=['remarks', 'updated_at'])
+
+    except Exception as exc:
+        _bio_logger.error("[Async Kiosk Verify] Record %s — ERROR: %s", record_id, exc)
+    finally:
+        connection.close()
+
+
+# ─────────────────────────────────────────────────────────────
+# 1. FACE ENROLLMENT (HR / Admin Action)
+# ─────────────────────────────────────────────────────────────
 class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
     template_name = 'hrms/attendance/enroll_face.html'
 
@@ -7474,13 +7517,19 @@ class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
 
         encoding = extract_face_encoding(photo)
         if not encoding:
-            return JsonResponse({'error': 'Could not detect a clear face in the photo.'}, status=400)
-        #Check if this face is ALREADY enrolled for ANY OTHER employee
+            return JsonResponse({
+                'error': 'Could not detect a clear face in the photo. '
+                         'Ensure good lighting, face the camera directly, '
+                         'and avoid tilting your head.'
+            }, status=400)
+
+        # Check if this face is ALREADY enrolled for ANY OTHER employee
         existing_biometrics = EmployeeBiometric.objects.exclude(employee=employee).select_related('employee')
         duplicate_emp, _ = match_1_to_n(photo, existing_biometrics, threshold=0.32)
         if duplicate_emp:
             return JsonResponse({
-                'error': f'Duplicate Face Detected! This face is already enrolled under {duplicate_emp.full_name} ({duplicate_emp.employee_code}).'
+                'error': f'Duplicate Face Detected! This face is already enrolled under '
+                         f'{duplicate_emp.full_name} ({duplicate_emp.employee_code}).'
             }, status=409)
 
         EmployeeBiometric.objects.update_or_create(
@@ -7489,7 +7538,10 @@ class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
         )
         return JsonResponse({'status': 'success', 'message': f'Face enrolled for {employee.full_name}'})
 
-# 2. REMOTE / MOBILE WORKER PUNCH VIEW (1:1 Verification)
+
+# ─────────────────────────────────────────────────────────────
+# 2. MOBILE PUNCH (1:1 — Instant Capture, Async Verification)
+# ─────────────────────────────────────────────────────────────
 class MobilePunchInView(LoginRequiredMixin, View):
     @method_decorator(csrf_exempt)
     def dispatch(self, *args, **kwargs):
@@ -7501,129 +7553,11 @@ class MobilePunchInView(LoginRequiredMixin, View):
         except AttributeError:
             return JsonResponse({'error': 'No linked employee profile found.'}, status=400)
 
-        photo = request.FILES.get('punch_photo')
-        lat = request.POST.get('latitude')
-        lng = request.POST.get('longitude')
-
-        if not photo or not lat or not lng:
-            return JsonResponse({'error': 'Photo and GPS coordinates are required.'}, status=400)
-
-        biometric = getattr(employee, 'biometric', None)
-        if not biometric:
-            return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
-
-        is_match, msg = verify_1_to_1(photo, biometric.face_encoding)
-        if not is_match:
-            return JsonResponse({'error': f'Face verification failed: {msg}'}, status=401)
-
-        today = timezone.localdate()
-        attendance, created = AttendanceRecord.objects.get_or_create(
-            employee=employee,
-            attendance_date=today,
-            defaults={
-                'check_in': timezone.now(),
-                'punch_in_latitude': lat,
-                'punch_in_longitude': lng,
-                'punch_in_photo': photo,
-                'is_face_verified': True,
-                'punch_source': 'mobile',
-                'status': AttendanceRecord.Status.PRESENT,
-            }
-        )
-
-        if not created and not attendance.check_in:
-            attendance.check_in = timezone.now()
-            attendance.punch_in_latitude = lat
-            attendance.punch_in_longitude = lng
-            attendance.punch_in_photo = photo
-            attendance.is_face_verified = True
-            attendance.punch_source = 'mobile'
-            attendance.status = AttendanceRecord.Status.PRESENT
-            attendance.save()
-
-        return JsonResponse({
-            'status': 'success',
-            'attendance_id': attendance.id,
-            'check_in': attendance.check_in.strftime('%I:%M %p')
-        })
-
-class MobilePunchInView(LoginRequiredMixin, View):
-    @method_decorator(csrf_exempt)
-    def dispatch(self, *args, **kwargs):
-        return super().dispatch(*args, **kwargs)
-
-    def post(self, request, *args, **kwargs):
-        try:
-            employee = request.user.employee_profile
-        except AttributeError:
-            return JsonResponse({'error': 'No linked employee profile found.'}, status=400)
-
-        # ---------------------------------------------------------------------
-        # ADDED: Security check for Attendance Mode
-        # ---------------------------------------------------------------------
+        # Security check for attendance mode
         if employee.attendance_mode != Employee.AttendanceMode.REMOTE_FIELD:
             return JsonResponse({
-                'error': 'Remote mobile punch is disabled for your profile. Please punch using the office tablet at reception.'
-            }, status=403)
-        # ---------------------------------------------------------------------
-
-        photo = request.FILES.get('punch_photo')
-        lat = request.POST.get('latitude')
-        lng = request.POST.get('longitude')
-
-        if not photo or not lat or not lng:
-            return JsonResponse({'error': 'Photo and GPS coordinates are required.'}, status=400)
-
-        biometric = getattr(employee, 'biometric', None)
-        if not biometric:
-            return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
-
-        is_match, msg = verify_1_to_1(photo, biometric.face_encoding)
-        if not is_match:
-            return JsonResponse({'error': f'Face verification failed: {msg}'}, status=401)
-
-        today = timezone.localdate()
-        attendance, created = AttendanceRecord.objects.get_or_create(
-            employee=employee,
-            attendance_date=today,
-            defaults={
-                'check_in': timezone.now(),
-                'punch_in_latitude': lat,
-                'punch_in_longitude': lng,
-                'punch_in_photo': photo,
-                'is_face_verified': True,
-                'punch_source': 'mobile',
-                'status': AttendanceRecord.Status.PRESENT,
-            }
-        )
-
-        if not created and not attendance.check_in:
-            attendance.check_in = timezone.now()
-            attendance.punch_in_latitude = lat
-            attendance.punch_in_longitude = lng
-            attendance.punch_in_photo = photo
-            attendance.is_face_verified = True
-            attendance.punch_source = 'mobile'
-            attendance.status = AttendanceRecord.Status.PRESENT
-            attendance.save()
-            action_type = "Punch In"
-
-
-        return JsonResponse({
-            'status': 'success',
-            'attendance_id': attendance.id,
-            'check_in': attendance.check_in.strftime('%I:%M %p')
-        })
-
-    def post(self, request, *args, **kwargs):
-        try:
-            employee = request.user.employee_profile
-        except AttributeError:
-            return JsonResponse({'error': 'No linked employee profile found.'}, status=400)
-
-        if employee.attendance_mode != Employee.AttendanceMode.REMOTE_FIELD:
-            return JsonResponse({
-                'error': 'Remote mobile punch is disabled for your profile. Please punch using the office tablet at reception.'
+                'error': 'Remote mobile punch is disabled for your profile. '
+                         'Please punch using the office tablet at reception.'
             }, status=403)
 
         photo = request.FILES.get('punch_photo')
@@ -7637,22 +7571,25 @@ class MobilePunchInView(LoginRequiredMixin, View):
         if not biometric:
             return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
 
-        is_match, msg = verify_1_to_1(photo, biometric.face_encoding)
-        if not is_match:
-            return JsonResponse({'error': f'Face verification failed: {msg}'}, status=401)
-
+        # ──────────────────────────────────────────────────────
+        # INSTANT CAPTURE: Lock the timestamp NOW, before any ML
+        # ──────────────────────────────────────────────────────
+        punch_time = timezone.now()
         today = timezone.localdate()
-        now = timezone.now()
+
+        # Read photo bytes into memory for the background thread
+        photo_bytes = photo.read()
+        photo.seek(0)  # Reset for Django's file save
 
         attendance, created = AttendanceRecord.objects.get_or_create(
             employee=employee,
             attendance_date=today,
             defaults={
-                'check_in': now,
+                'check_in': punch_time,
                 'punch_in_latitude': lat,
                 'punch_in_longitude': lng,
                 'punch_in_photo': photo,
-                'is_face_verified': True,
+                'is_face_verified': False,  # Will be set True by background thread
                 'punch_source': 'mobile',
                 'status': AttendanceRecord.Status.PRESENT,
             }
@@ -7660,35 +7597,49 @@ class MobilePunchInView(LoginRequiredMixin, View):
 
         if not created:
             if not attendance.check_in:
-                # 1. First Punch In of the day
-                attendance.check_in = now
+                # First Punch In of the day
+                attendance.check_in = punch_time
                 attendance.punch_in_latitude = lat
                 attendance.punch_in_longitude = lng
                 attendance.punch_in_photo = photo
-                attendance.is_face_verified = True
+                attendance.is_face_verified = False
                 attendance.punch_source = 'mobile'
                 attendance.status = AttendanceRecord.Status.PRESENT
                 attendance.save()
                 action_type = "Punch In"
             else:
-                # 2. Punch Out (Any subsequent scan logs Punch Out)
-                attendance.check_out = now
+                # Punch Out (any subsequent scan)
+                attendance.check_out = punch_time
                 attendance.punch_out_latitude = lat
                 attendance.punch_out_longitude = lng
-                attendance.save()  # Triggers total_hours recalculation in AttendanceRecord.save()
+                attendance.save()  # Triggers total_hours recalculation
                 action_type = "Punch Out"
         else:
             action_type = "Punch In"
+
+        # ──────────────────────────────────────────────────────
+        # ASYNC VERIFICATION: Offload to background thread
+        # ──────────────────────────────────────────────────────
+        _BIO_POOL.submit(
+            _verify_mobile_async,
+            attendance.id,
+            photo_bytes,
+            biometric.face_encoding
+        )
 
         return JsonResponse({
             'status': 'success',
             'action': action_type,
             'attendance_id': attendance.id,
-            'time': now.strftime('%I:%M %p'),
-            'message': f'{action_type} successful at {now.strftime("%I:%M %p")}'
+            'time': punch_time.strftime('%I:%M %p'),
+            'message': f'{action_type} recorded at {punch_time.strftime("%I:%M %p")}. '
+                       f'Face verification in progress…'
         })
 
-# 3. DELHI OFFICE SHARED KIOSK PUNCH VIEW (1:N Matching)
+
+# ─────────────────────────────────────────────────────────────
+# 3. KIOSK PUNCH (1:N — Vectorised Matching, Async Re-verify)
+# ─────────────────────────────────────────────────────────────
 class KioskPunchInView(View):
     @method_decorator(csrf_exempt)
     def dispatch(self, *args, **kwargs):
@@ -7699,48 +7650,11 @@ class KioskPunchInView(View):
         if not photo:
             return JsonResponse({'error': 'Camera frame required.'}, status=400)
 
-        all_biometrics = EmployeeBiometric.objects.select_related('employee').all()
-        matched_employee, msg = match_1_to_n(photo, all_biometrics)
+        # Read photo bytes for background re-verification
+        photo_bytes = photo.read()
+        photo.seek(0)
 
-        if not matched_employee:
-            return JsonResponse({'error': 'Face not recognized.'}, status=401)
-
-        today = timezone.localdate()
-        attendance, created = AttendanceRecord.objects.get_or_create(
-            employee=matched_employee,
-            attendance_date=today,
-            defaults={
-                'check_in': timezone.now(),
-                'punch_in_photo': photo,
-                'is_face_verified': True,
-                'punch_source': 'kiosk',
-                'status': AttendanceRecord.Status.PRESENT,
-            }
-        )
-
-        if not created and not attendance.check_in:
-            attendance.check_in = timezone.now()
-            attendance.punch_in_photo = photo
-            attendance.is_face_verified = True
-            attendance.punch_source = 'kiosk'
-            attendance.status = AttendanceRecord.Status.PRESENT
-            attendance.save()
-
-        return JsonResponse({
-            'status': 'success',
-            'employee_name': matched_employee.full_name,
-            'check_in': attendance.check_in.strftime('%I:%M %p')
-        })
-class KioskPunchInView(View):
-    @method_decorator(csrf_exempt)
-    def dispatch(self, *args, **kwargs):
-        return super().dispatch(*args, **kwargs)
-
-    def post(self, request, *args, **kwargs):
-        photo = request.FILES.get('punch_photo')
-        if not photo:
-            return JsonResponse({'error': 'Camera frame required.'}, status=400)
-
+        # Vectorised 1:N match — fast NumPy batch operation
         all_biometrics = EmployeeBiometric.objects.select_related('employee').all()
         matched_employee, msg = match_1_to_n(photo, all_biometrics)
 
@@ -7756,7 +7670,7 @@ class KioskPunchInView(View):
             defaults={
                 'check_in': now,
                 'punch_in_photo': photo,
-                'is_face_verified': True,
+                'is_face_verified': True,  # Already verified via 1:N match
                 'punch_source': 'kiosk',
                 'status': AttendanceRecord.Status.PRESENT,
             }
@@ -7775,10 +7689,18 @@ class KioskPunchInView(View):
             else:
                 # Punch Out
                 attendance.check_out = now
-                attendance.save()  # Recalculates gross hours and thresholds automatically
+                attendance.save()  # Recalculates gross hours and thresholds
                 action_type = "Punch Out"
         else:
             action_type = "Punch In"
+
+        # Optional: background re-verification for audit trail
+        _BIO_POOL.submit(
+            _verify_kiosk_async,
+            attendance.id,
+            photo_bytes,
+            matched_employee.id,
+        )
 
         return JsonResponse({
             'status': 'success',
@@ -7788,7 +7710,10 @@ class KioskPunchInView(View):
             'message': f'{matched_employee.full_name}: {action_type} recorded at {now.strftime("%I:%M %p")}'
         })
 
+
+# ─────────────────────────────────────────────────────────────
 # 4. LOCATION PING API (Background Tracking Loop)
+# ─────────────────────────────────────────────────────────────
 class LocationPingView(LoginRequiredMixin, View):
     @method_decorator(csrf_exempt)
     def dispatch(self, *args, **kwargs):
@@ -7809,11 +7734,13 @@ class LocationPingView(LoginRequiredMixin, View):
             return JsonResponse({'error': str(e)}, status=400)
 
 
+# ─────────────────────────────────────────────────────────────
 # 5. LIVE TRACKING DASHBOARD & DATA FEED
+# ─────────────────────────────────────────────────────────────
 class LiveTrackingDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'hrms/attendance/live_tracking.html'
 
-# 6
+
 class LiveTrackingFeedAPIView(LoginRequiredMixin, View):
     def get(self, request, *args, **kwargs):
         today = timezone.localdate()
@@ -7845,7 +7772,10 @@ class LiveTrackingFeedAPIView(LoginRequiredMixin, View):
 
         return JsonResponse({'active_staff': feed})
 
-# 7
+
+# ─────────────────────────────────────────────────────────────
+# 6. PAGE VIEWS (Template Renderers)
+# ─────────────────────────────────────────────────────────────
 class PunchInPageView(LoginRequiredMixin, TemplateView):
     template_name = 'hrms/attendance/punch_in.html'
 
@@ -7855,7 +7785,7 @@ class PunchInPageView(LoginRequiredMixin, TemplateView):
         # Pass remote permission status to template
         ctx['is_remote_allowed'] = emp.attendance_mode == Employee.AttendanceMode.REMOTE_FIELD if emp else False
         return ctx
-# 8
+
 class KioskPageView(TemplateView):
     template_name = 'hrms/attendance/kiosk.html'
 

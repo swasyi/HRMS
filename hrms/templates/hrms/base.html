@@ -8,9 +8,23 @@
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{% static 'hrms/css/style.css' %}">
+  <link rel="stylesheet" href="{% static 'hrms/css/premium-ui.css' %}">
   {% block extra_css %}{% endblock %}
 </head>
 <body>
+
+<!-- ================= CONTEXT-AWARE ORB PAGE LOADER ================= -->
+<div class="hrms-page-loader" id="hrmsPageLoader">
+  <div class="loader-orb-wrap" id="loaderOrbWrap">
+    <div class="loader-orb-ring" id="loaderOrbRing"></div>
+    <div class="loader-orb-body">
+      <i class="bi bi-grid-1x2-fill" id="loaderIcon"></i>
+    </div>
+  </div>
+  <div class="loader-title" id="loaderTitle">Oblu HRMS</div>
+  <div class="loader-subtitle" id="loaderSubtitle">Loading workspace…</div>
+</div>
+
 <div class="d-flex hrms-shell">
 
   <!-- ================= SIDEBAR ================= -->
@@ -34,8 +48,11 @@
 
         <li class="nav-item">
           <a class="nav-link hrms-toplink {% if active_group == 'dashboard' %}active{% endif %}"
-             href="{% url 'hrms:dashboard' %}">
-            <i class="bi bi-grid-1x2-fill"></i> Dashboard
+             href="{% url 'hrms:dashboard' %}" data-section="dashboard"
+             data-loader-icon="bi-grid-1x2-fill" data-loader-title="HR Command Center"
+             data-loader-from="#6366f1" data-loader-to="#06b6d4">
+            <span class="nav-icon-box"><i class="bi bi-grid-1x2-fill"></i></span>
+            Dashboard
           </a>
         </li>
 
@@ -43,8 +60,11 @@
         {% if is_manager_user or hrms_is_hr or request.user.employee_profile.is_manager or request.user.employee.is_manager %}
         <li class="nav-item">
           <a class="nav-link hrms-toplink {% if active_group == 'manager' %}active{% endif %}"
-             href="{% url 'hrms:manager_dashboard' %}">
-            <i class="bi bi-people-fill"></i> Manager Dashboard
+             href="{% url 'hrms:manager_dashboard' %}" data-section="manager"
+             data-loader-icon="bi-people-fill" data-loader-title="Manager Dashboard"
+             data-loader-from="#10b981" data-loader-to="#0ea5e9">
+            <span class="nav-icon-box"><i class="bi bi-people-fill"></i></span>
+            Manager Dashboard
           </a>
         </li>
         {% endif %}
@@ -54,8 +74,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'organisation' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navOrganisation" role="button"
-             aria-expanded="{% if active_group == 'organisation' %}true{% else %}false{% endif %}">
-            <i class="bi bi-building"></i> Organisation <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'organisation' %}true{% else %}false{% endif %}"
+             data-section="organisation"
+             data-loader-icon="bi-buildings-fill" data-loader-title="Organisation"
+             data-loader-from="#10b981" data-loader-to="#14b8a6">
+            <span class="nav-icon-box"><i class="bi bi-buildings-fill"></i></span>
+            Organisation <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'organisation' %}show{% endif %}" id="navOrganisation">
             <ul class="nav flex-column hrms-sublist">
@@ -71,8 +95,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'employee' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navEmployee" role="button"
-             aria-expanded="{% if active_group == 'employee' %}true{% else %}false{% endif %}">
-            <i class="bi bi-person-badge"></i> Employee <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'employee' %}true{% else %}false{% endif %}"
+             data-section="employee"
+             data-loader-icon="bi-person-badge-fill" data-loader-title="Employee Directory"
+             data-loader-from="#3b82f6" data-loader-to="#6366f1">
+            <span class="nav-icon-box"><i class="bi bi-person-badge-fill"></i></span>
+            Employee <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'employee' %}show{% endif %}" id="navEmployee">
             <ul class="nav flex-column hrms-sublist">
@@ -92,8 +120,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'hiring' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navHiring" role="button"
-             aria-expanded="{% if active_group == 'hiring' %}true{% else %}false{% endif %}">
-            <i class="bi bi-briefcase"></i> Hiring <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'hiring' %}true{% else %}false{% endif %}"
+             data-section="hiring"
+             data-loader-icon="bi-briefcase-fill" data-loader-title="Recruitment &amp; ATS"
+             data-loader-from="#8b5cf6" data-loader-to="#d946ef">
+            <span class="nav-icon-box"><i class="bi bi-briefcase-fill"></i></span>
+            Hiring <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'hiring' %}show{% endif %}" id="navHiring">
             <ul class="nav flex-column hrms-sublist">
@@ -112,8 +144,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'attendance' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navAttendance" role="button"
-             aria-expanded="{% if active_group == 'attendance' %}true{% else %}false{% endif %}">
-            <i class="bi bi-clock-history"></i> Attendance <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'attendance' %}true{% else %}false{% endif %}"
+             data-section="attendance"
+             data-loader-icon="bi-fingerprint" data-loader-title="Attendance &amp; Kiosk"
+             data-loader-from="#06b6d4" data-loader-to="#38bdf8">
+            <span class="nav-icon-box"><i class="bi bi-fingerprint"></i></span>
+            Attendance <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'attendance' %}show{% endif %}" id="navAttendance">
             <ul class="nav flex-column hrms-sublist">
@@ -152,8 +188,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'leave' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navLeave" role="button"
-             aria-expanded="{% if active_group == 'leave' %}true{% else %}false{% endif %}">
-            <i class="bi bi-calendar2-week"></i> Leave <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'leave' %}true{% else %}false{% endif %}"
+             data-section="leave"
+             data-loader-icon="bi-calendar-check-fill" data-loader-title="Leave &amp; Time Off"
+             data-loader-from="#f59e0b" data-loader-to="#f97316">
+            <span class="nav-icon-box"><i class="bi bi-calendar-check-fill"></i></span>
+            Leave <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'leave' %}show{% endif %}" id="navLeave">
             <ul class="nav flex-column hrms-sublist">
@@ -172,8 +212,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'payroll' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navPayroll" role="button"
-             aria-expanded="{% if active_group == 'payroll' %}true{% else %}false{% endif %}">
-            <i class="bi bi-cash-coin"></i> Payroll <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'payroll' %}true{% else %}false{% endif %}"
+             data-section="payroll"
+             data-loader-icon="bi-cash-stack" data-loader-title="Payroll &amp; Disbursement"
+             data-loader-from="#059669" data-loader-to="#84cc16">
+            <span class="nav-icon-box"><i class="bi bi-cash-stack"></i></span>
+            Payroll <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'payroll' %}show{% endif %}" id="navPayroll">
             <ul class="nav flex-column hrms-sublist">
@@ -194,8 +238,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'policy' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navPolicy" role="button"
-             aria-expanded="{% if active_group == 'policy' %}true{% else %}false{% endif %}">
-            <i class="bi bi-file-earmark-text"></i> Policies &amp; Notices <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'policy' %}true{% else %}false{% endif %}"
+             data-section="policy"
+             data-loader-icon="bi-shield-check" data-loader-title="Policies &amp; Notices"
+             data-loader-from="#475569" data-loader-to="#6366f1">
+            <span class="nav-icon-box"><i class="bi bi-shield-check"></i></span>
+            Policies &amp; Notices <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'policy' %}show{% endif %}" id="navPolicy">
             <ul class="nav flex-column hrms-sublist">
@@ -213,8 +261,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'asset' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navAsset" role="button"
-             aria-expanded="{% if active_group == 'asset' %}true{% else %}false{% endif %}">
-            <i class="bi bi-laptop"></i> Assets <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'asset' %}true{% else %}false{% endif %}"
+             data-section="asset"
+             data-loader-icon="bi-laptop" data-loader-title="Asset Command Center"
+             data-loader-from="#f43f5e" data-loader-to="#fbbf24">
+            <span class="nav-icon-box"><i class="bi bi-laptop"></i></span>
+            Assets <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'asset' %}show{% endif %}" id="navAsset">
             <ul class="nav flex-column hrms-sublist">
@@ -227,8 +279,12 @@
         <li class="nav-item">
           <a class="nav-link hrms-group-toggle {% if active_group == 'performance' %}active{% endif %}"
              data-bs-toggle="collapse" href="#navPerformance" role="button"
-             aria-expanded="{% if active_group == 'performance' %}true{% else %}false{% endif %}">
-            <i class="bi bi-graph-up-arrow"></i> Performance <i class="bi bi-chevron-right ms-auto chev"></i>
+             aria-expanded="{% if active_group == 'performance' %}true{% else %}false{% endif %}"
+             data-section="performance"
+             data-loader-icon="bi-trophy-fill" data-loader-title="Performance &amp; Reviews"
+             data-loader-from="#d97706" data-loader-to="#fde047">
+            <span class="nav-icon-box"><i class="bi bi-trophy-fill"></i></span>
+            Performance <i class="bi bi-chevron-right ms-auto chev"></i>
           </a>
           <div class="collapse {% if active_group == 'performance' %}show{% endif %}" id="navPerformance">
             <ul class="nav flex-column hrms-sublist">
@@ -328,6 +384,65 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+<script src="{% static 'hrms/js/premium-ui.js' %}"></script>
+
+<!-- Context-Aware Loader: update orb colour & icon on nav click -->
+<script>
+(function() {
+  /* Section meta map — matches data-section attributes */
+  var SECTION_META = {
+    dashboard:    { icon: 'bi-grid-1x2-fill',      title: 'HR Command Center',         from: '#6366f1', to: '#06b6d4' },
+    manager:      { icon: 'bi-people-fill',          title: 'Manager Dashboard',          from: '#10b981', to: '#0ea5e9' },
+    organisation: { icon: 'bi-buildings-fill',       title: 'Organisation',               from: '#10b981', to: '#14b8a6' },
+    employee:     { icon: 'bi-person-badge-fill',    title: 'Employee Directory',         from: '#3b82f6', to: '#6366f1' },
+    hiring:       { icon: 'bi-briefcase-fill',       title: 'Recruitment & ATS',          from: '#8b5cf6', to: '#d946ef' },
+    attendance:   { icon: 'bi-fingerprint',          title: 'Attendance & Kiosk',         from: '#06b6d4', to: '#38bdf8' },
+    leave:        { icon: 'bi-calendar-check-fill',  title: 'Leave & Time Off',           from: '#f59e0b', to: '#f97316' },
+    payroll:      { icon: 'bi-cash-stack',           title: 'Payroll & Disbursement',     from: '#059669', to: '#84cc16' },
+    policy:       { icon: 'bi-shield-check',         title: 'Policies & Notices',         from: '#475569', to: '#6366f1' },
+    asset:        { icon: 'bi-laptop',               title: 'Asset Command Center',       from: '#f43f5e', to: '#fbbf24' },
+    performance:  { icon: 'bi-trophy-fill',          title: 'Performance & Reviews',      from: '#d97706', to: '#fde047' }
+  };
+
+  var loaderIcon     = document.getElementById('loaderIcon');
+  var loaderTitle    = document.getElementById('loaderTitle');
+  var loaderRing     = document.getElementById('loaderOrbRing');
+
+  function applySection(section) {
+    var meta = SECTION_META[section] || SECTION_META['dashboard'];
+    /* Swap icon */
+    if (loaderIcon) {
+      loaderIcon.className = 'bi ' + meta.icon;
+    }
+    /* Swap title */
+    if (loaderTitle) {
+      loaderTitle.textContent = meta.title;
+    }
+    /* Swap ring gradient via CSS custom properties */
+    if (loaderRing) {
+      loaderRing.style.setProperty('--ldr-from', meta.from);
+      loaderRing.style.setProperty('--ldr-to',   meta.to);
+      loaderRing.style.borderTopColor   = meta.from;
+      loaderRing.style.borderRightColor = meta.to;
+    }
+  }
+
+  /* Pre-apply the active section on page load */
+  var activeLink = document.querySelector('.hrms-nav .nav-link.active[data-section]');
+  if (activeLink) {
+    applySection(activeLink.getAttribute('data-section'));
+  }
+
+  /* Update on every nav-link click before navigation */
+  document.addEventListener('click', function(e) {
+    var link = e.target.closest('a[data-section]');
+    if (link) {
+      applySection(link.getAttribute('data-section'));
+    }
+  }, true); /* capture phase so it fires before premium-ui.js showLoader */
+})();
+</script>
+
 {% block extra_js %}{% endblock %}
 </body>
 </html>
