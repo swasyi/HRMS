@@ -43,7 +43,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import models as m
-
+from datetime import date, datetime, time, timedelta
 
 class LeaveError(Exception):
     """Raised for any invalid leave action — insufficient balance, bad dates, etc."""
@@ -1492,90 +1492,421 @@ def cancel_leave(application, requested_by_employee, is_hr=False):
     _log_action(application, 'cancelled', performed_by=performer, remarks='Withdrawn by Employee' if not is_hr else 'Cancelled by HR')
     return application
 
-from datetime import date
+
+import calendar
+from datetime import date, timedelta
+from decimal import Decimal
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 from . import models as m
+
+
+def refund_leave_to_wallet(employee, target_date, refund_days=1.0):
+    """
+    Finds any active approved leave covering target_date and refunds
+    refund_days back to EmployeeLeaveBalanceLive wallet.
+    """
+    refund_days = Decimal(str(refund_days))
+    if refund_days <= Decimal('0.0'):
+        return
+
+    leave_app = m.LeaveApplication.objects.filter(
+        employee=employee,
+        status=getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+        start_date__lte=target_date,
+        end_date__gte=target_date
+    ).first()
+
+    if not leave_app:
+        return
+
+    live_wallet, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=employee)
+    code = (leave_app.leave_type.code or '').upper().strip()
+
+    field_map = {
+        'CL': 'casual_leave', 'EL': 'earned_leave', 'SL': 'sick_leave',
+        'ML': 'menstrual_leave', 'MTL': 'menstrual_leave',
+        'BL': 'bereavement_leave', 'CO': 'comp_off'
+    }
+    field_name = field_map.get(code)
+
+    if field_name and hasattr(live_wallet, field_name):
+        current = Decimal(str(getattr(live_wallet, field_name, 0.0) or 0.0))
+        setattr(live_wallet, field_name, current + refund_days)
+        live_wallet.save()
+
+    # If full refund (e.g. employee present whole day), cancel or adjust application
+    if refund_days >= Decimal(str(leave_app.total_days)):
+        leave_app.status = getattr(m.LeaveApplication.Status, 'CANCELLED', 'cancelled')
+        leave_app.rejection_reason = "Auto-refunded: Employee physically present in office."
+        leave_app.save(update_fields=['status', 'rejection_reason'])
+    else:
+        leave_app.total_days = max(Decimal('0.0'), Decimal(str(leave_app.total_days)) - refund_days)
+        leave_app.save(update_fields=['total_days'])
+
 
 def auto_convert_absent_to_leaves(employee_ids, year, month, user):
     """
-    Finds 'absent' records for confirmed employees in the target month/year.
-    Deducts: CL -> EL -> LWP fallback.
-    Updates AttendanceRecord and creates an approved LeaveApplication.
+    Finds absent days (both 1.0 day full absences and uncovered 0.5 half days)
+    for confirmed employees and converts them: CL -> EL -> LWP fallback.
     """
     summary = {
         'total_employees': 0,
         'converted_days': 0,
-        'cl_count': 0,
-        'el_count': 0,
+        'cl_deducted': 0,
+        'el_deducted': 0,
         'lwp_count': 0,
         'skipped_unconfirmed': 0,
     }
 
-    # Fetch Leave Types by code or name
-    cl_type = m.LeaveType.objects.filter(code__iexact='CL').first() or m.LeaveType.objects.filter(name__icontains='Casual').first()
-    el_type = m.LeaveType.objects.filter(code__iexact='EL').first() or m.LeaveType.objects.filter(name__icontains='Earned').first()
-    lwp_type = m.LeaveType.objects.filter(code__iexact='LWP').first() or m.LeaveType.objects.filter(name__icontains='Without').first()
+    cl_type = m.LeaveType.objects.filter(Q(code__iexact='CL') | Q(name__icontains='Casual')).first()
+    el_type = m.LeaveType.objects.filter(Q(code__iexact='EL') | Q(name__icontains='Earned')).first()
+    lwp_type = m.LeaveType.objects.filter(Q(code__iexact='LWP') | Q(name__icontains='Without')).first()
+    if not lwp_type:
+        lwp_type = cl_type or el_type
 
-    # Confirmed employees filter
     employees = m.Employee.objects.filter(id__in=employee_ids)
-    confirmed_employees = [e for e in employees if getattr(e, 'employment_status', '').lower() in ['confirmed', 'permanent']]
+
+    confirmed_employees = []
+    for e in employees:
+        is_conf = False
+        if getattr(e, 'date_of_confirmation', None):
+            is_conf = True
+        elif getattr(e, 'employment_status', '').lower() in ['confirmed', 'permanent']:
+            is_conf = True
+        elif getattr(e, 'status', '').lower() in ['active', 'confirmed'] and getattr(e, 'employment_type', '') == 'full_time':
+            is_conf = True
+
+        if is_conf:
+            confirmed_employees.append(e)
+
     summary['skipped_unconfirmed'] = len(employees) - len(confirmed_employees)
     summary['total_employees'] = len(confirmed_employees)
 
+    today = timezone.localdate()
+    days_in_month = calendar.monthrange(year, month)[1]
+
     with transaction.atomic():
         for emp in confirmed_employees:
-            # Get leave balances for the year
-            cl_bal = m.EmployeeLeaveBalance.objects.filter(employee=emp, leave_type=cl_type, year=year).first() if cl_type else None
-            el_bal = m.EmployeeLeaveBalance.objects.filter(employee=emp, leave_type=el_type, year=year).first() if el_type else None
+            wallet, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=emp)
+            bank, _ = m.EmployeeLeaveBalance.objects.get_or_create(e_name=emp)
 
-            # Fetch all absent records for this month
-            absents = m.AttendanceRecord.objects.filter(
+            # Initialize wallet from bank if wallet has zero leaves but bank is loaded
+            wallet_total = sum([
+                getattr(wallet, 'casual_leave', 0.0) or 0.0,
+                getattr(wallet, 'earned_leave', 0.0) or 0.0,
+            ])
+            if wallet_total == 0.0:
+                wallet.casual_leave = bank.casual_leave
+                wallet.sick_leave = bank.sick_leave
+                wallet.earned_leave = bank.earned_leave
+                wallet.save()
+
+            cl_bal = Decimal(str(getattr(wallet, 'casual_leave', 0.0) or 0.0))
+            el_bal = Decimal(str(getattr(wallet, 'earned_leave', 0.0) or 0.0))
+
+            records = {
+                r.attendance_date: r
+                for r in m.AttendanceRecord.objects.filter(
+                    employee=emp, attendance_date__year=year, attendance_date__month=month
+                )
+            }
+
+            approved_leaves = m.LeaveApplication.objects.filter(
                 employee=emp,
-                date__year=year,
-                date__month=month,
-                status='absent'
-            ).order_by('date')
+                status=getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                start_date__year=year, start_date__month=month
+            )
+            leave_map = {}
+            for l in approved_leaves:
+                c = l.start_date
+                while c <= l.end_date:
+                    leave_map[c] = Decimal(str(l.total_days or 1.0))
+                    c += timedelta(days=1)
 
-            for rec in absents:
-                target_type = None
-                leave_code = 'LWP'
+            holiday_dates = set()
+            if emp.holiday_calendar:
+                holiday_dates = set(m.Holiday.objects.filter(
+                    calendar=emp.holiday_calendar, date__year=year, date__month=month
+                ).values_list('date', flat=True))
 
-                # Hierarchy: 1. CL -> 2. EL -> 3. LWP
-                if cl_bal and (cl_bal.closing_balance or 0) >= 1.0:
-                    cl_bal.closing_balance -= 1.0
-                    cl_bal.save()
-                    target_type = cl_type
-                    leave_code = 'CL'
-                    summary['cl_count'] += 1
-                elif el_bal and (el_bal.closing_balance or 0) >= 1.0:
-                    el_bal.closing_balance -= 1.0
-                    el_bal.save()
-                    target_type = el_type
-                    leave_code = 'EL'
-                    summary['el_count'] += 1
-                else:
-                    target_type = lwp_type
+            for d_num in range(1, days_in_month + 1):
+                cur_date = date(year, month, d_num)
+
+                # Skip future dates, Sundays, holidays
+                if cur_date > today or cur_date.weekday() == 6 or cur_date in holiday_dates:
+                    continue
+
+                rec = records.get(cur_date)
+                covered_days = leave_map.get(cur_date, Decimal('0.0'))
+
+                # Evaluate absence amount (1.0 day or 0.5 day)
+                shortfall = Decimal('0.0')
+                if not rec:
+                    if covered_days < Decimal('1.0'):
+                        shortfall = Decimal('1.0') - covered_days
+                elif not rec.check_in and str(rec.status).lower() in ['absent', 'a']:
+                    if covered_days < Decimal('1.0'):
+                        shortfall = Decimal('1.0') - covered_days
+                elif rec.status == getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'half_day'):
+                    # Half day worked but no leave applied for the remaining half
+                    # SKIP IF GRACE APPLIED: Grace is a forgiven Full-Day and must NEVER deduct leaves!
+                    is_grace = 'grace applied' in str(rec.remarks).lower()
+                    if not is_grace:
+                        if covered_days < Decimal('0.5'):
+                            shortfall = Decimal('0.5')
+
+                if shortfall > Decimal('0.0'):
+                    target_type = None
                     leave_code = 'LWP'
-                    summary['lwp_count'] += 1
 
-                # Update attendance record status
-                rec.status = 'on_leave'
-                rec.notes = (rec.notes or '') + f" [Auto-approved as {leave_code} by {user.username}]"
-                rec.save()
+                    # Hierarchy: 1. CL -> 2. EL -> 3. LWP fallback
+                    if cl_bal >= shortfall and cl_type:
+                        cl_bal -= shortfall
+                        wallet.casual_leave = float(cl_bal)
+                        target_type = cl_type
+                        leave_code = 'CL'
+                        summary['cl_deducted'] += float(shortfall)
+                    elif el_bal >= shortfall and el_type:
+                        el_bal -= shortfall
+                        wallet.earned_leave = float(el_bal)
+                        target_type = el_type
+                        leave_code = 'EL'
+                        summary['el_deducted'] += float(shortfall)
+                    else:
+                        target_type = lwp_type
+                        leave_code = 'LWP'
+                        summary['lwp_count'] += float(shortfall)
 
-                # Create Approved Leave Application for payroll & audit sync
-                if target_type:
-                    m.LeaveApplication.objects.create(
-                        employee=emp,
-                        leave_type=target_type,
-                        start_date=rec.date,
-                        end_date=rec.date,
-                        number_of_days=1.0,
-                        status='approved',
-                        approved_by=user,
-                        reason=f"Auto-approved absence conversion to {leave_code}"
+                    wallet.save()
+
+                    # Set appropriate attendance status
+                    new_status = (
+                        getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'half_day')
+                        if (rec and rec.check_in)
+                        else getattr(m.AttendanceRecord.Status, 'ON_LEAVE', 'on_leave')
                     )
 
-                summary['converted_days'] += 1
+                    m.AttendanceRecord.objects.update_or_create(
+                        employee=emp,
+                        attendance_date=cur_date,
+                        defaults={
+                            'status': new_status,
+                            'remarks': f"{leave_code} ({shortfall} Day Auto-Approved by {user.username})",
+                        }
+                    )
+
+                    if target_type:
+                        m.LeaveApplication.objects.update_or_create(
+                            employee=emp,
+                            start_date=cur_date,
+                            end_date=cur_date,
+                            defaults={
+                                'leave_type': target_type,
+                                'total_days': shortfall,
+                                'day_type': 'half' if shortfall == Decimal('0.5') else 'full',
+                                'status': getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                                'approved_by': user,
+                                'approved_on': timezone.now(),
+                                'reason': f"Auto-approved absence conversion ({shortfall}d {leave_code})",
+                            }
+                        )
+
+                    summary['converted_days'] += float(shortfall)
+
+    return summary
+
+def auto_convert_absent_to_leaves(employee_ids, year, month, user):
+    """
+    Finds genuine unexcused absences (1.0 day) and real half-day shortfalls (0.5 day)
+    for confirmed employees and converts them: CL -> EL -> LWP fallback.
+
+    Guarantees:
+    - Punches within policy grace arrival limits (and completed shifts) are counted as Full Days.
+    - Grace days NEVER have leaves deducted.
+    - Only true absences or half-days after grace is exhausted have leaves deducted.
+    """
+    summary = {
+        'total_employees': 0,
+        'converted_days': 0,
+        'cl_deducted': 0,
+        'el_deducted': 0,
+        'lwp_count': 0,
+        'skipped_unconfirmed': 0,
+    }
+
+    cl_type = m.LeaveType.objects.filter(Q(code__iexact='CL') | Q(name__icontains='Casual')).first()
+    el_type = m.LeaveType.objects.filter(Q(code__iexact='EL') | Q(name__icontains='Earned')).first()
+    lwp_type = m.LeaveType.objects.filter(Q(code__iexact='LWP') | Q(name__icontains='Without')).first() or cl_type or el_type
+
+    employees = m.Employee.objects.filter(id__in=employee_ids)
+    confirmed_employees = [
+        e for e in employees
+        if getattr(e, 'date_of_confirmation', None)
+        or getattr(e, 'employment_status', '').lower() in ['confirmed', 'permanent']
+        or (getattr(e, 'status', '').lower() == 'active' and getattr(e, 'employment_type', '') == 'full_time')
+    ]
+
+    summary['skipped_unconfirmed'] = len(employees) - len(confirmed_employees)
+    summary['total_employees'] = len(confirmed_employees)
+
+    today = timezone.localdate()
+    days_in_month = calendar.monthrange(year, month)[1]
+
+    with transaction.atomic():
+        for emp in confirmed_employees:
+            wallet, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=emp)
+            bank, _ = m.EmployeeLeaveBalance.objects.get_or_create(e_name=emp)
+
+            # Sync wallet from bank if wallet is sitting at 0
+            if wallet.casual_leave == 0.0 and wallet.earned_leave == 0.0 and (bank.casual_leave > 0 or bank.earned_leave > 0):
+                wallet.casual_leave = bank.casual_leave
+                wallet.sick_leave = bank.sick_leave
+                wallet.earned_leave = bank.earned_leave
+                wallet.save()
+
+            cl_bal = Decimal(str(getattr(wallet, 'casual_leave', 0.0) or 0.0))
+            el_bal = Decimal(str(getattr(wallet, 'earned_leave', 0.0) or 0.0))
+
+            records = {
+                r.attendance_date: r
+                for r in m.AttendanceRecord.objects.filter(
+                    employee=emp, attendance_date__year=year, attendance_date__month=month
+                )
+            }
+
+            approved_leaves = m.LeaveApplication.objects.filter(
+                employee=emp,
+                status=getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                start_date__year=year, start_date__month=month
+            )
+            leave_map = {}
+            for l in approved_leaves:
+                c = l.start_date
+                while c <= l.end_date:
+                    leave_map[c] = Decimal(str(l.total_days or 1.0))
+                    c += timedelta(days=1)
+
+            holiday_dates = set()
+            if emp.holiday_calendar:
+                holiday_dates = set(m.Holiday.objects.filter(
+                    calendar=emp.holiday_calendar, date__year=year, date__month=month
+                ).values_list('date', flat=True))
+
+            comp = emp.company
+            grace_used_counter = 0
+
+            for d_num in range(1, days_in_month + 1):
+                cur_date = date(year, month, d_num)
+
+                # Skip future dates, Sundays, and regional holidays
+                if cur_date > today or cur_date.weekday() == 6 or cur_date in holiday_dates:
+                    continue
+
+                rec = records.get(cur_date)
+                covered_days = leave_map.get(cur_date, Decimal('0.0'))
+                policy = comp.get_policy_for_date(cur_date) if (comp and hasattr(comp, 'get_policy_for_date')) else comp
+
+                shortfall = Decimal('0.0')
+
+                # CASE 1: Completely missing punch (Full-day absence)
+                if not rec or not rec.check_in:
+                    if covered_days < Decimal('1.0'):
+                        shortfall = Decimal('1.0') - covered_days
+
+                # CASE 2: Punched in -> Evaluate whether it is Full Day (Present/Grace) or true Half Day
+                else:
+                    # If manually edited or marked as Present, leave it untouched
+                    if getattr(rec, 'edited_by', None) or str(rec.status).lower() in ['present', 'fd']:
+                        continue
+
+                    local_in = timezone.localtime(rec.check_in).time() if timezone.is_aware(rec.check_in) else rec.check_in.time()
+                    local_out = timezone.localtime(rec.check_out).time() if (rec.check_out and timezone.is_aware(rec.check_out)) else (rec.check_out.time() if rec.check_out else None)
+
+                    off_start = getattr(policy, 'office_start_time', None) or time(9, 0)
+                    off_end = getattr(policy, 'office_end_time', None) or time(17, 0)
+                    grace_mins = getattr(policy, 'grace_minutes', getattr(policy, 'grace_window_minutes', 15))
+                    grace_limit = getattr(policy, 'grace_allowed_count', getattr(policy, 'max_grace_per_month', 3))
+
+                    grace_deadline = (datetime.combine(cur_date, off_start) + timedelta(minutes=grace_mins)).time()
+                    stayed_until_end = bool(local_out and local_out >= off_end)
+
+                    # Subcase A: On-time arrival and completed shift -> Full Day Present
+                    if local_in <= off_start and stayed_until_end:
+                        shortfall = Decimal('0.0')
+
+                    # Subcase B: Arrival within grace window and completed shift
+                    elif local_in <= grace_deadline and stayed_until_end:
+                        if grace_used_counter < grace_limit:
+                            grace_used_counter += 1
+                            shortfall = Decimal('0.0')  # PROTECTED GRACE: NEVER DEDUCT LEAVE!
+                        else:
+                            # Grace limit exhausted for the month -> True Half Day
+                            if covered_days < Decimal('0.5'):
+                                shortfall = Decimal('0.5')
+
+                    # Subcase C: Left early, arrived past grace, or missing checkout -> Half Day
+                    else:
+                        if covered_days < Decimal('0.5'):
+                            shortfall = Decimal('0.5')
+
+                # Apply deductions strictly when shortfall exists
+                if shortfall > Decimal('0.0'):
+                    target_type = None
+                    leave_code = 'LWP'
+
+                    # Hierarchy: CL -> EL -> LWP
+                    if cl_bal >= shortfall and cl_type:
+                        cl_bal -= shortfall
+                        wallet.casual_leave = float(cl_bal)
+                        target_type = cl_type
+                        leave_code = 'CL'
+                        summary['cl_deducted'] += float(shortfall)
+                    elif el_bal >= shortfall and el_type:
+                        el_bal -= shortfall
+                        wallet.earned_leave = float(el_bal)
+                        target_type = el_type
+                        leave_code = 'EL'
+                        summary['el_deducted'] += float(shortfall)
+                    else:
+                        target_type = lwp_type
+                        leave_code = 'LWP'
+                        summary['lwp_count'] += float(shortfall)
+
+                    wallet.save()
+
+                    new_status = (
+                        getattr(m.AttendanceRecord.Status, 'HALF_DAY', 'half_day')
+                        if (rec and rec.check_in)
+                        else getattr(m.AttendanceRecord.Status, 'ON_LEAVE', 'on_leave')
+                    )
+
+                    m.AttendanceRecord.objects.update_or_create(
+                        employee=emp,
+                        attendance_date=cur_date,
+                        defaults={
+                            'status': new_status,
+                            'remarks': f"{leave_code} ({shortfall}d Auto-Approved by {user.username})",
+                        }
+                    )
+
+                    if target_type:
+                        m.LeaveApplication.objects.update_or_create(
+                            employee=emp,
+                            start_date=cur_date,
+                            end_date=cur_date,
+                            defaults={
+                                'leave_type': target_type,
+                                'total_days': shortfall,
+                                'day_type': 'half' if shortfall == Decimal('0.5') else 'full',
+                                'status': getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                                'approved_by': user,
+                                'approved_on': timezone.now(),
+                                'reason': f"Auto-approved absence conversion ({shortfall}d {leave_code})",
+                            }
+                        )
+
+                    summary['converted_days'] += float(shortfall)
 
     return summary

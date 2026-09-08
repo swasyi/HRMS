@@ -369,8 +369,8 @@ class PriceChangeRequestCreateView(LoginRequiredMixin, FormView):
 
         # --- SEND EMAIL TO ADMINS ---
         to_emails = [
-            "abhijay.obluhc@gmail.com",
-            "swasti.obluhc@gmail.com",
+            "abhijay.obluhc@emails.com",
+            "swasti.obluhc@emails.com",
             "nitin.a@obluhc.com"
         ]
 

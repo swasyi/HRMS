@@ -16,7 +16,7 @@ from . import leave_logic as lv
 from . import payroll_logic as pay
 from . import attendance_logic as att_logic
 from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE
-
+from .emails import send_leave_notification_email
 
 # mixins.py or views.py
 class CompanyFilterMixin:
@@ -1099,36 +1099,61 @@ class EmployeeDetailView(EmployeeSelfOrHRMixin, SidebarContextMixin, DetailView)
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         emp = self.object
-        current_year = date.today().year
 
-        # 1. Leave Balances & Bank
-        ctx['leave_bank'] = m.EmployeeLeaveBalance.objects.filter(e_name=emp).first()
-        ctx['leave_live'] = m.EmployeeLeaveBalanceLive.objects.filter(e_name=emp).first()
+        # 1. Fetch both Master Entitlement Bank and Live Wallet
+        leave_bank = m.EmployeeLeaveBalance.objects.filter(e_name=emp).first()
+        leave_live = m.EmployeeLeaveBalanceLive.objects.filter(e_name=emp).first()
+        ctx['leave_bank'] = leave_bank
+        ctx['leave_live'] = leave_live
         ctx['recent_leaves'] = emp.leave_applications.select_related('leave_type').order_by('-applied_on')[:10]
 
-        balances = m.LeaveBalance.objects.filter(
-            employee=emp, year=current_year
-        ).select_related('leave_type')
-        ctx['leave_map'] = {b.leave_type.code.upper(): b.available for b in balances}
+        # 2. Check if Live Wallet has been initialized (total > 0).
+        # If live wallet is uninitialized/zero but bank has leaves, fallback to bank.
+        live_total = sum([
+            getattr(leave_live, 'casual_leave', 0.0) or 0.0,
+            getattr(leave_live, 'sick_leave', 0.0) or 0.0,
+            getattr(leave_live, 'earned_leave', 0.0) or 0.0,
+            getattr(leave_live, 'menstrual_leave', 0.0) or 0.0,
+            getattr(leave_live, 'bereavement_leave', 0.0) or 0.0,
+            getattr(leave_live, 'comp_off', 0.0) or 0.0,
+        ]) if leave_live else 0.0
 
-        # 2. Assets & Custody
+        source_bal = leave_live if (leave_live and live_total > 0) else leave_bank
+
+        if source_bal:
+            ctx['leave_map'] = {
+                'CL': getattr(source_bal, 'casual_leave', 0.0) or 0.0,
+                'SL': getattr(source_bal, 'sick_leave', 0.0) or 0.0,
+                'EL': getattr(source_bal, 'earned_leave', 0.0) or 0.0,
+                'ML': getattr(source_bal, 'menstrual_leave', 0.0) or 0.0,
+                'COMP_OFF': getattr(source_bal, 'comp_off', 0.0) or 0.0,
+                'BL': getattr(source_bal, 'bereavement_leave', 0.0) or 0.0,
+            }
+        else:
+            ctx['leave_map'] = {}
+
+        # 3. Assets & Custody
         ctx['assigned_assets'] = m.Asset.objects.filter(employee=emp).select_related('category')
-        ctx['asset_history'] = m.AssetAssignmentHistory.objects.filter(employee=emp).select_related('asset').order_by('-assigned_date')
+        ctx['asset_history'] = m.AssetAssignmentHistory.objects.filter(
+            employee=emp
+        ).select_related('asset').order_by('-assigned_date')
 
-        # 3. Attendance & Penalties Summary
+        # 4. Attendance & Penalties Summary
         today = timezone.localdate()
         ctx['recent_attendance'] = emp.attendance_records.order_by('-attendance_date')[:15]
         ctx['recent_penalties'] = emp.penalties.order_by('-penalty_date')[:10]
-        ctx['grace_usage'] = m.GraceUsageTracker.objects.filter(employee=emp, month=today.month, year=today.year).first()
+        ctx['grace_usage'] = m.GraceUsageTracker.objects.filter(
+            employee=emp, month=today.month, year=today.year
+        ).first()
 
-        # 4. Performance Reviews
+        # 5. Performance Reviews
         ctx['performance_reviews'] = emp.performance_reviews.select_related('reviewer').order_by('-review_date')
 
-        # 5. Salary & Documents
+        # 6. Salary & Documents
         ctx['current_salary'] = emp.salaries.filter(is_active=True).first()
         ctx['documents'] = emp.documents.all()
 
-        # 6. Role check
+        # 7. Role check
         ctx['is_hr'] = is_hr_or_above(self.request.user)
 
         return ctx
@@ -2559,6 +2584,79 @@ class LeaveBalanceListView(LoginRequiredMixin, SidebarContextMixin, ListView):
             ctx['employees'] = m.Employee.objects.all()
         return ctx
 
+class LeaveBalanceListView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    model = m.EmployeeLeaveBalance
+    template_name = 'hrms/leave/leave_balance_list.html'
+    context_object_name = 'balances'
+    active_group, active_item = 'leave', 'leave_balance'
+
+    def get_queryset(self):
+        # 1. Fetch balances with employee relations preloaded
+        qs = m.EmployeeLeaveBalance.objects.select_related(
+            'e_name', 'e_name__department', 'e_name__designation', 'e_name__company'
+        )
+
+        # 2. Filter strictly for active employees
+        qs = qs.filter(e_name__status=m.Employee.Status.ACTIVE)
+
+        user = self.request.user
+        emp = get_employee_profile(user)
+
+        # 3. Non-HR employees can only view their own balance
+        if not is_hr_or_above(user):
+            if emp is None:
+                return m.EmployeeLeaveBalance.objects.none()
+            return qs.filter(e_name=emp)
+
+        # 4. Multi-company session filter
+        active_id = self.request.session.get('active_company_id')
+        if active_id and active_id != 'all':
+            qs = qs.filter(e_name__company_id=active_id)
+
+        # 5. Single employee filter from search bar
+        employee_id = self.request.GET.get('employee')
+        if employee_id:
+            qs = qs.filter(e_name_id=employee_id)
+
+        return qs.order_by('e_name__employee_code')
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user_is_hr = is_hr_or_above(self.request.user)
+        ctx['hrms_is_hr'] = user_is_hr
+
+        current_year = date.today().year
+        qs = self.get_queryset()
+
+        # Build table rows from actual database values
+        pivoted = []
+        for bal in qs:
+            emp = bal.e_name
+            pivoted.append({
+                'details': emp,
+                'year': current_year,
+                'types': {
+                    'CL': getattr(bal, 'casual_leave', 0.0),
+                    'SL': getattr(bal, 'sick_leave', 0.0),
+                    'EL': getattr(bal, 'earned_leave', 0.0),
+                    'ML': getattr(bal, 'menstrual_leave', 0.0),
+                    'BL': getattr(bal, 'bereavement_leave', 0.0),
+                    'CO': getattr(bal, 'comp_off', 0.0),
+                }
+            })
+
+        ctx['pivoted_balances'] = pivoted
+
+        # Populate active employee dropdown for HR filter
+        if user_is_hr:
+            emp_qs = m.Employee.objects.filter(status=m.Employee.Status.ACTIVE).order_by('employee_code')
+            active_id = self.request.session.get('active_company_id')
+            if active_id and active_id != 'all':
+                emp_qs = emp_qs.filter(company_id=active_id)
+            ctx['employees'] = emp_qs
+
+        return ctx
+
 # ---employee leave detail page
 class EmployeeLeaveHistoryView(LoginRequiredMixin, SidebarContextMixin, DetailView):
     model = m.Employee
@@ -3859,6 +3957,105 @@ class LeaveApplicationCreateView(LoginRequiredMixin, View):
             'dynamic_cards': cards,
         }
 
+    def get_context_data(self, employee, form):
+        today = date.today()
+        cards = []
+
+        if employee:
+            company = employee.company
+            leave_types_qs = m.LeaveType.objects.filter(company=company) if company else m.LeaveType.objects.all()
+
+            # Dynamic Employee Attributes
+            emp_gender = (employee.gender or '').upper()
+            emp_marital = str(getattr(employee, 'marital_status', '') or '').lower()
+            is_female = emp_gender.startswith('F')
+            is_male = emp_gender.startswith('M')
+            is_confirmed = bool(
+                employee.date_of_confirmation
+                and employee.employment_type == 'full_time'
+                and 'probation' not in str(employee.status).lower()
+            )
+
+            balance_record = m.EmployeeLeaveBalance.objects.filter(e_name=employee).first()
+
+            for lt in leave_types_qs:
+                code = (lt.code or '').upper().strip()
+                name = lt.name
+                norm_name = name.lower()
+
+                # --- 1. GENDER FILTER ---
+                gender_rule = str(getattr(lt, 'applicable_gender', getattr(lt, 'gender', 'ALL')) or 'ALL').upper()
+                if 'FEMALE' in gender_rule or gender_rule == 'F':
+                    if not is_female:
+                        continue
+                elif 'MALE' in gender_rule or gender_rule == 'M':
+                    if not is_male:
+                        continue
+
+                # --- 2. MARITAL STATUS FILTER ---
+                marital_rule = str(getattr(lt, 'applicable_marital_status', 'ALL') or 'ALL').lower()
+                if marital_rule in ['married'] and emp_marital != 'married':
+                    continue  # Skip leave if it is strictly for married employees
+                elif marital_rule in ['single', 'unmarried'] and emp_marital == 'married':
+                    continue
+
+                annual_quota = lv.get_leave_type_annual_quota(lt)
+
+                # Read Annual Balance directly from Master Leave Bank
+                annual_balance = Decimal('0.0')
+                if balance_record:
+                    candidates = (code.lower() + '_leave', norm_name.replace(' ', '_') + '_leave',
+                                  norm_name.replace(' ', '_'))
+                    for attr in candidates:
+                        if hasattr(balance_record, attr):
+                            val = getattr(balance_record, attr)
+                            if val is not None:
+                                annual_balance = Decimal(str(val))
+                                break
+                    else:
+                        annual_balance = annual_quota
+                else:
+                    annual_balance = annual_quota
+
+                # Maternity / Paternity only if assigned (> 0)
+                is_maternity = 'matern' in norm_name or code in ('MATERNITY', 'MTL')
+                is_paternity = 'patern' in norm_name or code in ('PATERNITY', 'PL')
+                if (is_maternity or is_paternity) and annual_balance <= Decimal('0.0'):
+                    continue
+
+                if code in ('LWP', 'CO') or 'without pay' in norm_name or 'comp' in norm_name:
+                    continue
+
+                is_menstrual = code in ('ML', 'MENSTRUAL') or 'menstrual' in norm_name
+                if not is_confirmed and not is_menstrual:
+                    continue
+                if is_confirmed and is_menstrual:
+                    continue
+
+                is_emergency = code in ('SL', 'BL') or any(
+                    k in norm_name for k in ('sick', 'bereave', 'breave')) or is_maternity or is_paternity
+
+                monthly_quota = lv.calculate_monthly_quota(lt)
+                monthly_available = lv.get_monthly_available_days(employee, lt, target_date=today)
+
+                cards.append({
+                    'code': code,
+                    'name': name,
+                    'is_emergency': is_emergency,
+                    'annual_quota': annual_quota,
+                    'annual_balance': annual_balance,
+                    'monthly_quota': monthly_quota,
+                    'monthly_available': monthly_available,
+                })
+
+        return {
+            'form': form,
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'employee': employee,
+            'dynamic_cards': cards,
+        }
+
     def get(self, request):
         employee = get_employee_profile(request.user)
         form = self.get_form_class()()
@@ -3878,7 +4075,7 @@ class LeaveApplicationCreateView(LoginRequiredMixin, View):
 
         # if form.is_valid():
             try:
-                _, notice_msg = lv.apply_leave(
+                leave_app, notice_msg = lv.apply_leave(
                     employee=employee,
                     leave_type=form.cleaned_data['leave_type'],
                     start_date=form.cleaned_data['start_date'],
@@ -3889,6 +4086,9 @@ class LeaveApplicationCreateView(LoginRequiredMixin, View):
                     relationship=form.cleaned_data.get('relationship', ''),
                     leave_stage=form.cleaned_data.get('leave_stage', ''),
                 )
+                # Trigger application notification to Reporting Manager
+                send_leave_notification_email(leave_app, event_type='APPLIED')
+
                 if notice_msg:
                     messages.warning(request, notice_msg)
                 else:
@@ -3897,16 +4097,20 @@ class LeaveApplicationCreateView(LoginRequiredMixin, View):
             except lv.LeaveError as e:
                 form.add_error(None, str(e))
 
+
         # 3. If form is invalid, re-render context using current user's profile
         current_emp = get_employee_profile(request.user)
         context = self.get_context_data(current_emp, form)
         return render(request, self.template_name, context)
+
 class LeaveApproveView(HRRequiredMixin, View):
     """HR/SuperAdmin approves leave -> updates status to approved and deducts leave balance."""
     def post(self, request, pk):
         application = get_object_or_404(m.LeaveApplication, pk=pk)
         try:
             lv.approve_leave(application, approver_user=request.user)
+            # Notify HR that manager has approved
+            send_leave_notification_email(application, event_type='HR_APPROVED')
             messages.success(request, f'Leave approved for {application.employee.full_name}.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
@@ -3920,6 +4124,8 @@ class LeaveRejectView(HRRequiredMixin, View):
         reason = request.POST.get('rejection_reason', '').strip()
         try:
             lv.reject_leave(application, approver_user=request.user, reason=reason)
+            # Send rejection to Employee and CC Manager
+            send_leave_notification_email(application, event_type='HR_REJECTED', reason=reason)
             messages.success(request, f'Leave rejected for {application.employee.full_name}.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
@@ -4018,6 +4224,8 @@ class ManagerLeaveApproveView(LoginRequiredMixin, View):
 
         try:
             lv.manager_approve_leave(application, approver_user=request.user)
+            # Notify HR that manager has approved
+            send_leave_notification_email(application, event_type='MANAGER_APPROVED')
             messages.success(request, f'Leave for {application.employee.full_name} approved and escalated to HR.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
@@ -4038,6 +4246,8 @@ class ManagerLeaveRejectView(LoginRequiredMixin, View):
         reason = request.POST.get('rejection_reason', '').strip()
         try:
             lv.reject_leave(application, approver_user=request.user, reason=reason)
+            # Notify HR that manager has approved
+            send_leave_notification_email(application, event_type='MANAGER_APPROVED')
             messages.success(request, f'Leave for {application.employee.full_name} rejected.')
         except lv.LeaveError as e:
             messages.error(request, str(e))
@@ -4440,408 +4650,6 @@ from datetime import datetime, timedelta, date
 import calendar
 
 
-class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
-    model = m.Employee
-    template_name = 'hrms/attendance/punch_report.html'
-    context_object_name = 'target_employee'
-    pk_url_kwarg = 'emp_id'
-
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        emp = self.object
-        month = int(self.kwargs['month'])
-        year = int(self.kwargs['year'])
-        tz = timezone.get_current_timezone()
-
-        # Company Rules
-        comp = emp.company
-        off_start, off_end = comp.office_start_time, comp.office_end_time
-        grace_deadline_mins = comp.grace_minutes
-        grace_limit = comp.grace_allowed_count
-
-        days_in_month = calendar.monthrange(year, month)[1]
-        report_data = []
-        grace_used = 0
-
-        # Prefetch data for the whole month to avoid DB hits in loop
-        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
-            employee=emp, attendance_date__year=year, attendance_date__month=month).order_by('attendance_date')}
-        # This replaces the line that was causing the error
-        holiday_dates = []
-        if emp.holiday_calendar:
-            holiday_dates = m.Holiday.objects.filter(
-                calendar=emp.holiday_calendar,
-                date__year=year,
-                date__month=month
-            ).values_list('date', flat=True)
-
-        # Build a lookup for leaves covering this month
-        leaves = m.LeaveApplication.objects.filter(
-            employee=emp, status='approved',
-            start_date__lte=date(year, month, days_in_month),
-            end_date__gte=date(year, month, 1)
-        ).select_related('leave_type')
-
-        leave_map = {}
-        for l in leaves:
-            curr = l.start_date
-            while curr <= l.end_date:
-                if curr.month == month and curr.year == year:
-                    # Store the code (e.g. SL, CL)
-                    leave_map[curr] = l.leave_type.code.upper()
-                curr += timedelta(days=1)
-
-        for d in range(1, days_in_month + 1):
-            dt = date(year, month, d)
-            rec = records.get(dt)
-            leave_code = leave_map.get(dt)
-            is_holiday = dt in holiday_dates
-            is_sunday = dt.weekday() == 6
-
-            day_info = {
-                'date': dt, 'in': None, 'out': None, 'hours': 0,
-                'status': 'ABS', 'label': '', 'css': 'mark-abs'
-            }
-
-            # --- PRIORITY 1: HOLIDAYS / SUNDAYS ---
-            if is_holiday or is_sunday:
-                day_info['status'] = 'HOL' if is_holiday else 'SUN'
-                day_info['css'] = 'text-muted'
-                if rec and rec.check_in:
-                    day_info['label'] = 'Extra Work'
-
-            # --- PRIORITY 2: ACTUAL PUNCH RECORD (Even if Leave is approved) ---
-            elif rec and rec.check_in:
-                local_in = timezone.localtime(rec.check_in)
-                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
-                day_info['in'] = local_in
-                day_info['out'] = local_out
-
-                p_in = local_in.time()
-                p_out = local_out.time() if local_out else off_start
-
-                # Effective Hours Math (10-6 rule)
-                eff_s = max(p_in, off_start)
-                eff_e = min(p_out, off_end)
-                eff_hours = (datetime.combine(dt, eff_e) - datetime.combine(dt, eff_s)).total_seconds() / 3600
-                day_info['hours'] = round(eff_hours, 2)
-
-                grace_time = (datetime.combine(dt, off_start) + timedelta(minutes=grace_deadline_mins)).time()
-
-                # Determine Punch Status
-                punch_status = 'HD'
-                punch_label = ''
-
-                if p_in <= off_start:
-                    if eff_hours >= 8:
-                        punch_status = 'FD'
-                    else:
-                        punch_status = 'HD'
-                elif p_in <= grace_time:
-                    if local_out and local_out.time() >= off_end:
-                        if grace_used < grace_limit:
-                            grace_used += 1
-                            punch_status = 'FD'
-                            punch_label = f'G{grace_used}'
-                        else:
-                            punch_status = 'HD'
-                            punch_label = 'Grace Exhausted'
-                    else:
-                        punch_status = 'HD'
-                else:
-                    punch_status = 'HD'
-
-                # SMART MERGE: If punch is HD but they have an approved leave for the day
-                if punch_status == 'HD' and leave_code:
-                    day_info.update({
-                        'status': 'HD',
-                        'css': 'mark-hd',
-                        'label': f'HD + {leave_code}'  # Highlights the combined status
-                    })
-                else:
-                    day_info.update({
-                        'status': punch_status,
-                        'css': 'mark-fd' if punch_status == 'FD' else 'mark-hd',
-                        'label': punch_label
-                    })
-
-            # --- PRIORITY 3: APPROVED LEAVES (Only if no punches found) ---
-            elif leave_code:
-                day_info.update({
-                    'status': leave_code,
-                    'css': 'bg-primary text-white',
-                    'label': 'Approved Leave'
-                })
-
-            # --- FALLBACK: Database 'on_leave' status (for safety) ---
-            elif rec and rec.status == 'on_leave':
-                day_info.update({
-                    'status': 'LEAVE',
-                    'label': rec.remarks or 'Approved Leave',
-                    'css': 'bg-primary text-white'
-                })
-
-            report_data.append(day_info)
-
-        ctx.update({
-            'report': report_data,
-            'month_name': calendar.month_name[month],
-            'year': year,
-        })
-        return ctx
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        emp = self.object
-        month = int(self.kwargs['month'])
-        year = int(self.kwargs['year'])
-        tz = timezone.get_current_timezone()
-        comp = emp.company
-
-        days_in_month = calendar.monthrange(year, month)[1]
-        report_data = []
-        grace_used = 0
-
-        # Prefetch data
-        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
-            employee=emp, attendance_date__year=year, attendance_date__month=month).order_by('attendance_date')}
-
-        holiday_dates = []
-        if emp.holiday_calendar:
-            holiday_dates = m.Holiday.objects.filter(
-                calendar=emp.holiday_calendar, date__year=year, date__month=month
-            ).values_list('date', flat=True)
-
-        leaves = m.LeaveApplication.objects.filter(
-            employee=emp, status='approved',
-            start_date__lte=date(year, month, days_in_month),
-            end_date__gte=date(year, month, 1)
-        ).select_related('leave_type')
-
-        leave_map = {}
-        for l in leaves:
-            curr = l.start_date
-            while curr <= l.end_date:
-                if curr.month == month and curr.year == year:
-                    leave_map[curr] = l.leave_type.code.upper()
-                curr += timedelta(days=1)
-
-        for d in range(1, days_in_month + 1):
-            dt = date(year, month, d)
-
-            # --- SMART LOGIC: FETCH POLICY PER DAY ---
-            # This ensures July shows 10-6 and August shows 9-5 automatically
-            policy = comp.get_policy_for_date(dt)
-            off_start = policy.office_start_time
-            off_end = policy.office_end_time
-            grace_deadline_mins = policy.grace_minutes
-            grace_limit = policy.grace_allowed_count
-            full_threshold = float(policy.full_day_threshold_hours)
-            # ------------------------------------------
-
-            rec = records.get(dt)
-            leave_code = leave_map.get(dt)
-            is_holiday = dt in holiday_dates
-            is_sunday = dt.weekday() == 6
-
-            day_info = {
-                'date': dt, 'in': None, 'out': None, 'hours': 0,
-                'status': 'ABS', 'label': '', 'css': 'mark-abs'
-            }
-
-            if is_holiday or is_sunday:
-                day_info['status'] = 'HOL' if is_holiday else 'SUN'
-                day_info['css'] = 'text-muted border'
-                if rec and rec.check_in:
-                    day_info['label'] = 'Extra Work'
-
-            elif rec and rec.check_in:
-                local_in = timezone.localtime(rec.check_in)
-                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
-                day_info['in'] = local_in
-                day_info['out'] = local_out
-
-                p_in = local_in.time()
-                p_out = local_out.time() if local_out else off_start
-
-                eff_s = max(p_in, off_start)
-                eff_e = min(p_out, off_end)
-                eff_hours = (datetime.combine(dt, eff_e) - datetime.combine(dt, eff_s)).total_seconds() / 3600
-                day_info['hours'] = round(eff_hours, 2)
-
-                grace_time = (datetime.combine(dt, off_start) + timedelta(minutes=grace_deadline_mins)).time()
-
-                punch_status = 'HD'
-                punch_label = ''
-
-                if p_in <= off_start:
-                    if eff_hours >= full_threshold:  # Uses policy threshold
-                        punch_status = 'FD'
-                    else:
-                        punch_status = 'HD'
-                elif p_in <= grace_time:
-                    if local_out and local_out.time() >= off_end:
-                        if grace_used < grace_limit:
-                            grace_used += 1
-                            punch_status = 'FD'
-                            punch_label = f'Grace Strike {grace_used}/{grace_limit}'
-                        else:
-                            punch_status = 'HD'
-                            punch_label = 'Grace Exhausted'
-                    else:
-                        punch_status = 'HD'
-                else:
-                    punch_status = 'HD'
-
-                if punch_status == 'HD' and leave_code:
-                    day_info.update({
-                        'status': 'HD', 'css': 'mark-hd', 'label': f'HD + {leave_code}'
-                    })
-                else:
-                    day_info.update({
-                        'status': punch_status,
-                        'css': 'mark-fd' if punch_status == 'FD' else 'mark-hd',
-                        'label': punch_label
-                    })
-
-            elif leave_code:
-                day_info.update({'status': leave_code,
-                                 'css': 'bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25',
-                                 'label': 'Approved Leave'})
-
-            elif rec and rec.status == 'on_leave':
-                day_info.update(
-                    {'status': 'LEAVE', 'label': rec.remarks or 'Approved Leave', 'css': 'text-primary border'})
-
-            report_data.append(day_info)
-
-        ctx.update({
-            'report': report_data,
-            'month_name': calendar.month_name[month],
-            'year': year,
-        })
-        return ctx
-
-
-class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
-    model = m.Employee
-    template_name = 'hrms/attendance/punch_report.html'
-    context_object_name = 'target_employee'
-    pk_url_kwarg = 'emp_id'
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        emp = self.object
-        month = int(self.kwargs['month'])
-        year = int(self.kwargs['year'])
-        comp = emp.company
-
-        days_in_month = calendar.monthrange(year, month)[1]
-        report_data = []
-
-        # Counters for Summary
-        stats = {'FD': 0, 'HD': 0, 'ABS': 0, 'Grace': 0, 'Leave': 0}
-
-        # Data fetching
-        records = {r.attendance_date: r for r in m.AttendanceRecord.objects.filter(
-            employee=emp, attendance_date__year=year, attendance_date__month=month)}
-
-        holiday_dates = []
-        if emp.holiday_calendar:
-            holiday_dates = m.Holiday.objects.filter(
-                calendar=emp.holiday_calendar, date__year=year, date__month=month
-            ).values_list('date', flat=True)
-
-        leaves = m.LeaveApplication.objects.filter(
-            employee=emp, status='approved',
-            start_date__lte=date(year, month, days_in_month),
-            end_date__gte=date(year, month, 1)
-        ).select_related('leave_type')
-
-        leave_map = {dt: l.leave_type.code.upper() for l in leaves for dt in
-                     [l.start_date + timedelta(days=x) for x in range((l.end_date - l.start_date).days + 1)]
-                     if dt.month == month and dt.year == year}
-
-        grace_used = 0
-
-        for d in range(1, days_in_month + 1):
-            dt = date(year, month, d)
-            policy = comp.get_policy_for_date(dt)  # Dynamic policy per day
-
-            off_start = policy.office_start_time
-            off_end = policy.office_end_time
-            grace_limit = policy.grace_allowed_count
-            full_thresh = float(policy.full_day_threshold_hours)
-
-            rec = records.get(dt)
-            leave_code = leave_map.get(dt)
-            is_holiday = dt in holiday_dates
-            is_sunday = dt.weekday() == 6
-
-            day_info = {
-                'date': dt, 'in': None, 'out': None, 'hours': 0,
-                'status': 'ABS', 'label': '', 'css': 'mark-abs'
-            }
-
-            if is_holiday or is_sunday:
-                day_info.update({'status': 'HOL' if is_holiday else 'SUN', 'css': 'mark-sun'})
-
-            elif rec and rec.check_in:
-                local_in = timezone.localtime(rec.check_in)
-                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
-                day_info.update({'in': local_in, 'out': local_out})
-
-                # Math
-                p_in = local_in.time()
-                p_out = local_out.time() if local_out else off_start
-                eff_hours = (datetime.combine(dt, min(p_out, off_end)) -
-                             datetime.combine(dt, max(p_in, off_start))).total_seconds() / 3600
-                day_info['hours'] = round(eff_hours, 2)
-
-                grace_deadline = (datetime.combine(dt, off_start) + timedelta(minutes=policy.grace_minutes)).time()
-
-                # Status Logic
-                if p_in <= off_start:
-                    if day_info['hours'] >= full_thresh:
-                        day_info.update({'status': 'FD', 'css': 'mark-fd'})
-                        stats['FD'] += 1
-                    else:
-                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Short Duration'})
-                        stats['HD'] += 1
-                elif p_in <= grace_deadline:
-                    if local_out and local_out.time() >= off_end:
-                        if grace_used < grace_limit:
-                            grace_used += 1
-                            day_info.update(
-                                {'status': 'FD', 'css': 'mark-fd', 'label': f'Grace Used ({grace_used}/{grace_limit})'})
-                            stats['FD'] += 1
-                            stats['Grace'] += 1
-                        else:
-                            day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Grace Exhausted'})
-                            stats['HD'] += 1
-                    else:
-                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Late + Early Out'})
-                        stats['HD'] += 1
-                else:
-                    day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': 'Late Arrival'})
-                    stats['HD'] += 1
-
-            elif leave_code:
-                day_info.update({'status': leave_code, 'css': 'mark-leave', 'label': 'Approved Leave'})
-                stats['Leave'] += 1
-            else:
-                stats['ABS'] += 1
-
-            report_data.append(day_info)
-
-        ctx.update({
-            'report': report_data,
-            'stats': stats,
-            'month_name': calendar.month_name[month],
-            'year': year,
-        })
-        return ctx
 
 
 class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
@@ -4972,6 +4780,193 @@ class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
         })
         return ctx
 
+class EmployeePunchReportView(HRRequiredMixin, SidebarContextMixin, DetailView):
+    model = m.Employee
+    template_name = 'hrms/attendance/punch_report.html'
+    context_object_name = 'target_employee'
+    pk_url_kwarg = 'emp_id'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        emp = self.object
+        month = int(self.kwargs['month'])
+        year = int(self.kwargs['year'])
+        comp = emp.company
+
+        days_in_month = calendar.monthrange(year, month)[1]
+        report_data = []
+        stats = {'FD': 0, 'HD': 0, 'ABS': 0, 'Grace': 0, 'Leave': 0}
+
+        records = {
+            r.attendance_date: r
+            for r in m.AttendanceRecord.objects.filter(
+                employee=emp, attendance_date__year=year, attendance_date__month=month
+            )
+        }
+
+        holiday_dates = []
+        if emp.holiday_calendar:
+            holiday_dates = m.Holiday.objects.filter(
+                calendar=emp.holiday_calendar, date__year=year, date__month=month
+            ).values_list('date', flat=True)
+
+        leaves = m.LeaveApplication.objects.filter(
+            employee=emp,
+            status=getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+            start_date__lte=date(year, month, days_in_month),
+            end_date__gte=date(year, month, 1)
+        ).select_related('leave_type')
+
+        leave_map = {}
+        for l in leaves:
+            c = max(l.start_date, date(year, month, 1))
+            end_bound = min(l.end_date, date(year, month, days_in_month))
+            while c <= end_bound:
+                reason_lower = (l.reason or '').lower()
+                is_auto = 'auto-approved' in reason_lower or 'auto-approval' in reason_lower
+                leave_map[c] = {
+                    'code': (l.leave_type.code or '').upper(),
+                    'name': l.leave_type.name,
+                    'is_auto': is_auto,
+                    'day_type': getattr(l, 'day_type', 'full'),
+                    'reason': l.reason or 'Approved Leave',
+                }
+                c += timedelta(days=1)
+
+        grace_used = 0
+
+        for d in range(1, days_in_month + 1):
+            dt = date(year, month, d)
+            policy = comp.get_policy_for_date(dt)
+
+            off_start = policy.office_start_time
+            off_end = policy.office_end_time
+            grace_limit = policy.grace_allowed_count
+            full_thresh = float(policy.full_day_threshold_hours)
+
+            rec = records.get(dt)
+            leave_info = leave_map.get(dt)
+            is_holiday = dt in holiday_dates
+            is_sunday = dt.weekday() == 6
+
+            rec_remarks = rec.remarks if rec and rec.remarks else ''
+            rec_is_auto = 'auto-approved' in rec_remarks.lower()
+
+            day_info = {
+                'date': dt, 'in': None, 'out': None, 'hours': 0,
+                'status': 'ABS', 'label': '', 'css': 'mark-abs',
+                'in_lat': None, 'in_lng': None,
+                'out_lat': None, 'out_lng': None,
+                'punch_source': None, 'photo': None,
+                'is_auto_leave': bool(rec_is_auto or (leave_info and leave_info['is_auto'])),
+            }
+
+            if is_holiday or is_sunday:
+                day_info.update({'status': 'HOL' if is_holiday else 'SUN', 'css': 'mark-sun'})
+
+            elif rec and rec.check_in:
+                local_in = timezone.localtime(rec.check_in)
+                local_out = timezone.localtime(rec.check_out) if rec.check_out else None
+
+                day_info.update({
+                    'in': local_in, 'out': local_out,
+                    'in_lat': rec.punch_in_latitude, 'in_lng': rec.punch_in_longitude,
+                    'out_lat': rec.punch_out_latitude, 'out_lng': rec.punch_out_longitude,
+                    'punch_source': getattr(rec, 'punch_source', 'mobile'),
+                    'photo': rec.punch_in_photo.url if rec.punch_in_photo else None
+                })
+
+                p_in = local_in.time()
+                p_out = local_out.time() if local_out else off_start
+                eff_hours = (datetime.combine(dt, min(p_out, off_end)) -
+                             datetime.combine(dt, max(p_in, off_start))).total_seconds() / 3600
+                day_info['hours'] = round(eff_hours, 2)
+                grace_deadline = (datetime.combine(dt, off_start) + timedelta(minutes=policy.grace_minutes)).time()
+
+                # --- CRITICAL FIX: If status was manually updated to 'present', display FD and suppress old leave ---
+                if str(rec.status).lower() in ['present', 'fd']:
+                    day_info.update({
+                        'status': 'FD',
+                        'css': 'mark-fd',
+                        'label': rec.remarks or 'Present',
+                        'is_auto_leave': False,  # Suppress the yellow Auto-Approved tag
+                    })
+                    stats['FD'] += 1
+                else:
+                    # Regular punch evaluation
+                    punch_status = 'HD'
+                    punch_label = ''
+
+                    if p_in <= off_start:
+                        if day_info['hours'] >= full_thresh:
+                            punch_status = 'FD'
+                        else:
+                            punch_status = 'HD'
+                            punch_label = 'Short Duration'
+                    elif p_in <= grace_deadline:
+                        if local_out and local_out.time() >= off_end:
+                            if grace_used < grace_limit:
+                                grace_used += 1
+                                punch_status = 'FD'
+                                punch_label = f'Grace Used ({grace_used}/{grace_limit})'
+                                stats['Grace'] += 1
+                            else:
+                                punch_status = 'HD'
+                                punch_label = 'Grace Exhausted'
+                        else:
+                            punch_status = 'HD'
+                            punch_label = 'Late + Early Out'
+                    else:
+                        punch_status = 'HD'
+                        punch_label = 'Late Arrival'
+
+                    if punch_status == 'HD' and leave_info:
+                        leave_code = leave_info['code']
+                        auto_flag = " (Auto-Approved)" if day_info['is_auto_leave'] else ""
+                        day_info.update({
+                            'status': f"HD + {leave_code}",
+                            'css': 'mark-hd',
+                            'label': f"Half Day worked + {leave_code}{auto_flag}",
+                        })
+                        stats['HD'] += 1
+                    elif punch_status == 'FD':
+                        day_info.update({'status': 'FD', 'css': 'mark-fd', 'label': punch_label})
+                        stats['FD'] += 1
+                    else:
+                        day_info.update({'status': 'HD', 'css': 'mark-hd', 'label': punch_label})
+                        stats['HD'] += 1
+
+            elif leave_info:
+                leave_code = leave_info['code']
+                label_text = 'Auto-Approved Leave' if day_info['is_auto_leave'] else 'Approved Leave'
+                day_info.update({
+                    'status': leave_code,
+                    'css': 'mark-leave',
+                    'label': label_text,
+                })
+                stats['Leave'] += 1
+
+            elif rec and rec.status == getattr(m.AttendanceRecord.Status, 'ON_LEAVE', 'on_leave'):
+                label_text = 'Auto-Approved Leave' if day_info['is_auto_leave'] else 'On Leave'
+                day_info.update({
+                    'status': 'LEAVE',
+                    'css': 'mark-leave',
+                    'label': rec.remarks or label_text,
+                })
+                stats['Leave'] += 1
+
+            else:
+                stats['ABS'] += 1
+
+            report_data.append(day_info)
+
+        ctx.update({
+            'report': report_data,
+            'stats': stats,
+            'month_name': calendar.month_name[month],
+            'year': year,
+        })
+        return ctx
 
 # ------------------autoapprovalleavelogic-----------------------------
 
@@ -4982,7 +4977,7 @@ from .permissions import HRRequiredMixin
 from .leave_logic import auto_convert_absent_to_leaves
 
 class AutoApproveAbsentLeaveView(HRRequiredMixin, View):
-    """POST endpoint to convert absent days to CL/EL/LWP for selected employees."""
+    """POST endpoint to convert absent days.0656 001o CL/EL/LWP for selected employees."""
 
     def post(self, request, *args, **kwargs):
         emp_ids = request.POST.getlist('selected_employees')
@@ -5003,35 +4998,50 @@ class AutoApproveAbsentLeaveView(HRRequiredMixin, View):
         )
         return redirect(f"/hrms/attendance/matrix/?month={month}&year={year}")
 
+
 class AutoApproveAbsentLeaveView(HRRequiredMixin, View):
     """POST endpoint to convert absent days to CL/EL/LWP for selected employees."""
 
     def post(self, request, *args, **kwargs):
+        # Read liEmployeePunchReportViewst of selected employee IDs submitted from checkboxes
         emp_ids = request.POST.getlist('selected_employees')
-        year = int(request.POST.get('year', date.today().year))
-        month = int(request.POST.get('month', date.today().month))
 
+        # Parse year and month with safe fallbacks
+        try:
+            year = int(request.POST.get('year') or date.today().year)
+            month = int(request.POST.get('month') or date.today().month)
+        except ValueError:
+            year = date.today().year
+            month = date.today().month
+
+        # Validate that positive month numbers are processed
+        if month < 1 or month > 12:
+            month = date.today().month
+
+        # Check if at least one employee was checked
         if not emp_ids:
             messages.warning(request, "No employees selected for auto-approval.")
-            return redirect(request.META.get('HTTP_REFERER', 'hrms:attendance-matrix'))
+            return redirect(request.META.get('HTTP_REFERER', 'hrms:attendance_matrix'))
 
+        # Run the conversion logic
         results = auto_convert_absent_to_leaves(emp_ids, year, month, request.user)
 
-        # Retrieve values safely with fallback defaults
+        # Safely extract dictionary keys to prevent any KeyError
         total_emp = results.get('total_employees', 0)
         converted = results.get('converted_days', 0)
-        cl = results.get('cl_deducted', results.get('cl_count', results.get('cl', 0)))
-        el = results.get('el_deducted', results.get('el_count', results.get('el', 0)))
-        lwp = results.get('lwp_count', results.get('lwp_deducted', results.get('lwp', 0)))
+        cl = results.get('cl_deducted', 0)
+        el = results.get('el_deducted', 0)
+        lwp = results.get('lwp_count', 0)
 
+        # Notify user of converted counts
         messages.success(
             request,
             f"Successfully processed {total_emp} confirmed employees. "
-            f"Converted {converted} absent days "
-            f"(CL: {cl}, EL: {el}, LWP: {lwp})."
+            f"Converted {converted} absent days (CL: {cl}, EL: {el}, LWP: {lwp})."
         )
         return redirect(f"/hrms/attendance/matrix/?month={month}&year={year}")
-# ---------------------------------------------------------------------------
+
+        # ---------------------------------------------------------------------------
 # Loans/Advances & Payroll Extras (Incentives) — HR/Admin manage
 # ---------------------------------------------------------------------------
 class LoanAdvanceListView(HRRequiredMixin, SidebarContextMixin, ListView):
@@ -6863,6 +6873,113 @@ def manual_punch_edit_ajax(request):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
+@login_required
+def manual_punch_edit_ajax(request):
+    """AJAX endpoint for HR/SuperAdmin to edit punch records with full audit and automatic leave sync/refund."""
+    if not is_hr_or_above(request.user):
+        return JsonResponse({'success': False, 'error': 'Permission denied.'}, status=403)
+
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'POST required.'}, status=400)
+
+    def parse_time_input(time_val, base_date, tz):
+        if not time_val or str(time_val).strip() in ('', 'None', 'null'):
+            return None
+        cleaned = str(time_val).strip()
+        for fmt in ('%H:%M', '%H:%M:%S', '%I:%M %p', '%I:%M%p', '%I:%M:%S %p'):
+            try:
+                t = datetime.strptime(cleaned, fmt).time()
+                dt = datetime.combine(base_date, t)
+                return timezone.make_aware(dt, tz)
+            except ValueError:
+                continue
+        return None
+
+    try:
+        data = json.loads(request.body)
+        record_id = data.get('record_id')
+        emp_id = data.get('employee_id')
+        date_str = data.get('date')
+        check_in_str = data.get('check_in')
+        check_out_str = data.get('check_out')
+        status_val = data.get('status')
+        edit_reason = (data.get('edit_reason') or '').strip()
+
+        if not edit_reason:
+            return JsonResponse({'success': False, 'error': 'A reason for manual edit is mandatory.'}, status=400)
+
+        tz = timezone.get_current_timezone()
+
+        if record_id:
+            record = get_object_or_404(m.AttendanceRecord, pk=record_id)
+        else:
+            if not emp_id or not date_str:
+                return JsonResponse({'success': False, 'error': 'Employee and Date required.'}, status=400)
+            att_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            record, _ = m.AttendanceRecord.objects.get_or_create(
+                employee_id=emp_id, attendance_date=att_date
+            )
+
+        with transaction.atomic():
+            # 1. Update punch timestamps
+            record.check_in = parse_time_input(check_in_str, record.attendance_date, tz)
+            record.check_out = parse_time_input(check_out_str, record.attendance_date, tz)
+
+            # 2. Update status & audit details
+            if status_val:
+                record.status = status_val
+            record.edited_by = request.user
+            record.edited_on = timezone.now()
+            record.edit_reason = edit_reason
+
+            # Calculate total hours if both punches exist
+            if record.check_in and record.check_out:
+                hrs = (record.check_out - record.check_in).total_seconds() / 3600.0
+                record.total_hours = Decimal(str(round(hrs, 2)))
+            record.save()
+
+            # 3. SYNC & REFUND LEAVE APPLICATION
+            # If the punch is marked 'present' (Full Day), any active leave on this date must be cancelled and refunded
+            normalized_status = str(record.status).lower()
+            if normalized_status in ['present', 'fd']:
+                # Find approved leaves covering this exact date
+                active_leaves = m.LeaveApplication.objects.filter(
+                    employee=record.employee,
+                    status=getattr(m.LeaveApplication.Status, 'APPROVED', 'approved'),
+                    start_date__lte=record.attendance_date,
+                    end_date__gte=record.attendance_date
+                )
+
+                wallet, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=record.employee)
+                field_map = {
+                    'CL': 'casual_leave', 'EL': 'earned_leave', 'SL': 'sick_leave',
+                    'ML': 'menstrual_leave', 'MTL': 'menstrual_leave',
+                    'BL': 'bereavement_leave', 'CO': 'comp_off'
+                }
+
+                for leave_app in active_leaves:
+                    code = (leave_app.leave_type.code or '').upper().strip()
+                    refund_qty = Decimal(str(leave_app.total_days or 1.0))
+                    field_name = field_map.get(code)
+
+                    # Refund back to the live wallet
+                    if field_name and hasattr(wallet, field_name):
+                        curr_val = Decimal(str(getattr(wallet, field_name, 0.0) or 0.0))
+                        setattr(wallet, field_name, float(curr_val + refund_qty))
+                        wallet.save()
+
+                    # Cancel the leave so it stops showing on Matrix and Punch Analysis
+                    leave_app.status = getattr(m.LeaveApplication.Status, 'CANCELLED', 'cancelled')
+                    leave_app.rejection_reason = f"Auto-refunded: Marked Present via HR Audit Edit by {request.user.username}"
+                    leave_app.save(update_fields=['status', 'rejection_reason'])
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Punch updated, leave cancelled, and balance refunded successfully.',
+            'record_id': record.id,
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 # ===========================================================================
 # PUNCH REGULARIZATION WORKFLOW
 # ===========================================================================
@@ -7358,12 +7475,20 @@ class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
         encoding = extract_face_encoding(photo)
         if not encoding:
             return JsonResponse({'error': 'Could not detect a clear face in the photo.'}, status=400)
+        #Check if this face is ALREADY enrolled for ANY OTHER employee
+        existing_biometrics = EmployeeBiometric.objects.exclude(employee=employee).select_related('employee')
+        duplicate_emp, _ = match_1_to_n(photo, existing_biometrics, threshold=0.32)
+        if duplicate_emp:
+            return JsonResponse({
+                'error': f'Duplicate Face Detected! This face is already enrolled under {duplicate_emp.full_name} ({duplicate_emp.employee_code}).'
+            }, status=409)
 
         EmployeeBiometric.objects.update_or_create(
             employee=employee,
             defaults={'face_encoding': encoding, 'registered_photo': photo}
         )
         return JsonResponse({'status': 'success', 'message': f'Face enrolled for {employee.full_name}'})
+
 # 2. REMOTE / MOBILE WORKER PUNCH VIEW (1:1 Verification)
 class MobilePunchInView(LoginRequiredMixin, View):
     @method_decorator(csrf_exempt)
@@ -7421,6 +7546,7 @@ class MobilePunchInView(LoginRequiredMixin, View):
             'attendance_id': attendance.id,
             'check_in': attendance.check_in.strftime('%I:%M %p')
         })
+
 class MobilePunchInView(LoginRequiredMixin, View):
     @method_decorator(csrf_exempt)
     def dispatch(self, *args, **kwargs):
@@ -7480,6 +7606,8 @@ class MobilePunchInView(LoginRequiredMixin, View):
             attendance.punch_source = 'mobile'
             attendance.status = AttendanceRecord.Status.PRESENT
             attendance.save()
+            action_type = "Punch In"
+
 
         return JsonResponse({
             'status': 'success',
@@ -7487,6 +7615,78 @@ class MobilePunchInView(LoginRequiredMixin, View):
             'check_in': attendance.check_in.strftime('%I:%M %p')
         })
 
+    def post(self, request, *args, **kwargs):
+        try:
+            employee = request.user.employee_profile
+        except AttributeError:
+            return JsonResponse({'error': 'No linked employee profile found.'}, status=400)
+
+        if employee.attendance_mode != Employee.AttendanceMode.REMOTE_FIELD:
+            return JsonResponse({
+                'error': 'Remote mobile punch is disabled for your profile. Please punch using the office tablet at reception.'
+            }, status=403)
+
+        photo = request.FILES.get('punch_photo')
+        lat = request.POST.get('latitude')
+        lng = request.POST.get('longitude')
+
+        if not photo or not lat or not lng:
+            return JsonResponse({'error': 'Photo and GPS coordinates are required.'}, status=400)
+
+        biometric = getattr(employee, 'biometric', None)
+        if not biometric:
+            return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
+
+        is_match, msg = verify_1_to_1(photo, biometric.face_encoding)
+        if not is_match:
+            return JsonResponse({'error': f'Face verification failed: {msg}'}, status=401)
+
+        today = timezone.localdate()
+        now = timezone.now()
+
+        attendance, created = AttendanceRecord.objects.get_or_create(
+            employee=employee,
+            attendance_date=today,
+            defaults={
+                'check_in': now,
+                'punch_in_latitude': lat,
+                'punch_in_longitude': lng,
+                'punch_in_photo': photo,
+                'is_face_verified': True,
+                'punch_source': 'mobile',
+                'status': AttendanceRecord.Status.PRESENT,
+            }
+        )
+
+        if not created:
+            if not attendance.check_in:
+                # 1. First Punch In of the day
+                attendance.check_in = now
+                attendance.punch_in_latitude = lat
+                attendance.punch_in_longitude = lng
+                attendance.punch_in_photo = photo
+                attendance.is_face_verified = True
+                attendance.punch_source = 'mobile'
+                attendance.status = AttendanceRecord.Status.PRESENT
+                attendance.save()
+                action_type = "Punch In"
+            else:
+                # 2. Punch Out (Any subsequent scan logs Punch Out)
+                attendance.check_out = now
+                attendance.punch_out_latitude = lat
+                attendance.punch_out_longitude = lng
+                attendance.save()  # Triggers total_hours recalculation in AttendanceRecord.save()
+                action_type = "Punch Out"
+        else:
+            action_type = "Punch In"
+
+        return JsonResponse({
+            'status': 'success',
+            'action': action_type,
+            'attendance_id': attendance.id,
+            'time': now.strftime('%I:%M %p'),
+            'message': f'{action_type} successful at {now.strftime("%I:%M %p")}'
+        })
 
 # 3. DELHI OFFICE SHARED KIOSK PUNCH VIEW (1:N Matching)
 class KioskPunchInView(View):
@@ -7531,7 +7731,62 @@ class KioskPunchInView(View):
             'employee_name': matched_employee.full_name,
             'check_in': attendance.check_in.strftime('%I:%M %p')
         })
+class KioskPunchInView(View):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
 
+    def post(self, request, *args, **kwargs):
+        photo = request.FILES.get('punch_photo')
+        if not photo:
+            return JsonResponse({'error': 'Camera frame required.'}, status=400)
+
+        all_biometrics = EmployeeBiometric.objects.select_related('employee').all()
+        matched_employee, msg = match_1_to_n(photo, all_biometrics)
+
+        if not matched_employee:
+            return JsonResponse({'error': 'Face not recognized.'}, status=401)
+
+        today = timezone.localdate()
+        now = timezone.now()
+
+        attendance, created = AttendanceRecord.objects.get_or_create(
+            employee=matched_employee,
+            attendance_date=today,
+            defaults={
+                'check_in': now,
+                'punch_in_photo': photo,
+                'is_face_verified': True,
+                'punch_source': 'kiosk',
+                'status': AttendanceRecord.Status.PRESENT,
+            }
+        )
+
+        if not created:
+            if not attendance.check_in:
+                # First Punch In
+                attendance.check_in = now
+                attendance.punch_in_photo = photo
+                attendance.is_face_verified = True
+                attendance.punch_source = 'kiosk'
+                attendance.status = AttendanceRecord.Status.PRESENT
+                attendance.save()
+                action_type = "Punch In"
+            else:
+                # Punch Out
+                attendance.check_out = now
+                attendance.save()  # Recalculates gross hours and thresholds automatically
+                action_type = "Punch Out"
+        else:
+            action_type = "Punch In"
+
+        return JsonResponse({
+            'status': 'success',
+            'employee_name': matched_employee.full_name,
+            'action': action_type,
+            'time': now.strftime('%I:%M %p'),
+            'message': f'{matched_employee.full_name}: {action_type} recorded at {now.strftime("%I:%M %p")}'
+        })
 
 # 4. LOCATION PING API (Background Tracking Loop)
 class LocationPingView(LoginRequiredMixin, View):

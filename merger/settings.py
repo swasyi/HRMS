@@ -176,9 +176,9 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 
 
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-EMAIL_HOST = "email-smtp.ap-south-1.amazonaws.com"
+EMAIL_HOST = "emails-smtp.ap-south-1.amazonaws.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.getenv("SES_SMTP_USERNAME")
 EMAIL_HOST_PASSWORD = os.getenv("SES_SMTP_PASSWORD")
-DEFAULT_FROM_EMAIL = "Oblu Tools <swastioblu@gmail.com>"
+DEFAULT_FROM_EMAIL = "Oblu Tools <swastioblu@emails.com>"

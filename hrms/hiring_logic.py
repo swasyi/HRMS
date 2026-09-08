@@ -113,7 +113,7 @@ def reject_application(application, user, reason=''):
 def schedule_interview(application, user, interview_round, scheduled_on, interviewer=None,
                         mode=m.Interview.Mode.ONLINE):
     """Creates the Interview, advances the pipeline to INTERVIEWING, logs it,
-    and fires the dual candidate/interviewer email notification."""
+    and fires the dual candidate/interviewer emails notification."""
     ensure_unlocked(application, user)
 
     interview = m.Interview.objects.create(
@@ -152,7 +152,7 @@ def move_to_offer(application, user, offer_date, ctc_offered, joining_date=None,
 
 
 def send_offer(offer, user):
-    """Marks the offer SENT and fires the dual candidate/manager email."""
+    """Marks the offer SENT and fires the dual candidate/manager emails."""
     ensure_unlocked(offer.application, user)
     if offer.status != m.OfferLetter.Status.DRAFT:
         raise HiringError('Only a draft offer can be sent.')
@@ -212,7 +212,7 @@ def convert_to_employee(offer, user, company, department, designation, employee_
 
     candidate = offer.application.candidate
     if m.Employee.objects.filter(email=candidate.email).exists():
-        raise HiringError(f'An employee with email {candidate.email} already exists.')
+        raise HiringError(f'An employee with emails {candidate.email} already exists.')
 
     employee = m.Employee.objects.create(
         company=company, department=department, designation=designation, employee_code=employee_code,

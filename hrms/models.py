@@ -180,6 +180,13 @@ class Employee(TimeStampedModel):
         FEMALE = 'F', 'Female'
         OTHER = 'O', 'Other'
 
+        # 1. Add MaritalStatus enum
+    class MaritalStatus(models.TextChoices):
+        SINGLE = 'single', 'Single'
+        MARRIED = 'married', 'Married'
+        DIVORCED = 'divorced', 'Divorced'
+        WIDOWED = 'widowed', 'Widowed'
+
     # Link to the login account (inventory.User). Optional: HR can create the
     # HR record before an employee is issued login credentials.
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
@@ -197,6 +204,12 @@ class Employee(TimeStampedModel):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, blank=True)
     gender = models.CharField(max_length=1, choices=Gender.choices, blank=True)
+    marital_status = models.CharField(
+        max_length=15,
+        choices=MaritalStatus.choices,
+        default=MaritalStatus.SINGLE,
+        blank=True
+    )
     date_of_birth = models.DateField(null=True, blank=True)
     father_name = models.CharField(max_length=200, blank=True)
     mother_name = models.CharField(max_length=200, blank=True)
@@ -246,6 +259,20 @@ class Employee(TimeStampedModel):
         related_name='employees',
         help_text="Assign regional holiday template to this employee"
     )
+
+    @property
+    def is_eligible_for_maternity_leave(self) -> bool:
+        return (
+                self.gender == self.Gender.FEMALE
+                and self.marital_status == self.MaritalStatus.MARRIED
+        )
+
+    @property
+    def is_eligible_for_paternity_leave(self) -> bool:
+        return (
+                self.gender == self.Gender.MALE
+                and self.marital_status == self.MaritalStatus.MARRIED
+        )
 
     # ADDED: Attendance Policy Mode (Office Kiosk vs Remote/Field Allowed)
     # =========================================================================
@@ -825,11 +852,23 @@ class AttendanceRecord(TimeStampedModel):
             gross_hours = Decimal(str(diff.total_seconds() / 3600)).quantize(Decimal('0.01'))
             self.total_hours = max(Decimal('0.00'), gross_hours)
 
+            # Check if this record has a Grace Strike and employee completed shift till office_end_time
+            is_grace_present = 'grace' in str(self.remarks).lower()
+            local_out = timezone.localtime(self.check_out).time() if timezone.is_aware(self.check_out) else self.check_out.time()
+            office_end = getattr(policy, 'office_end_time', None)
+            stayed_until_end = bool(local_out and office_end and local_out >= office_end)
+
             # Apply thresholds if not already marked as specialized status
             if self.status not in (self.Status.ON_LEAVE, self.Status.HOLIDAY, self.Status.WEEK_OFF):
-                if self.total_hours >= full_day_thresh:
+                # Condition A: Agar Grace laga hai aur banda office time tak ruka, to ye Full Day (PRESENT) rahega
+                if is_grace_present and stayed_until_end:
                     self.status = self.Status.PRESENT
                     self.is_half_day = False
+                # Condition B: 8.0 ghante ya usse zyada
+                elif self.total_hours >= full_day_thresh:
+                    self.status = self.Status.PRESENT
+                    self.is_half_day = False
+                # Condition C: 4.0 ghante se zyada lekin short duration (without grace)
                 elif self.total_hours >= half_day_thresh:
                     self.status = self.Status.HALF_DAY
                     self.is_half_day = True
@@ -867,7 +906,7 @@ class AttendanceRecord(TimeStampedModel):
 
         super().save(*args, **kwargs)
 
-        # 5. Automatically trigger late penalty logging & leave deduction if marked Half Day due to late arrival
+        # 5. Late arrival penalty trigger (Only if Grace is exhausted and it actually is Half Day)
         if self.status == self.Status.HALF_DAY and self.late_minutes > 0 and self.employee_id:
             try:
                 from .services import process_late_arrival_penalty
@@ -877,12 +916,10 @@ class AttendanceRecord(TimeStampedModel):
 
     def __str__(self):
         return f'{self.employee} - {self.attendance_date}'
+
     @property
     def is_grace_applied(self):
-        # This logic assumes policy is accessible; otherwise, use a threshold
-        # For template logic, we'll check if late_minutes > 0 and a penalty wasn't applied
-        return self.late_minutes > 0 and self.late_minutes <= 15 # Replace 15 with policy.grace_minutes
-
+        return 'grace' in str(self.remarks).lower()
 # --- NEW MODEL: BIOMETRIC PROFILES ---
 class EmployeeBiometric(TimeStampedModel):
     """Stores the reference 128-dimensional facial encoding vector for an employee."""
@@ -979,6 +1016,10 @@ class LeaveType(TimeStampedModel):
         MALE = 'M', 'Male'
         FEMALE = 'F', 'Female'
 
+    class ApplicableMaritalStatus(models.TextChoices):
+        ALL = 'all', 'All'
+        MARRIED = 'married', 'Married Only'
+        UNMARRIED = 'single', 'Unmarried Only'
     class AllocationMode(models.TextChoices):
         ANNUAL = 'annual', 'Annual (Lump Sum)'
         MONTHLY_ACCRUED = 'monthly_accrued', 'Monthly Accrued'
@@ -994,6 +1035,12 @@ class LeaveType(TimeStampedModel):
     requires_approval = models.BooleanField(default=True)
     requires_document = models.BooleanField(default=False)
     applicable_gender = models.CharField(max_length=5, choices=Gender.choices, default=Gender.ALL)
+    applicable_marital_status = models.CharField(
+        max_length=15,
+        choices=ApplicableMaritalStatus.choices,
+        default=ApplicableMaritalStatus.ALL,
+        help_text='Marital status eligible for this leave'
+    )
     description = models.TextField(blank=True)
     # Module B enhancements
     allocation_mode = models.CharField(
@@ -1155,7 +1202,11 @@ def sync_leave_and_attendance_on_approval(sender, instance, created, **kwargs):
     1. Deducts leave from bank using Priority Logic (CL -> EL fallback).
     2. Automatically creates AttendanceRecord entries as 'ON_LEAVE'.
     3. Handles Refund if leave is cancelled.
+    # If the application was created by the auto-approval engine,
+    # auto_convert_absent_to_leaves() has ALREADY deducted the exact balance.
     """
+    if 'auto-approved' in str(instance.reason).lower():
+        return
     if instance.status == LeaveApplication.Status.APPROVED:
         # --- PART A: Smart Deduction from Leave Bank ---
         # This function now handles the fallback: Specific Code -> CL -> EL -> LWP
@@ -1197,7 +1248,7 @@ def sync_leave_and_attendance_on_approval(sender, instance, created, **kwargs):
             status=AttendanceRecord.Status.ON_LEAVE
         ).update(status=AttendanceRecord.Status.ABSENT, remarks="Leave Cancelled")
 
-
+#this is leave bank which automatically calculate n assign employees to their annual leave
 class EmployeeLeaveBalance(models.Model):
     # Link directly to your existing Employee table
     e_name = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="assigned_leaves")

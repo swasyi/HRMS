@@ -140,7 +140,7 @@ class Command(BaseCommand):
                 first_name = name_parts[0]
                 last_name = name_parts[1] if len(name_parts) > 1 else ''
 
-                email_val = get_val(row_cells, 'email', 'email_id')
+                email_val = get_val(row_cells, 'emails', 'email_id')
                 email = email_val.lower() if email_val and '@' in email_val else ''
 
                 # 3. Search for Existing Inventory / Django User (NO AUTO CREATION)
@@ -215,7 +215,7 @@ class Command(BaseCommand):
                     'designation': designation,
                     'first_name': first_name,
                     'last_name': last_name,
-                    'email': email or f"{emp_code.lower()}@company.com",
+                    'emails': email or f"{emp_code.lower()}@company.com",
                     'phone': phone_comp or phone_personal,
                     'gender': gender,
                     'date_of_birth': dob,

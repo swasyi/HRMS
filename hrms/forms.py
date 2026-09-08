@@ -72,8 +72,9 @@ class EmployeeForm(BootstrapModelForm):
         model = m.Employee
         fields = [
             'company', 'department', 'designation', 'employee_code', 'first_name', 'last_name',
-            'email', 'phone', 'gender', 'date_of_birth', 'father_name', 'mother_name', 'address',
+            'email', 'phone', 'gender','marital_status', 'date_of_birth', 'father_name', 'mother_name', 'address',
             'emergency_contact', 'date_of_joining', 'date_of_confirmation', 'employment_type', 'status',
+            'holiday_calendar',
             'is_manager', 'reporting_manager','attendance_mode',
         ]
         widgets = {
@@ -260,7 +261,7 @@ class LeaveTypeForm(BootstrapModelForm):
         fields = [
             'company', 'name', 'code', 'allocation_mode', 'days_per_year', 'is_paid', 'is_carry_forward',
             'max_carry_forward', 'max_consecutive_days', 'min_consecutive_days', 'requires_approval',
-            'requires_document', 'requires_relationship', 'requires_stage', 'applicable_gender', 'description',
+            'requires_document', 'requires_relationship', 'requires_stage', 'applicable_gender','applicable_marital_status','description',
         ]
 
 
@@ -311,11 +312,24 @@ class LeaveApplicationForm(BootstrapModelForm):
         end_date = cleaned_data.get('end_date')
 
         if day_type == 'half':
-            cleaned_data['end_date'] = start_date
+            cleaned_data['end_date'] = LeaveApplicationForm
         elif start_date and end_date and end_date < start_date:
             raise forms.ValidationError('End date cannot be before start date.')
 
         return cleaned_data
+
+    def __init__(self, *args, employee=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if employee:
+            from django.db.models import Q
+            # Match company and filter by gender & marital status criteria
+            self.fields['leave_type'].queryset = m.LeaveType.objects.filter(
+                company=employee.company
+            ).filter(
+                Q(applicable_gender='all') | Q(applicable_gender=employee.gender)
+            ).filter(
+                Q(applicable_marital_status='all') | Q(applicable_marital_status=employee.marital_status)
+            )
 
 
 class LeaveApplicationHRForm(LeaveApplicationForm):

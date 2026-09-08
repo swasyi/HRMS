@@ -94,6 +94,10 @@
                   {{ form.gender }}
                   {% if form.gender.errors %}<div class="text-danger small mt-1">{{ form.gender.errors|striptags }}</div>{% endif %}
                 </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Marital Status</label>
+                    {{ form.marital_status }}
+                </div>
                 <div class="col-md-3">
                   <label class="form-label small fw-bold">Date of Birth</label>
                   {{ form.date_of_birth }}

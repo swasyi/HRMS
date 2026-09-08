@@ -84,74 +84,74 @@
   </div>
 
   <!-- Metric Stat Cards -->
-  <div class="row g-3 mb-4">
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card border-0 shadow-sm rounded-4 h-100 bg-primary-subtle text-primary p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small fw-semibold">Present Days</div>
-            <h4 class="fw-bold mb-0 text-primary">{{ stats.total_present }}</h4>
-          </div>
-          <div class="fs-3"><i class="bi bi-check-circle-fill"></i></div>
-        </div>
-      </div>
-    </div>
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card border-0 shadow-sm rounded-4 h-100 bg-info-subtle text-info p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small fw-semibold">Half Days</div>
-            <h4 class="fw-bold mb-0 text-info">{{ stats.total_half_day }}</h4>
-          </div>
-          <div class="fs-3"><i class="bi bi-pie-chart-fill"></i></div>
-        </div>
-      </div>
-    </div>
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card border-0 shadow-sm rounded-4 h-100 bg-primary-subtle text-primary p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small fw-semibold">On Leave</div>
-            <h4 class="fw-bold mb-0 text-primary">{{ stats.total_on_leave }}</h4>
-          </div>
-          <div class="fs-3"><i class="bi bi-calendar-event-fill"></i></div>
-        </div>
-      </div>
-    </div>
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card border-0 shadow-sm rounded-4 h-100 bg-danger-subtle text-danger p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small fw-semibold">Absent</div>
-            <h4 class="fw-bold mb-0 text-danger">{{ stats.total_absent }}</h4>
-          </div>
-          <div class="fs-3"><i class="bi bi-x-circle-fill"></i></div>
-        </div>
-      </div>
-    </div>
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card border-0 shadow-sm rounded-4 h-100 bg-secondary-subtle text-secondary p-3">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small fw-semibold">Holidays</div>
-            <h4 class="fw-bold mb-0 text-secondary">{{ stats.total_holidays }}</h4>
-          </div>
-          <div class="fs-3"><i class="bi bi-flag-fill"></i></div>
-        </div>
-      </div>
-    </div>
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card border-0 shadow-sm rounded-4 h-100 bg-light p-3 border">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small fw-semibold">Active Staff</div>
-            <h4 class="fw-bold mb-0 text-dark">{{ matrix_rows|length }}</h4>
-          </div>
-          <div class="fs-3 text-secondary"><i class="bi bi-people-fill"></i></div>
-        </div>
-      </div>
-    </div>
-  </div>
+<!--  <div class="row g-3 mb-4">-->
+<!--    <div class="col-6 col-md-4 col-xl-2">-->
+<!--      <div class="card border-0 shadow-sm rounded-4 h-100 bg-primary-subtle text-primary p-3">-->
+<!--        <div class="d-flex align-items-center justify-content-between">-->
+<!--          <div>-->
+<!--            <div class="text-muted small fw-semibold">Present Days</div>-->
+<!--            <h4 class="fw-bold mb-0 text-primary">{{ stats.total_present }}</h4>-->
+<!--          </div>-->
+<!--          <div class="fs-3"><i class="bi bi-check-circle-fill"></i></div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--    <div class="col-6 col-md-4 col-xl-2">-->
+<!--      <div class="card border-0 shadow-sm rounded-4 h-100 bg-info-subtle text-info p-3">-->
+<!--        <div class="d-flex align-items-center justify-content-between">-->
+<!--          <div>-->
+<!--            <div class="text-muted small fw-semibold">Half Days</div>-->
+<!--            <h4 class="fw-bold mb-0 text-info">{{ stats.total_half_day }}</h4>-->
+<!--          </div>-->
+<!--          <div class="fs-3"><i class="bi bi-pie-chart-fill"></i></div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--    <div class="col-6 col-md-4 col-xl-2">-->
+<!--      <div class="card border-0 shadow-sm rounded-4 h-100 bg-primary-subtle text-primary p-3">-->
+<!--        <div class="d-flex align-items-center justify-content-between">-->
+<!--          <div>-->
+<!--            <div class="text-muted small fw-semibold">On Leave</div>-->
+<!--            <h4 class="fw-bold mb-0 text-primary">{{ stats.total_on_leave }}</h4>-->
+<!--          </div>-->
+<!--          <div class="fs-3"><i class="bi bi-calendar-event-fill"></i></div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--    <div class="col-6 col-md-4 col-xl-2">-->
+<!--      <div class="card border-0 shadow-sm rounded-4 h-100 bg-danger-subtle text-danger p-3">-->
+<!--        <div class="d-flex align-items-center justify-content-between">-->
+<!--          <div>-->
+<!--            <div class="text-muted small fw-semibold">Absent</div>-->
+<!--            <h4 class="fw-bold mb-0 text-danger">{{ stats.total_absent }}</h4>-->
+<!--          </div>-->
+<!--          <div class="fs-3"><i class="bi bi-x-circle-fill"></i></div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--    <div class="col-6 col-md-4 col-xl-2">-->
+<!--      <div class="card border-0 shadow-sm rounded-4 h-100 bg-secondary-subtle text-secondary p-3">-->
+<!--        <div class="d-flex align-items-center justify-content-between">-->
+<!--          <div>-->
+<!--            <div class="text-muted small fw-semibold">Holidays</div>-->
+<!--            <h4 class="fw-bold mb-0 text-secondary">{{ stats.total_holidays }}</h4>-->
+<!--          </div>-->
+<!--          <div class="fs-3"><i class="bi bi-flag-fill"></i></div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--    <div class="col-6 col-md-4 col-xl-2">-->
+<!--      <div class="card border-0 shadow-sm rounded-4 h-100 bg-light p-3 border">-->
+<!--        <div class="d-flex align-items-center justify-content-between">-->
+<!--          <div>-->
+<!--            <div class="text-muted small fw-semibold">Active Staff</div>-->
+<!--            <h4 class="fw-bold mb-0 text-dark">{{ matrix_rows|length }}</h4>-->
+<!--          </div>-->
+<!--          <div class="fs-3 text-secondary"><i class="bi bi-people-fill"></i></div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--    </div>-->
+<!--  </div>-->
 
   <!-- Filter Card -->
   <div class="card border-0 shadow-sm rounded-4 mb-4">
@@ -456,11 +456,14 @@
   }
 
   // Initialize tooltips
-  document.addEventListener("DOMContentLoaded", function() {
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    tooltipTriggerList.map(function (tooltipTriggerEl) {
-      return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
+document.addEventListener("DOMContentLoaded", function() {
+  document.body.addEventListener('mouseover', function(e) {
+    const target = e.target.closest('[data-bs-toggle="tooltip"]');
+    if (target && !bootstrap.Tooltip.getInstance(target)) {
+      new bootstrap.Tooltip(target).show();
+    }
   });
+});
+
 </script>
 {% endblock %}

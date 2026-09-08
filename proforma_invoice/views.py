@@ -346,7 +346,7 @@ class CreateProformaInvoiceView(AccountantRequiredMixin, View):
                     if price_change_requests_for_email:
 
                         to_emails = ["bhavya@obluhc.com"]
-                        cc_emails = ["swasti.obluhc@gmail.com","abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]
+                        cc_emails = ["swasti.obluhc@emails.com","abhijay.obluhc@emails.com","nitin.a@obluhc.com"]
                         if request.user.email:
                             cc_emails.append(request.user.email)
 
@@ -407,7 +407,7 @@ class CreateProformaInvoiceView(AccountantRequiredMixin, View):
                             # Abhijay Chnage starts
                             # ---------------- STOCK REQUEST EMAIL ----------------
                             to_emails = ["accounts@obluhc.com"]
-                            cc_emails = ["swasti.obluhc@gmail.com","abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]
+                            cc_emails = ["swasti.obluhc@emails.com","abhijay.obluhc@emails.com","nitin.a@obluhc.com"]
                             if request.user.email:
                                 cc_emails.append(request.user.email)
 
@@ -856,7 +856,7 @@ class CreateProformaInvoiceView(LoginRequiredMixin, View):
                     # 5B. Price Change Emails
                     if price_change_requests_for_email:
                         to_emails = ["bhavya@obluhc.com"]
-                        cc_emails = ["swasti.obluhc@gmail.com", "abhijay.obluhc@gmail.com", "nitin.a@obluhc.com"]
+                        cc_emails = ["swasti.obluhc@emails.com", "abhijay.obluhc@emails.com", "nitin.a@obluhc.com"]
                         if request.user.email: cc_emails.append(request.user.email)
                         any_under_msrp_email = any(x["is_under_msrp"] for x in price_change_requests_for_email)
                         email_context = {
@@ -905,7 +905,7 @@ class CreateProformaInvoiceView(LoginRequiredMixin, View):
                             try:
                                 to_emails = ["nitin.a@obluhc.com"]  # Replace with actual Admin emails
                                 cc_emails = [request.user.email] if request.user.email else []
-                                cc_emails.append("abhijay.obluhc@gmail.com")
+                                cc_emails.append("abhijay.obluhc@emails.com")
 
                                 context = {
                                     "request_obj": bypass_req,
@@ -941,7 +941,7 @@ class CreateProformaInvoiceView(LoginRequiredMixin, View):
                         )
                         # Stock Email
                         to_emails = ["accounts@obluhc.com"]
-                        cc_emails = ["swasti.obluhc@gmail.com", "abhijay.obluhc@gmail.com", "nitin.a@obluhc.com"]
+                        cc_emails = ["swasti.obluhc@emails.com", "abhijay.obluhc@emails.com", "nitin.a@obluhc.com"]
                         if request.user.email: cc_emails.append(request.user.email)
                         email_context = {
                             "invoice": invoice, "requested_by": request.user, "shortage_details": shortage_details,
@@ -1232,7 +1232,7 @@ class CreateProformaInvoiceView(LoginRequiredMixin, View):
                     # 5B. Price Change Emails
                     if price_change_requests_for_email:
                         to_emails = ["bhavya@obluhc.com"]
-                        cc_emails = ["swasti.obluhc@gmail.com", "abhijay.obluhc@gmail.com", "nitin.a@obluhc.com"]
+                        cc_emails = ["swasti.obluhc@emails.com", "abhijay.obluhc@emails.com", "nitin.a@obluhc.com"]
                         if request.user.email: cc_emails.append(request.user.email)
                         any_under_msrp_email = any(x["is_under_msrp"] for x in price_change_requests_for_email)
                         email_context = {
@@ -1281,7 +1281,7 @@ class CreateProformaInvoiceView(LoginRequiredMixin, View):
                             try:
                                 to_emails = ["nitin.a@obluhc.com"]  # Replace with actual Admin emails
                                 cc_emails = [request.user.email] if request.user.email else []
-                                cc_emails.append("abhijay.obluhc@gmail.com")
+                                cc_emails.append("abhijay.obluhc@emails.com")
 
                                 context = {
                                     "request_obj": bypass_req,
@@ -1317,7 +1317,7 @@ class CreateProformaInvoiceView(LoginRequiredMixin, View):
                         )
                         # Stock Email
                         to_emails = ["accounts@obluhc.com"]
-                        cc_emails = ["swasti.obluhc@gmail.com", "abhijay.obluhc@gmail.com", "nitin.a@obluhc.com"]
+                        cc_emails = ["swasti.obluhc@emails.com", "abhijay.obluhc@emails.com", "nitin.a@obluhc.com"]
                         if request.user.email: cc_emails.append(request.user.email)
                         email_context = {
                             "invoice": invoice, "requested_by": request.user, "shortage_details": shortage_details,
@@ -1549,7 +1549,7 @@ class ApproveStockRequestView(LoginRequiredMixin, AccountantRequiredMixin, View)
                     "",
                     "proforma@oblutools.com",
                     [requester_email],
-                    cc=["abhijay.obluhc@gmail.com"]
+                    cc=["abhijay.obluhc@emails.com"]
                 )
                 msg.attach_alternative(html_content, "text/html")
                 msg.send()
@@ -1622,7 +1622,7 @@ class ApproveStockRequestView(LoginRequiredMixin, AccountantRequiredMixin, View)
                     "",
                     "proforma@oblutools.com",
                     [req.requested_by.email],
-                    cc=["abhijay.obluhc@gmail.com"]
+                    cc=["abhijay.obluhc@emails.com"]
                 )
                 msg_summary.attach_alternative(summary_html, "text/html")
                 msg_summary.send()
@@ -2303,7 +2303,7 @@ def request_dispatch(request, pk):
         accountant_emails = ["accounts@obluhc.com"]
 
         # CC emails
-        cc_emails = ["abhijay.obluhc@gmail.com","swasti.obluhc@gmail.com","nitin.a@obluhc.com","akshay@obluhc.com","operations@obluhc.com"]
+        cc_emails = ["abhijay.obluhc@emails.com","swasti.obluhc@emails.com","nitin.a@obluhc.com","akshay@obluhc.com","operations@obluhc.com"]
 
         # Add requester email
         if request.user.email:
@@ -2769,10 +2769,10 @@ class ProformaPriceChangeRequestCreateView(LoginRequiredMixin, FormView):
             # ROUTING: If anything is under MSRP, notify the Accountant (Swasti)
             # Otherwise, notify the standard Reviewer (Bhavya)
             if any_needs_accountant:
-                to_emails = ["swasti.obluhc@gmail.com"]
+                to_emails = ["swasti.obluhc@emails.com"]
                 subject_prefix = "🚨 DEEP DISCOUNT - Approval Required"
             else:
-                to_emails = ["bhavya.obluhc@gmail.com"]
+                to_emails = ["bhavya.obluhc@emails.com"]
                 subject_prefix = "🔔 Price Change Request"
 
             # Send Email
@@ -2802,10 +2802,10 @@ class ProformaPriceChangeRequestCreateView(LoginRequiredMixin, FormView):
 
     def send_request_email(self, is_deep_discount, reason):
         if is_deep_discount:
-            to_emails = ["swasti.obluhc@gmail.com"]
+            to_emails = ["swasti.obluhc@emails.com"]
             subject_prefix = "🚨 DEEP DISCOUNT"
         else:
-            to_emails = ["bhavya.obluhc@gmail.com"]
+            to_emails = ["bhavya.obluhc@emails.com"]
             subject_prefix = "🔔 Price Request"
 
         try:
@@ -3084,10 +3084,10 @@ class ProformaPriceChangeRequestCreateView(LoginRequiredMixin, FormView):
         if request_created:
             # Determine notification routing
             if any_needs_accountant:
-                to_emails = ["swasti.obluhc@gmail.com"]
+                to_emails = ["swasti.obluhc@emails.com"]
                 subject_prefix = "🚨 DEEP DISCOUNT - Approval Required"
             else:
-                to_emails = ["bhavya.obluhc@gmail.com"]
+                to_emails = ["bhavya.obluhc@emails.com"]
                 subject_prefix = "🔔 Price Change Request"
 
             # Send Email for the Pending requests
@@ -3118,10 +3118,10 @@ class ProformaPriceChangeRequestCreateView(LoginRequiredMixin, FormView):
 
     def send_request_email(self, is_deep_discount, reason):
         if is_deep_discount:
-            to_emails = ["swasti.obluhc@gmail.com"]
+            to_emails = ["swasti.obluhc@emails.com"]
             subject_prefix = "🚨 DEEP DISCOUNT"
         else:
-            to_emails = ["bhavya.obluhc@gmail.com"]
+            to_emails = ["bhavya.obluhc@emails.com"]
             subject_prefix = "🔔 Price Request"
 
         try:
@@ -3342,7 +3342,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
         if price_request.is_under_msrp and not request.user.is_superuser:
             try:
                 subject = f"🚨 Approval Needed: Below MSRP Request (Inv #{invoice.id})"
-                to_email = ["swasti.obluhc@gmail.com"]
+                to_email = ["swasti.obluhc@emails.com"]
                 context = {
                     "price_request": price_request,
                     "accountant": request.user.username,
@@ -3482,7 +3482,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
         if price_request.is_under_msrp and not request.user.is_superuser:
             try:
                 subject = f"🚨 Approval Needed: Below MSRP Request (Inv #{invoice.id})"
-                to_email = ["swasti.obluhc@gmail.com","abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]
+                to_email = ["swasti.obluhc@emails.com","abhijay.obluhc@emails.com","nitin.a@obluhc.com"]
                 context = {
                     "price_request": price_request,
                     "accountant": request.user.username,
@@ -3616,7 +3616,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
             # CASE A: Accountant (Non-Admin) approving Under-MSRP
             if not request.user.is_superuser and price_request.is_under_msrp:
                 try:
-                    to_emails = ["abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]  # Add Nitin Sir's email here
+                    to_emails = ["abhijay.obluhc@emails.com","nitin.a@obluhc.com"]  # Add Nitin Sir's email here
                     email_context = {
                         "invoice": invoice,
                         "price_request": price_request,
@@ -3723,7 +3723,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
             }
             html_content = render_to_string("proforma_invoice/price_change_request_status_email.html", email_context)
             subject = f"✅ Price Request Decision (Proforma #{invoice.id})"
-            msg = EmailMultiAlternatives(subject, "", "proforma@oblutools.com", [price_request.requested_by.email,'abhijay.obluhc@gmail.com'])
+            msg = EmailMultiAlternatives(subject, "", "proforma@oblutools.com", [price_request.requested_by.email,'abhijay.obluhc@emails.com'])
             msg.attach_alternative(html_content, "text/html")
             msg.send()
         except Exception as e:
@@ -3738,7 +3738,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
             # Trigger only when the last item is processed
             try:
                 to_emails = [price_request.requested_by.email]
-                cc_emails = ["swasti.obluhc@gmail.com"]  # Accountant CC
+                cc_emails = ["swasti.obluhc@emails.com"]  # Accountant CC
 
                 # Gather all requests for this invoice to show in the email table
                 final_requests = invoice.price_requests.all()
@@ -3853,7 +3853,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
     # HELPER METHOD TO SEND TO NITIN SIR
     def trigger_admin_notification(self, request, parent_obj, price_request, violation_type):
         try:
-            to_emails = ["abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]  # Nitin Sir
+            to_emails = ["abhijay.obluhc@emails.com","nitin.a@obluhc.com"]  # Nitin Sir
             email_context = {
                 "invoice": parent_obj,
                 "price_request": price_request,
@@ -3885,7 +3885,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
         if not any_pending:
             try:
                 to_emails = [price_request.requested_by.email]
-                cc_emails = ["swasti.obluhc@gmail.com"]
+                cc_emails = ["swasti.obluhc@emails.com"]
                 all_requests = parent_obj.price_requests.select_related('product').all()
                 email_context = {
                     "invoice": parent_obj,
@@ -3994,7 +3994,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
     # HELPER METHOD TO SEND TO NITIN SIR
     def trigger_admin_notification(self, request, parent_obj, price_request, violation_type):
         try:
-            to_emails = ["abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]  # Nitin Sir
+            to_emails = ["abhijay.obluhc@emails.com","nitin.a@obluhc.com"]  # Nitin Sir
             email_context = {
                 "invoice": parent_obj,
                 "price_request": price_request,
@@ -4032,7 +4032,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
         if not any_pending:
             try:
                 to_emails = [price_request.requested_by.email]
-                cc_emails = ["swasti.obluhc@gmail.com","abhijay.obluhc@gmail.com"]
+                cc_emails = ["swasti.obluhc@emails.com","abhijay.obluhc@emails.com"]
                 all_requests = parent_obj.price_requests.select_related('product').all()
                 email_context = {
                     "invoice": parent_obj,
@@ -4201,7 +4201,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
     # HELPER METHOD TO SEND TO NITIN SIR
     def trigger_admin_notification(self, request, parent_obj, price_request, violation_type):
         try:
-            to_emails = ["abhijay.obluhc@gmail.com","nitin.a@obluhc.com"]  # Nitin Sir
+            to_emails = ["abhijay.obluhc@emails.com","nitin.a@obluhc.com"]  # Nitin Sir
             email_context = {
                 "invoice": parent_obj,
                 "price_request": price_request,
@@ -4239,7 +4239,7 @@ class ProformaPriceChangeRequestApproveView(AccountantRequiredMixin, View):
         if not any_pending:
             try:
                 to_emails = [price_request.requested_by.email]
-                cc_emails = ["swasti.obluhc@gmail.com"]
+                cc_emails = ["swasti.obluhc@emails.com"]
                 all_requests = parent_obj.price_requests.select_related('product').all()
                 email_context = {
                     "invoice": parent_obj,
@@ -4383,7 +4383,7 @@ class ProformaPriceChangeRequestRemarkView(AccountantRequiredMixin, View):
             # 3. Send Email Notification
             try:
                 to_email = [price_request.requested_by.email]
-                cc_emails = ["kashish.obluhc@gmail.com", "swasti.obluhc@gmail.com"]
+                cc_emails = ["kashish.obluhc@emails.com", "swasti.obluhc@emails.com"]
                 if request.user.email:
                     cc_emails.append(request.user.email)
 

@@ -158,7 +158,7 @@
           <div class="collapse {% if active_group == 'leave' %}show{% endif %}" id="navLeave">
             <ul class="nav flex-column hrms-sublist">
               <li><a href="{% url 'hrms:my_leave' %}" class="{% if active_item == 'my_leave' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}Leave Applications{% else %}Apply / My Leave{% endif %}</a></li>
-<!--              <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>-->
+              <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>
               {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
               {% endif %}

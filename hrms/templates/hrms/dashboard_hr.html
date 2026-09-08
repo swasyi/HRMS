@@ -33,6 +33,10 @@
     .icon-box-warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
     .icon-box-purple  { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
     .icon-box-rose    { background: rgba(244, 63, 94, 0.1);  color: #f43f5e; }
+    .icon-box-teal    { background: rgba(20, 184, 166, 0.1); color: #14b8a6; }
+    .icon-box-indigo  { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
+    .icon-box-amber   { background: rgba(217, 119, 6, 0.1);  color: #d97706; }
+    .icon-box-sky     { background: rgba(14, 165, 233, 0.1); color: #0ea5e9; }
 
     /* Mini summary indicators */
     .summary-pill {
@@ -144,6 +148,57 @@
         color: #ffffff;
         box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
     }
+
+    /* Module explorer (all-features grid) */
+    .module-card {
+        background: #ffffff;
+        border-radius: 14px;
+        border: 1px solid #e7ecf3;
+        height: 100%;
+    }
+    .module-card-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid #eef1f6;
+    }
+    .module-card-title {
+        font-size: 0.86rem;
+        font-weight: 700;
+        color: #0f172a;
+        margin: 0;
+    }
+    .module-link-list {
+        list-style: none;
+        margin: 0;
+        padding: 8px;
+    }
+    .module-link-list li a {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        text-decoration: none;
+        color: #334155;
+        font-size: 0.8rem;
+        font-weight: 500;
+        padding: 8px 10px;
+        border-radius: 8px;
+        transition: background 0.15s ease, color 0.15s ease;
+    }
+    .module-link-list li a:hover {
+        background: #f1f5f9;
+        color: #2563eb;
+    }
+    .module-link-list li a i.bi-chevron-right {
+        font-size: 0.7rem;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+    }
+    .module-link-list li a:hover i.bi-chevron-right {
+        opacity: 1;
+    }
 </style>
 {% endblock %}
 
@@ -200,7 +255,7 @@
         </div>
     </div>
 
-    <!-- 5 ATTENDO POWER METRIC CARDS (DEEP LINKED) -->
+    <!-- 6 ATTENDO POWER METRIC CARDS (DEEP LINKED) -->
     <div class="row g-3 mb-4">
         <!-- Card 1: Total Employees -->
         <div class="col-6 col-md-4 col-xl">
@@ -242,26 +297,8 @@
             </a>
         </div>
 
-        <!-- Card 3: On Break -->
+        <!-- Card 3: Time Off / Leave Requests -->
         <div class="col-6 col-md-4 col-xl">
-            <div class="card attendo-card shadow-sm h-100 p-3">
-                <div class="d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">On Break</span>
-                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ on_break_count }}</h2>
-                    </div>
-                    <div class="icon-box icon-box-warning">
-                        <i class="bi bi-cup-hot-fill"></i>
-                    </div>
-                </div>
-                <div class="mt-2 pt-1 small text-muted fw-medium" style="font-size: 0.75rem;">
-                    <span>Resting</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Card 4: Time Off / Leave Requests -->
-        <div class="col-6 col-md-6 col-xl">
             <a href="{% url 'hrms:leave_balance' %}" class="stat-link">
                 <div class="card attendo-card shadow-sm h-100 p-3">
                     <div class="d-flex align-items-center justify-content-between">
@@ -280,9 +317,28 @@
             </a>
         </div>
 
-        <!-- Card 5: Pending Biometrics -->
-<!-- Card 5: Biometric Status Card -->
-        <div class="col-12 col-md-6 col-xl">
+        <!-- Card 4: Company Assets -->
+        <div class="col-6 col-md-4 col-xl">
+            <a href="{% url 'hrms:asset_list' %}" class="stat-link">
+                <div class="card attendo-card shadow-sm h-100 p-3">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Company Assets</span>
+                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_assets|default:0 }}</h2>
+                        </div>
+                        <div class="icon-box icon-box-teal">
+                            <i class="bi bi-laptop-fill"></i>
+                        </div>
+                    </div>
+                    <div class="mt-2 pt-1 small fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem; color:#14b8a6;">
+                        <span>{{ assigned_assets|default:0 }} Assigned • {{ unassigned_assets|default:0 }} Free</span> <i class="bi bi-arrow-right-short"></i>
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <!-- Card 5: Face Biometrics -->
+        <div class="col-6 col-md-4 col-xl">
             <a href="{% url 'hrms:biometric_status_list' %}" class="stat-link">
                 <div class="card attendo-card shadow-sm h-100 p-3">
                     <div class="d-flex align-items-center justify-content-between">
@@ -300,6 +356,26 @@
                 </div>
             </a>
         </div>
+
+        <!-- Card 6: Open Positions (Hiring) -->
+<!--        <div class="col-6 col-md-4 col-xl">-->
+<!--            <a href="{% url 'hrms:jobposting_list' %}" class="stat-link">-->
+<!--                <div class="card attendo-card shadow-sm h-100 p-3">-->
+<!--                    <div class="d-flex align-items-center justify-content-between">-->
+<!--                        <div>-->
+<!--                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Open Positions</span>-->
+<!--                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ open_jobs_count|default:0 }}</h2>-->
+<!--                        </div>-->
+<!--                        <div class="icon-box icon-box-indigo">-->
+<!--                            <i class="bi bi-briefcase-fill"></i>-->
+<!--                        </div>-->
+<!--                    </div>-->
+<!--                    <div class="mt-2 pt-1 small fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem; color:#6366f1;">-->
+<!--                        <span>{{ total_applications|default:0 }} Applications</span> <i class="bi bi-arrow-right-short"></i>-->
+<!--                    </div>-->
+<!--                </div>-->
+<!--            </a>-->
+<!--        </div>-->
     </div>
 
     <!-- MAIN TWO-COLUMN LAYOUT -->
@@ -669,7 +745,6 @@
         <div class="col-lg-4 col-xl-3">
 
             <!-- Quick Action Buttons -->
-<!-- Quick Action Buttons -->
             <div class="card attendo-card shadow-sm bg-dark text-white p-3 mb-4 border-0" style="background: linear-gradient(145deg, #0f172a, #1e293b) !important;">
                 <div class="d-flex align-items-center justify-content-between mb-3">
                     <h6 class="fw-bold mb-0 text-white"><i class="bi bi-lightning-charge-fill text-warning me-2"></i>Quick Actions</h6>
@@ -679,10 +754,15 @@
                     <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary btn-sm rounded-3 text-start py-2 fw-medium shadow-sm">
                         <i class="bi bi-person-plus-fill me-2"></i> Add New Employee
                     </a>
-                    <!-- NEW LEAVE APPLICATION BUTTON -->
                     <a href="{% url 'hrms:my_leave' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
                         <i class="bi bi-calendar2-plus me-2 text-info"></i> Leave Applications
                     </a>
+                    <a href="{% url 'hrms:asset_add' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
+                        <i class="bi bi-laptop me-2 text-success"></i> Register New Asset
+                    </a>
+<!--                    <a href="{% url 'hrms:performance_add' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">-->
+<!--                        <i class="bi bi-graph-up-arrow me-2 text-warning"></i> New Performance Review-->
+<!--                    </a>-->
                     <a href="{% url 'hrms:notice_list' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
                         <i class="bi bi-megaphone-fill me-2"></i> Post Notice / Memo
                     </a>
@@ -758,6 +838,151 @@
 
         </div>
 
+    </div>
+
+    <!-- EXPLORE ALL MODULES: full sitemap of the HRMS, organized by function -->
+    <div class="mt-4">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <div>
+                <h5 class="fw-bold text-dark mb-0"><i class="bi bi-grid-3x3-gap-fill text-primary me-2"></i>Explore All Modules</h5>
+                <span class="text-muted small">Every workspace in the HRMS, one click away</span>
+            </div>
+        </div>
+
+        <div class="row g-3">
+
+            <!-- Organization -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-primary" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-diagram-3-fill"></i></div>
+                        <p class="module-card-title">Organization</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:company_list' %}"><span>Companies / Units</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:department_list' %}"><span>Departments</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:designation_list' %}"><span>Designations</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:employee_list' %}"><span>Employee Directory</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Hiring & Recruitment -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-indigo" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-briefcase-fill"></i></div>
+                        <p class="module-card-title">Hiring &amp; Recruitment</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:jobposting_list' %}"><span>Job Postings</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:candidate_list' %}"><span>Candidates</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:application_list' %}"><span>Applications</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:interview_list' %}"><span>Interviews</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:recruitmentstage_list' %}"><span>Recruitment Stages</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:offertemplate_list' %}"><span>Offer Templates</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Attendance & Time -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-success" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-clock-fill"></i></div>
+                        <p class="module-card-title">Attendance &amp; Time</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:attendance_records' %}"><span>Attendance Records</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:attendance_matrix' %}"><span>Attendance Matrix</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:regularization_list' %}"><span>Regularization Requests</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:attendance_policy' %}"><span>Attendance Policies</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:holiday_list' %}"><span>Holiday Calendar</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:live_tracking_dashboard' %}"><span>Live Tracking</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:biometric_status_list' %}"><span>Biometric Status</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:kiosk_page' %}"><span>Kiosk Punch-In</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Leave Management -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-purple" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-umbrella-fill"></i></div>
+                        <p class="module-card-title">Leave Management</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:my_leave' %}"><span>My Leave</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:leave_balance' %}"><span>Leave Balances</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:leavetype_list' %}"><span>Leave Types</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:leave-bank' %}"><span>Leave Bank</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Payroll & Compensation -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-amber" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-cash-stack"></i></div>
+                        <p class="module-card-title">Payroll &amp; Compensation</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:salarystructure_list' %}"><span>Salary Structures</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:employee_salary_list' %}"><span>Employee Salaries</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:loan_list' %}"><span>Loans &amp; Advances</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:extra_list' %}"><span>Payroll Extras</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:payrollrun_list' %}"><span>Payroll Runs</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:my_payslips' %}"><span>My Payslips</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Assets -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-teal" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-laptop-fill"></i></div>
+                        <p class="module-card-title">Assets</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:asset_list' %}"><span>All Assets</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:asset_add' %}"><span>Register New Asset</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Performance -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-sky" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-graph-up-arrow"></i></div>
+                        <p class="module-card-title">Performance</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:performance_list' %}"><span>Performance Reviews</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:performance_add' %}"><span>New Review</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:manager_dashboard' %}"><span>Manager Dashboard</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Policies & Notices -->
+            <div class="col-6 col-md-4 col-xl-3">
+                <div class="module-card">
+                    <div class="module-card-header">
+                        <div class="icon-box icon-box-rose" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-file-earmark-text-fill"></i></div>
+                        <p class="module-card-title">Policies &amp; Notices</p>
+                    </div>
+                    <ul class="module-link-list">
+                        <li><a href="{% url 'hrms:policy_list' %}"><span>Company Policies</span><i class="bi bi-chevron-right"></i></a></li>
+                        <li><a href="{% url 'hrms:notice_list' %}"><span>Notice Board</span><i class="bi bi-chevron-right"></i></a></li>
+                    </ul>
+                </div>
+            </div>
+
+        </div>
     </div>
 
 </div>

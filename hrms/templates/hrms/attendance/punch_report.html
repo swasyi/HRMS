@@ -214,12 +214,20 @@
                             {% if day.hours > 0 %}{{ day.hours }}<span class="small fw-normal text-muted ms-1">h</span>{% else %}--{% endif %}
                         </td>
 
-                        <td class="text-center" style="min-width: 120px;">
-                            <span class="status-badge {{ day.css }}">{{ day.status }}</span>
-                            {% if day.label %}
-                                <span class="grace-text">{{ day.label }}</span>
-                            {% endif %}
-                        </td>
+<td class="text-center" style="min-width: 140px;">
+    <span class="status-badge {{ day.css }}">{{ day.status }}</span>
+
+    {% if day.is_auto_leave %}
+        <!-- Distinctive Auto-Approved Indicator Badge -->
+        <span class="badge bg-warning-subtle text-dark border border-warning-subtle d-inline-flex align-items-center gap-1 mt-1 px-2 py-0" style="font-size: 0.65rem;">
+            <i class="bi bi-robot text-warning"></i> Auto-Approved
+        </span>
+    {% endif %}
+
+    {% if day.label %}
+        <span class="grace-text">{{ day.label }}</span>
+    {% endif %}
+</td>
                     </tr>
                     {% endfor %}
                 </tbody>

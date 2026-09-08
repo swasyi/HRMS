@@ -65,7 +65,7 @@ class Command(BaseCommand):
 
             from_email = "crm@oblutools.com"
             to_emails = [sp.user.email]
-            cc_emails = ["abhijay.obluhc@gmail.com","swasti.obluhc@gmail.com","nitin.a@obluhc.com","raman.obluhc@gmail.com","akshay@obluhc.com","bhavya.obluhc@gmail.com","vibhuti.obluhc@gmail.com"]
+            cc_emails = ["abhijay.obluhc@emails.com","swasti.obluhc@emails.com","nitin.a@obluhc.com","raman.obluhc@emails.com","akshay@obluhc.com","bhavya.obluhc@emails.com","vibhuti.obluhc@emails.com"]
 
 
             msg = EmailMultiAlternatives(subject, "", from_email, to_emails,cc=cc_emails)

@@ -23,6 +23,6 @@ def check_min_quantity():
         subject="Low Stock Alert",
         message=f"The following products are below the minimum quantity:\n\n{product_list}",
         from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=["swasti.obluhc@gmail.com"],  # replace with recipients
+        recipient_list=["swasti.obluhc@emails.com"],  # replace with recipients
         fail_silently=False,
     )

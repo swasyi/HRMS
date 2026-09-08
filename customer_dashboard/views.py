@@ -294,7 +294,7 @@ class AdminSalesPersonCustomersView(AccountantRequiredMixin, TemplateView):
 
         cutoff_date = date.today() - timedelta(days=90)
 
-        # ── ENRICH EACH CUSTOMER ──────────────────────────────────────── #
+        # ── ENRICH EACH CUcredit_profile__outstanding_balance__lteSTOMER ──────────────────────────────────────── #
         customers = list(customers_qs)
 
         for customer in customers:
@@ -1644,7 +1644,7 @@ class PaymentThreadDetailView(LoginRequiredMixin,TemplateView):
                 from_email="crm@oblutools.com",
                 to=[salesperson_email] if salesperson_email else [],
                 cc=[
-                    "abhijay.obluhc@gmail.com",
+                    "abhijay.obluhc@emails.com",
                     request.user.email
                 ]
             )

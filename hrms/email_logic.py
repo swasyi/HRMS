@@ -107,12 +107,12 @@ from django.utils.html import strip_tags
 def send_leave_application_email(leave_app):
     """
     Sends automated email notification to HR and CC when leave is submitted.
-    Recipient: swasti.obluhc@gmail.com
-    CC: abhijay.obluhc@gmail.com
+    Recipient: swasti.obluhc@emails.com
+    CC: abhijay.obluhc@emails.com
     """
     emp = leave_app.employee
-    to_email = 'swasti.obluhc@gmail.com'
-    cc_emails = ['abhijay.obluhc@gmail.com']
+    to_email = 'swasti.obluhc@emails.com'
+    cc_emails = ['abhijay.obluhc@emails.com']
     subject = f"Leave Application - {emp.full_name} ({leave_app.leave_type.name})"
 
     context = {

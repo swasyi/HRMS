@@ -1221,7 +1221,7 @@ class DeadStockDashboardView(AccountantRequiredMixin, TemplateView):
             if c.name:
                 customer_salesperson_map[c.name.strip().lower()] = {
                     "salesperson": c.salesperson.name if c.salesperson else None,
-                    "email": (
+                    "emails": (
                         c.salesperson.user.email
                         if c.salesperson and c.salesperson.user and c.salesperson.user.email
                         else None
@@ -1278,7 +1278,7 @@ class DeadStockDashboardView(AccountantRequiredMixin, TemplateView):
             )
 
             salesperson_name = customer_info.get("salesperson")
-            salesperson_email = customer_info.get("email")
+            salesperson_email = customer_info.get("emails")
 
 
             voucher_link = reverse("voucher_detail", args=[voucher_id]) if voucher_id else ""

@@ -302,15 +302,183 @@ import os
 from deepface import DeepFace
 
 # Using state-of-the-art detector and recognition models
-DETECTOR_BACKEND = "retinaface"  # Fallback chain: retinaface -> mtcnn -> opencv
-MODEL_NAME = "Facenet512"  # High-precision 512-dimensional embedding
+# DETECTOR_BACKEND = "retinaface"  # Fallback chain: retinaface -> mtcnn -> opencv
+# DETECTOR_BACKEND = "opencv"   # Runs in ~40ms on CPU
+# MODEL_NAME = "Facenet512"  # High-precision 512-dimensional embedding
+#
+#
+# def _save_file_to_temp_jpeg(image_file):
+#     """
+#     Reads incoming Django file, corrects EXIF orientation,
+#     converts to clean RGB, and writes to a temporary file.
+#     """
+#     try:
+#         image_file.seek(0)
+#     except Exception:
+#         pass
+#
+#     pil_img = Image.open(io.BytesIO(image_file.read()))
+#
+#     # Auto-fix mobile orientation
+#     try:
+#         pil_img = ImageOps.exif_transpose(pil_img)
+#     except Exception:
+#         pass
+#
+#     rgb_img = pil_img.convert("RGB")
+#
+#     # Resize if abnormally large to speed up inference
+#     max_dim = 1200
+#     if max(rgb_img.size) > max_dim:
+#         rgb_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+#
+#     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+#     rgb_img.save(temp_file.name, format="JPEG", quality=95)
+#     temp_file.close()
+#     return temp_file.name
+#
+#
+# def extract_face_encoding(image_file):
+#     """
+#     Extracts deep 512-D face embedding vector using RetinaFace + Facenet512.
+#     """
+#     temp_path = None
+#     try:
+#         temp_path = _save_file_to_temp_jpeg(image_file)
+#
+#         # 1. Primary Pass: RetinaFace (Deep Learning)
+#         try:
+#             embeddings = DeepFace.represent(
+#                 img_path=temp_path,
+#                 model_name=MODEL_NAME,
+#                 detector_backend=DETECTOR_BACKEND,
+#                 enforce_detection=True,
+#                 align=True
+#             )
+#             if embeddings and len(embeddings) > 0:
+#                 return embeddings[0]["embedding"]
+#         except Exception:
+#             pass
+#
+#         # 2. Secondary Pass: MTCNN / OpenCV detector if primary fails
+#         for fallback_detector in ["mtcnn", "opencv"]:
+#             try:
+#                 embeddings = DeepFace.represent(
+#                     img_path=temp_path,
+#                     model_name=MODEL_NAME,
+#                     detector_backend=fallback_detector,
+#                     enforce_detection=True,
+#                     align=True
+#                 )
+#                 if embeddings and len(embeddings) > 0:
+#                     return embeddings[0]["embedding"]
+#             except Exception:
+#                 continue
+#
+#         # 3. Final Fallback: Non-enforced extraction
+#         try:
+#             embeddings = DeepFace.represent(
+#                 img_path=temp_path,
+#                 model_name=MODEL_NAME,
+#                 detector_backend="opencv",
+#                 enforce_detection=False,
+#                 align=False
+#             )
+#             if embeddings and len(embeddings) > 0:
+#                 return embeddings[0]["embedding"]
+#         except Exception:
+#             pass
+#
+#     except Exception as e:
+#         print(f"[Biometric Error]: {e}")
+#         return None
+#     finally:
+#         if temp_path and os.path.exists(temp_path):
+#             try:
+#                 os.remove(temp_path)
+#             except Exception:
+#                 pass
+#
+#     return None
+#
+#
+# def verify_1_to_1(uploaded_image, reference_encoding, threshold=0.30):
+#     """
+#     Cosine distance verification for mobile punch (1:1).
+#     Distance <= 0.30 represents a strong Facenet512 match.
+#     """
+#     live_encoding = extract_face_encoding(uploaded_image)
+#     if not live_encoding:
+#         return False, "No face detected in live photo. Please face the camera directly."
+#
+#     known_arr = np.array(reference_encoding, dtype=np.float64)
+#     live_arr = np.array(live_encoding, dtype=np.float64)
+#
+#     # Cosine distance
+#     cosine_dist = 1.0 - (np.dot(known_arr, live_arr) / (np.linalg.norm(known_arr) * np.linalg.norm(live_arr)))
+#     is_match = bool(cosine_dist <= threshold)
+#     return is_match, f"Distance: {cosine_dist:.2f}"
+#
+#
+# def match_1_to_n(uploaded_image, all_biometrics, threshold=0.30):
+#     """
+#     Cosine distance search for kiosk mode (1:N).
+#     """
+#     live_encoding = extract_face_encoding(uploaded_image)
+#     if not live_encoding:
+#         return None, "No face detected."
+#
+#     live_arr = np.array(live_encoding, dtype=np.float64)
+#     norm_live = np.linalg.norm(live_arr)
+#
+#     best_match = None
+#     min_dist = 1.0
+#
+#     for biometric in all_biometrics:
+#         known_arr = np.array(biometric.face_encoding, dtype=np.float64)
+#         norm_known = np.linalg.norm(known_arr)
+#
+#         cosine_dist = 1.0 - (np.dot(known_arr, live_arr) / (norm_known * norm_live))
+#
+#         if cosine_dist <= threshold and cosine_dist < min_dist:
+#             min_dist = cosine_dist
+#             best_match = biometric.employee
+#
+#     if best_match:
+#         return best_match, f"Matched with distance {min_dist:.2f}"
+#
+#     return None, "Face not recognized in employee records."
+#
+#
+# def _preprocess_fast(image_file):
+#     try:
+#         image_file.seek(0)
+#     except Exception:
+#         pass
+#     pil_img = Image.open(io.BytesIO(image_file.read()))
+#     try:
+#         pil_img = ImageOps.exif_transpose(pil_img)
+#     except Exception:
+#         pass
+#     pil_img = pil_img.convert("RGB")
+#     # Resize to 400px max dimension for near-instant CPU inference
+#     pil_img.thumbnail((400, 400), Image.Resampling.BILINEAR)
+#     return np.array(pil_img)
+
+
+import numpy as np
+from PIL import Image, ImageOps
+import io
+import tempfile
+import os
+from deepface import DeepFace
+
+# Fast OpenCV detector on resized frames (~80ms on CPU)
+DETECTOR_BACKEND = "opencv"
+MODEL_NAME = "Facenet512"
 
 
 def _save_file_to_temp_jpeg(image_file):
-    """
-    Reads incoming Django file, corrects EXIF orientation,
-    converts to clean RGB, and writes to a temporary file.
-    """
     try:
         image_file.seek(0)
     except Exception:
@@ -318,7 +486,6 @@ def _save_file_to_temp_jpeg(image_file):
 
     pil_img = Image.open(io.BytesIO(image_file.read()))
 
-    # Auto-fix mobile orientation
     try:
         pil_img = ImageOps.exif_transpose(pil_img)
     except Exception:
@@ -326,55 +493,38 @@ def _save_file_to_temp_jpeg(image_file):
 
     rgb_img = pil_img.convert("RGB")
 
-    # Resize if abnormally large to speed up inference
-    max_dim = 1200
+    # Downscale to 400px so CPU vector extraction takes under 0.2 seconds
+    max_dim = 400
     if max(rgb_img.size) > max_dim:
-        rgb_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        rgb_img.thumbnail((max_dim, max_dim), Image.Resampling.BILINEAR)
 
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-    rgb_img.save(temp_file.name, format="JPEG", quality=95)
+    rgb_img.save(temp_file.name, format="JPEG", quality=90)
     temp_file.close()
     return temp_file.name
 
 
 def extract_face_encoding(image_file):
-    """
-    Extracts deep 512-D face embedding vector using RetinaFace + Facenet512.
-    """
+    """Fast extraction using OpenCV detector with fallback."""
     temp_path = None
     try:
         temp_path = _save_file_to_temp_jpeg(image_file)
 
-        # 1. Primary Pass: RetinaFace (Deep Learning)
+        # Primary Fast Pass
         try:
             embeddings = DeepFace.represent(
                 img_path=temp_path,
                 model_name=MODEL_NAME,
                 detector_backend=DETECTOR_BACKEND,
                 enforce_detection=True,
-                align=True
+                align=False
             )
             if embeddings and len(embeddings) > 0:
                 return embeddings[0]["embedding"]
         except Exception:
             pass
 
-        # 2. Secondary Pass: MTCNN / OpenCV detector if primary fails
-        for fallback_detector in ["mtcnn", "opencv"]:
-            try:
-                embeddings = DeepFace.represent(
-                    img_path=temp_path,
-                    model_name=MODEL_NAME,
-                    detector_backend=fallback_detector,
-                    enforce_detection=True,
-                    align=True
-                )
-                if embeddings and len(embeddings) > 0:
-                    return embeddings[0]["embedding"]
-            except Exception:
-                continue
-
-        # 3. Final Fallback: Non-enforced extraction
+        # Fallback Pass without strict enforcement
         try:
             embeddings = DeepFace.represent(
                 img_path=temp_path,
@@ -401,34 +551,30 @@ def extract_face_encoding(image_file):
     return None
 
 
-def verify_1_to_1(uploaded_image, reference_encoding, threshold=0.30):
-    """
-    Cosine distance verification for mobile punch (1:1).
-    Distance <= 0.30 represents a strong Facenet512 match.
-    """
+def verify_1_to_1(uploaded_image, reference_encoding, threshold=0.45):
+    """Cosine distance verification for mobile punch (1:1)."""
     live_encoding = extract_face_encoding(uploaded_image)
     if not live_encoding:
-        return False, "No face detected in live photo. Please face the camera directly."
+        return False, "No face detected in photo. Please look straight into the camera."
 
     known_arr = np.array(reference_encoding, dtype=np.float64)
     live_arr = np.array(live_encoding, dtype=np.float64)
 
-    # Cosine distance
     cosine_dist = 1.0 - (np.dot(known_arr, live_arr) / (np.linalg.norm(known_arr) * np.linalg.norm(live_arr)))
     is_match = bool(cosine_dist <= threshold)
     return is_match, f"Distance: {cosine_dist:.2f}"
 
 
-def match_1_to_n(uploaded_image, all_biometrics, threshold=0.30):
-    """
-    Cosine distance search for kiosk mode (1:N).
-    """
+def match_1_to_n(uploaded_image, all_biometrics, threshold=0.45):
+    """Optimized 1:N matching across all enrolled staff."""
     live_encoding = extract_face_encoding(uploaded_image)
     if not live_encoding:
         return None, "No face detected."
 
     live_arr = np.array(live_encoding, dtype=np.float64)
     norm_live = np.linalg.norm(live_arr)
+    if norm_live == 0:
+        return None, "Invalid facial vector."
 
     best_match = None
     min_dist = 1.0
@@ -436,6 +582,8 @@ def match_1_to_n(uploaded_image, all_biometrics, threshold=0.30):
     for biometric in all_biometrics:
         known_arr = np.array(biometric.face_encoding, dtype=np.float64)
         norm_known = np.linalg.norm(known_arr)
+        if norm_known == 0:
+            continue
 
         cosine_dist = 1.0 - (np.dot(known_arr, live_arr) / (norm_known * norm_live))
 

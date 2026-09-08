@@ -45,6 +45,15 @@ class AttendanceError(Exception):
 
 def get_policy_for_employee(employee):
     return getattr(employee.company, 'attendance_policy', None)
+def get_policy_for_employee(employee, target_date=None):
+    """Dynamically resolves the active company policy for the given date."""
+    d = target_date or timezone.localdate()
+    comp = getattr(employee, 'company', None)
+    if not comp:
+        return None
+    if hasattr(comp, 'get_policy_for_date'):
+        return comp.get_policy_for_date(d)
+    return getattr(comp, 'attendance_policy', None)
 
 
 def _to_local_aware(naive_dt):
@@ -109,6 +118,59 @@ def evaluate_arrival(record, policy):
 
     return record
 
+def evaluate_arrival(record, policy):
+    """
+    Applies grace rules dynamically using models.py fields.
+    Does NOT mark Half-Day if arrival is within grace window and strikes remain.
+    """
+    if not policy or not record.check_in:
+        return record
+
+    employee = record.employee
+    today = record.attendance_date
+
+    off_start = policy.office_start_time
+    grace_mins = getattr(policy, 'grace_minutes', getattr(policy, 'grace_window_minutes', 15))
+    grace_limit = getattr(policy, 'grace_allowed_count', getattr(policy, 'max_grace_per_month', 3))
+
+    work_start_naive = datetime.combine(today, off_start)
+    work_start = _to_local_aware(work_start_naive)
+    check_in_local = timezone.localtime(record.check_in) if timezone.is_aware(record.check_in) else record.check_in
+    delta_minutes = int((check_in_local - work_start).total_seconds() // 60)
+
+    if delta_minutes <= 0:
+        record.late_minutes = 0
+        record.early_minutes = abs(delta_minutes)
+        record.status = m.AttendanceRecord.Status.PRESENT
+        record.is_half_day = False
+        record.remarks = ''
+
+    elif delta_minutes <= grace_mins:
+        record.late_minutes = delta_minutes
+        record.early_minutes = 0
+        tracker = _get_or_create_tracker(employee, today)
+
+        # Grace allowance check: If strikes remain, it is 100% PRESENT (FD)
+        if tracker.usage_count < grace_limit:
+            tracker.usage_count += 1
+            tracker.save(update_fields=['usage_count', 'updated_at'])
+            record.status = m.AttendanceRecord.Status.PRESENT
+            record.is_half_day = False
+            record.remarks = f'Grace applied ({tracker.usage_count}/{grace_limit} used this month)'
+        else:
+            # Only when grace is exhausted does it become a Half Day
+            record.status = m.AttendanceRecord.Status.HALF_DAY
+            record.is_half_day = True
+            record.remarks = f'Grace allowance exhausted ({tracker.usage_count}/{grace_limit} used) — marked Half-Day'
+    else:
+        # Arrived past grace window -> Strict Half Day
+        record.late_minutes = delta_minutes
+        record.early_minutes = 0
+        record.status = m.AttendanceRecord.Status.HALF_DAY
+        record.is_half_day = True
+        record.remarks = 'Arrived beyond grace window — marked Half-Day'
+
+    return record
 
 def check_in(employee, at=None):
     """Creates (or reuses) today's AttendanceRecord and stamps check_in,
