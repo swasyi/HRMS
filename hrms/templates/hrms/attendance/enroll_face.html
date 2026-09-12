@@ -5,242 +5,877 @@
 
 {% block extra_css %}
 <style>
-    .enroll-viewport { position: relative; height: 260px; background: #0f172a; border-radius: 10px; overflow: hidden; }
-    .enroll-viewport video { width: 100%; height: 100%; object-fit: cover; transition: filter 0.3s ease; }
+/* ── Card shell ─────────────────────────────────────────────── */
+.enroll-card { max-width: 600px; border-radius: 16px; overflow: hidden; }
+.enroll-card .card-header {
+    background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
+    padding: 20px 24px;
+}
 
-    .enroll-overlay {
-        position: absolute; inset: 0;
-        display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
-        gap: 10px; z-index: 5;
-        background: rgba(15, 23, 42, 0.8);
-        backdrop-filter: blur(4px);
-        opacity: 0; pointer-events: none;
-        transition: opacity 0.3s ease;
-    }
-    .enroll-overlay.active { opacity: 1; pointer-events: all; }
+/* ── Angle badge strip ──────────────────────────────────────── */
+.angle-strip { display: flex; justify-content: center; gap: 10px; margin-bottom: 18px; }
+.angle-badge {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    cursor: default; user-select: none;
+}
+.angle-badge-dot {
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 2px solid #6366f1; background: rgba(99,102,241,0.08);
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    font-size: 18px; color: #6366f1;
+}
+.angle-badge-dot .bi { transition: all 0.3s ease; }
+.angle-badge-label {
+    font-size: 11px; font-weight: 600; color: #94a3b8;
+    text-align: center; line-height: 1.2; max-width: 72px;
+    transition: color 0.3s ease;
+}
 
-    .enroll-spinner {
-        width: 44px; height: 44px;
-        border: 3px solid rgba(99, 102, 241, 0.25);
-        border-top-color: #6366f1;
-        border-radius: 50%;
-        animation: espin 0.7s linear infinite;
-    }
-    @keyframes espin { to { transform: rotate(360deg); } }
+/* Active (current step being captured) */
+.angle-badge.active .angle-badge-dot {
+    border-color: #6366f1; background: rgba(99,102,241,0.15);
+    box-shadow: 0 0 0 6px rgba(99,102,241,0.15);
+    animation: badge-pulse 1.6s ease-in-out infinite;
+}
+.angle-badge.active .angle-badge-label { color: #6366f1; }
 
-    .enroll-check {
-        width: 52px; height: 52px; border-radius: 50%;
-        background: #10b981;
-        display: flex; align-items: center; justify-content: center;
-        animation: ePop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-        transform: scale(0);
-    }
-    .enroll-check i { font-size: 26px; color: #fff; }
-    @keyframes ePop { to { transform: scale(1); } }
+/* Done (captured successfully) */
+.angle-badge.done .angle-badge-dot {
+    border-color: #10b981; background: #10b981;
+    color: #fff; box-shadow: 0 0 0 4px rgba(16,185,129,0.2);
+    animation: badge-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.angle-badge.done .angle-badge-label { color: #10b981; }
 
-    .ov-text { color: rgba(255,255,255,0.8); font-size: 12px; font-weight: 600; text-align: center; }
+@keyframes badge-pulse {
+    0%,100% { box-shadow: 0 0 0 4px rgba(99,102,241,0.12); }
+    50%      { box-shadow: 0 0 0 10px rgba(99,102,241,0.05); }
+}
+@keyframes badge-pop {
+    from { transform: scale(0.6); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+}
 
-    /* Snapshot flash effect */
-    .flash { animation: flashAnim 0.3s ease-out; }
-    @keyframes flashAnim {
-        0% { filter: brightness(3); }
-        100% { filter: brightness(1); }
-    }
+/* Progress connector line */
+.angle-connector {
+    width: 40px; height: 2px; background: #334155;
+    align-self: flex-start; margin-top: 21px;
+    transition: background 0.4s ease;
+}
+.angle-connector.done { background: #10b981; }
+
+/* ── Viewport ───────────────────────────────────────────────── */
+.enroll-viewport {
+    position: relative; height: 300px;
+    background: #0f172a; border-radius: 12px; overflow: hidden;
+}
+.enroll-viewport video {
+    width: 100%; height: 100%; object-fit: cover;
+    transition: filter 0.3s ease;
+}
+.enroll-viewport img.snapshot-preview {
+    width: 100%; height: 100%; object-fit: cover;
+    position: absolute; inset: 0; z-index: 3;
+}
+
+/* Face guide frame */
+.face-guide {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+}
+.face-guide-ring {
+    width: 140px; height: 170px; border-radius: 50%;
+    border: 2px dashed rgba(99,102,241,0.45);
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
+    transition: border-color 0.3s ease;
+}
+.face-guide-ring.active  { border-color: rgba(99,102,241,0.85); animation: ring-glow 1.5s ease infinite; }
+.face-guide-ring.success { border-color: #10b981; }
+@keyframes ring-glow {
+    0%,100% { box-shadow: 0 0 0 2000px rgba(0,0,0,0.25), 0 0 12px rgba(99,102,241,0.3); }
+    50%      { box-shadow: 0 0 0 2000px rgba(0,0,0,0.25), 0 0 22px rgba(99,102,241,0.5); }
+}
+
+/* Instruction label inside viewport */
+.enroll-instruction {
+    position: absolute; bottom: 14px; left: 0; right: 0; z-index: 6;
+    text-align: center; pointer-events: none;
+}
+.enroll-instruction-pill {
+    display: inline-block; padding: 5px 14px;
+    background: rgba(15,23,42,0.75); backdrop-filter: blur(6px);
+    border-radius: 20px; color: rgba(255,255,255,0.9);
+    font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: opacity 0.3s ease;
+}
+
+/* Processing & success overlays */
+.enroll-overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px; z-index: 8;
+    background: rgba(15,23,42,0.82); backdrop-filter: blur(4px);
+    opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+}
+.enroll-overlay.active { opacity: 1; pointer-events: all; }
+.enroll-spinner {
+    width: 44px; height: 44px;
+    border: 3px solid rgba(99,102,241,0.2);
+    border-top-color: #6366f1;
+    border-radius: 50%; animation: espin 0.7s linear infinite;
+}
+@keyframes espin { to { transform: rotate(360deg); } }
+.enroll-check {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: linear-gradient(135deg, #10b981, #059669);
+    display: flex; align-items: center; justify-content: center;
+    animation: ePop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    transform: scale(0);
+    box-shadow: 0 0 24px rgba(16,185,129,0.4);
+}
+.enroll-check i { font-size: 28px; color: #fff; }
+@keyframes ePop { to { transform: scale(1); } }
+.ov-text { color: rgba(255,255,255,0.85); font-size: 12px; font-weight: 600; text-align: center; }
+
+/* Camera error banner */
+.cam-error-banner {
+    display: none; align-items: flex-start; gap: 10px;
+    background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+    font-size: 13px; color: #fca5a5; line-height: 1.5;
+}
+.cam-error-banner.visible { display: flex; }
+.cam-error-banner i { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+
+/* Flash capture effect */
+.flash { animation: flashAnim 0.25s ease-out; }
+@keyframes flashAnim {
+    0%   { filter: brightness(2.5); }
+    100% { filter: brightness(1); }
+}
+
+/* Capture button variants */
+.btn-capture {
+    background: linear-gradient(135deg, #6366f1, #818cf8);
+    border: none; color: #fff; font-weight: 600;
+    border-radius: 10px; padding: 10px 20px;
+    transition: all 0.2s ease; width: 100%;
+}
+.btn-capture:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(99,102,241,0.35);
+    color: #fff;
+}
+.btn-capture:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+.btn-save {
+    background: linear-gradient(135deg, #10b981, #059669);
+    border: none; color: #fff; font-weight: 700;
+    border-radius: 10px; padding: 12px 20px;
+    transition: all 0.25s ease; width: 100%;
+    letter-spacing: 0.01em;
+}
+.btn-save:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(16,185,129,0.4);
+    color: #fff;
+}
+.btn-save:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* Button spinner */
+.btn-spinner {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+    border-radius: 50%; animation: espin 0.6s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+}
+
+/* Status alert */
+#enrollStatus { font-size: 13px; border-radius: 10px; }
+
+/* Angles counter pill */
+.angle-counter {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 20px; padding: 4px 12px;
+    font-size: 12px; font-weight: 600; color: #818cf8;
+}
+.angle-counter.all-done {
+    background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.25);
+    color: #34d399;
+}
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container py-4">
-    <div class="card shadow-sm border-0 mx-auto" style="max-width: 550px; border-radius: 12px;">
-        <div class="card-header bg-dark text-white py-3 text-center">
-            <h5 class="mb-0 font-weight-bold">Employee Face Biometric Enrollment</h5>
-            <small class="text-white-50">Capture directly with webcam or upload a clear photo</small>
-        </div>
-        <div class="card-body p-4">
+<div class="card shadow border-0 mx-auto enroll-card">
 
-            <form id="enrollForm" enctype="multipart/form-data">
-                {% csrf_token %}
+    <!-- Header -->
+    <div class="card-header text-white text-center">
+        <h5 class="mb-1 fw-bold">
+            <i class="bi bi-person-bounding-box me-2"></i>Face Biometric Enrollment
+        </h5>
+        <small class="text-white-50">Capture 3 angles for robust biometric registration</small>
+    </div>
 
-                <div class="mb-3">
-                    <label for="employeeSelect" class="form-label font-weight-bold">Select Employee</label>
-                    <select class="form-select form-control" id="employeeSelect" name="employee_id" required>
-                        <option value="">-- Choose Employee --</option>
-                        {% for emp in employees %}
-                            <option value="{{ emp.id }}">{{ emp.employee_code }} - {{ emp.full_name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
+    <div class="card-body p-4">
+        <form id="enrollForm" enctype="multipart/form-data" data-no-loader>
+            {% csrf_token %}
 
-                <!-- Live Camera Preview & Snapshot -->
-                <div class="mb-3 text-center">
-                    <label class="form-label font-weight-bold d-block text-start">Capture or Upload Face</label>
-                    <div class="enroll-viewport mb-2" id="enrollViewport">
-                        <video id="enrollVideo" autoplay playsinline></video>
-                        <canvas id="enrollCanvas" style="display: none;"></canvas>
+            <!-- Employee selector -->
+            <div class="mb-4">
+                <label for="employeeSelect" class="form-label fw-semibold">
+                    <i class="bi bi-person-fill me-1 text-primary"></i>Select Employee
+                </label>
+                <select class="form-select" id="employeeSelect" name="employee_id" required>
+                    <option value="">— Choose Employee —</option>
+                    {% for emp in employees %}
+                        <option value="{{ emp.id }}">{{ emp.employee_code }} — {{ emp.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
 
-                        <!-- Processing overlay -->
-                        <div class="enroll-overlay" id="processOverlay">
-                            <div class="enroll-spinner"></div>
-                            <div class="ov-text">Extracting facial vectors…</div>
-                        </div>
-
-                        <!-- Success overlay -->
-                        <div class="enroll-overlay" id="enrollSuccessOverlay">
-                            <div class="enroll-check">
-                                <i class="bi bi-check-lg"></i>
-                            </div>
-                            <div class="ov-text" id="enrollSuccessText">Enrolled!</div>
-                        </div>
+            <!-- Step badges + connector -->
+            <div class="angle-strip" id="angleStrip">
+                <!-- Badge 0: Front -->
+                <div class="angle-badge active" id="badge-0">
+                    <div class="angle-badge-dot">
+                        <i class="bi bi-person-fill" id="badge-icon-0"></i>
                     </div>
-
-                    <button type="button" class="btn btn-outline-secondary btn-sm mb-2 w-100" onclick="takeWebcamSnapshot()">
-                        <i class="bi bi-camera me-1"></i> Capture Live Photo From Webcam
-                    </button>
-
-                    <div class="text-muted small mb-2">- OR Choose File -</div>
-                    <input class="form-control form-control-sm" type="file" id="facePhoto" name="photo" accept="image/*">
+                    <div class="angle-badge-label">Front<br>Face</div>
                 </div>
 
-                <div id="enrollStatus" class="alert d-none py-2" style="font-size: 14px;"></div>
+                <div class="angle-connector" id="connector-0"></div>
 
-                <button type="submit" id="submitBtn" class="btn btn-primary w-100 font-weight-bold py-2 mt-2">
-                    Extract Biometrics & Register
-                </button>
-            </form>
+                <!-- Badge 1: Slight Left -->
+                <div class="angle-badge" id="badge-1">
+                    <div class="angle-badge-dot">
+                        <i class="bi bi-arrow-left" id="badge-icon-1"></i>
+                    </div>
+                    <div class="angle-badge-label">Slight<br>Left</div>
+                </div>
 
-        </div>
+                <div class="angle-connector" id="connector-1"></div>
+
+                <!-- Badge 2: Slight Right -->
+                <div class="angle-badge" id="badge-2">
+                    <div class="angle-badge-dot">
+                        <i class="bi bi-arrow-right" id="badge-icon-2"></i>
+                    </div>
+                    <div class="angle-badge-label">Slight<br>Right</div>
+                </div>
+            </div>
+
+            <!-- Angle progress counter -->
+            <div class="text-center mb-3">
+                <span class="angle-counter" id="angleCounter">
+                    <i class="bi bi-camera"></i>
+                    <span id="angleCounterText">0 / 3 angles captured</span>
+                </span>
+            </div>
+
+            <!-- Camera error banner (shown on permission block) -->
+            <div class="cam-error-banner" id="camErrorBanner">
+                <i class="bi bi-exclamation-triangle-fill text-danger"></i>
+                <span id="camErrorMsg">
+                    Camera blocked. Use <strong>http://localhost:8000</strong> (not 127.0.0.1) and allow
+                    camera access in the browser address bar.
+                </span>
+            </div>
+
+            <!-- Live camera viewport -->
+            <div class="enroll-viewport mb-3" id="enrollViewport">
+                <video id="enrollVideo" autoplay playsinline muted></video>
+                <canvas id="enrollCanvas" style="display:none;"></canvas>
+
+                <!-- Face guide oval -->
+                <div class="face-guide">
+                    <div class="face-guide-ring active" id="faceGuideRing"></div>
+                </div>
+
+                <!-- Angle instruction pill -->
+                <div class="enroll-instruction">
+                    <span class="enroll-instruction-pill" id="instructionPill">
+                        Position your face in the oval · Front view
+                    </span>
+                </div>
+
+                <!-- Processing overlay -->
+                <div class="enroll-overlay" id="processOverlay">
+                    <div class="enroll-spinner"></div>
+                    <div class="ov-text">Extracting facial vectors…</div>
+                </div>
+
+                <!-- Success overlay -->
+                <div class="enroll-overlay" id="enrollSuccessOverlay">
+                    <div class="enroll-check">
+                        <i class="bi bi-check-lg"></i>
+                    </div>
+                    <div class="ov-text fw-bold" id="enrollSuccessText">Biometrics Enrolled!</div>
+                </div>
+            </div>
+
+            <!-- Hidden inputs -->
+            <input type="hidden" name="image_data" id="imageDataInput">
+
+            <!-- Capture button (advances through angles) -->
+            <button type="button" class="btn btn-capture mb-2" id="captureBtn" disabled>
+                <i class="bi bi-camera-fill me-2"></i>
+                <span id="captureBtnText">Capture Angle 1 — Front Face</span>
+            </button>
+
+            <!-- Retake current angle -->
+            <button type="button" class="btn btn-outline-secondary btn-sm mb-3 w-100"
+                    id="retakeBtn" style="display:none;" onclick="retakeCurrentAngle()">
+                <i class="bi bi-arrow-counterclockwise me-1"></i>Retake this angle
+            </button>
+
+            <!-- File upload fallback -->
+            <div class="d-flex align-items-center gap-2 text-muted small mb-3">
+                <hr class="flex-grow-1"> or upload a photo <hr class="flex-grow-1">
+            </div>
+            <input class="form-control form-control-sm mb-3" type="file"
+                   id="facePhoto" name="photo" accept="image/*">
+
+            <!-- Status message -->
+            <div id="enrollStatus" class="alert d-none py-2 mb-3"></div>
+
+            <!-- Save button — disabled until all 3 angles done -->
+            <button type="submit" id="saveBtn" class="btn btn-save" disabled>
+                <i class="bi bi-shield-check me-2"></i>Complete &amp; Save Biometrics
+            </button>
+        </form>
     </div>
 </div>
+</div>
+
+
+
+<!--<script>-->
+<!--/* ══════════════════════════════════════════════════════════════-->
+<!--   ENROLL FACE — Multi-Angle Capture Controller-->
+<!--   ══════════════════════════════════════════════════════════════ */-->
+
+<!--const ANGLES = [-->
+<!--  { label: 'Front Face',    instruction: 'Position your face in the oval · Front view',     icon: 'bi-person-fill'  },-->
+<!--  { label: 'Slight Left',   instruction: 'Turn your head slightly to the LEFT → keep chin level', icon: 'bi-arrow-left'   },-->
+<!--  { label: 'Slight Right',  instruction: 'Turn your head slightly to the RIGHT → keep chin level', icon: 'bi-arrow-right'  },-->
+<!--];-->
+
+<!--// DOM refs-->
+<!--const video           = document.getElementById('enrollVideo');-->
+<!--const canvas          = document.getElementById('enrollCanvas');-->
+<!--const fileInput       = document.getElementById('facePhoto');-->
+<!--const form            = document.getElementById('enrollForm');-->
+<!--const statusBox       = document.getElementById('enrollStatus');-->
+<!--const captureBtn      = document.getElementById('captureBtn');-->
+<!--const captureBtnText  = document.getElementById('captureBtnText');-->
+<!--const retakeBtn       = document.getElementById('retakeBtn');-->
+<!--const saveBtn         = document.getElementById('saveBtn');-->
+<!--const processOverlay  = document.getElementById('processOverlay');-->
+<!--const successOverlay  = document.getElementById('enrollSuccessOverlay');-->
+<!--const viewport        = document.getElementById('enrollViewport');-->
+<!--const imageDataInput  = document.getElementById('imageDataInput');-->
+<!--const instructionPill = document.getElementById('instructionPill');-->
+<!--const faceGuideRing   = document.getElementById('faceGuideRing');-->
+<!--const angleCounter    = document.getElementById('angleCounter');-->
+<!--const angleCounterTxt = document.getElementById('angleCounterText');-->
+<!--const camErrorBanner  = document.getElementById('camErrorBanner');-->
+<!--const camErrorMsg     = document.getElementById('camErrorMsg');-->
+
+<!--// State-->
+<!--let enrollStream   = null;-->
+<!--let cameraReady    = false;-->
+<!--let currentAngle   = 0;             // 0, 1, 2-->
+<!--let capturedBlobs  = [null, null, null]; // blob per angle-->
+<!--let capturedB64    = [null, null, null]; // base64 per angle-->
+
+<!--// ── Camera Startup ──────────────────────────────────────────-->
+<!--function initCamera() {-->
+<!--    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {-->
+<!--        showCameraError('Camera API unavailable. Use a modern browser over http://localhost:8000.');-->
+<!--        return;-->
+<!--    }-->
+
+<!--    const constraints = {-->
+<!--        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },-->
+<!--        audio: false-->
+<!--    };-->
+
+<!--    navigator.mediaDevices.getUserMedia(constraints)-->
+<!--        .then(stream => {-->
+<!--            enrollStream = stream;-->
+<!--            video.srcObject = stream;-->
+<!--            video.onloadedmetadata = () => {-->
+<!--                video.play().then(() => {-->
+<!--                    cameraReady = true;-->
+<!--                    captureBtn.disabled = false;-->
+<!--                    faceGuideRing.classList.add('active');-->
+<!--                    console.log('[Enroll] Camera ready:', video.videoWidth, 'x', video.videoHeight);-->
+<!--                }).catch(() => {-->
+<!--                    cameraReady = true;-->
+<!--                    captureBtn.disabled = false;-->
+<!--                });-->
+<!--            };-->
+<!--        })-->
+<!--        .catch(err => {-->
+<!--            console.error('[Enroll] Camera access error:', err);-->
+<!--            showCameraError(-->
+<!--                'Camera access blocked. ' +-->
+<!--                (err.name === 'NotAllowedError'-->
+<!--                    ? 'Click the camera icon in the browser address bar and allow access.'-->
+<!--                    : 'Ensure the site is served over http://localhost:8000 (not 127.0.0.1).')-->
+<!--            );-->
+<!--        });-->
+<!--}-->
+
+<!--function showCameraError(msg) {-->
+<!--    camErrorMsg.innerHTML = msg;-->
+<!--    camErrorBanner.classList.add('visible');-->
+<!--    captureBtn.disabled = true;-->
+<!--}-->
+
+<!--function stopEnrollCamera() {-->
+<!--    if (enrollStream) {-->
+<!--        enrollStream.getTracks().forEach(t => t.stop());-->
+<!--        enrollStream = null;-->
+<!--    }-->
+<!--    cameraReady = false;-->
+<!--}-->
+
+<!--// Stop camera on page leave to free the device-->
+<!--window.addEventListener('beforeunload', stopEnrollCamera);-->
+
+<!--initCamera();-->
+
+<!--// ── Badge Helpers ────────────────────────────────────────────-->
+<!--function updateBadge(idx, state) {-->
+<!--    const badge   = document.getElementById(`badge-${idx}`);-->
+<!--    const icon    = document.getElementById(`badge-icon-${idx}`);-->
+<!--    const conn    = document.getElementById(`connector-${idx}`);-->
+
+<!--    badge.classList.remove('active', 'done');-->
+<!--    if (state === 'active') {-->
+<!--        badge.classList.add('active');-->
+<!--        icon.className = `bi ${ANGLES[idx].icon}`;-->
+<!--    } else if (state === 'done') {-->
+<!--        badge.classList.add('done');-->
+<!--        icon.className = 'bi bi-check-circle-fill';-->
+<!--        if (conn) conn.classList.add('done');-->
+<!--    }-->
+<!--}-->
+
+<!--function refreshUI() {-->
+<!--    const done = capturedBlobs.filter(Boolean).length;-->
+
+<!--    // Instruction pill + guide ring-->
+<!--    if (currentAngle < ANGLES.length) {-->
+<!--        instructionPill.textContent = ANGLES[currentAngle].instruction;-->
+<!--        captureBtnText.textContent  = `Capture Angle ${currentAngle + 1} — ${ANGLES[currentAngle].label}`;-->
+<!--        faceGuideRing.classList.remove('success');-->
+<!--        faceGuideRing.classList.add('active');-->
+<!--    }-->
+
+<!--    // Counter-->
+<!--    angleCounterTxt.textContent = `${done} / 3 angles captured`;-->
+<!--    if (done === 3) {-->
+<!--        angleCounter.classList.add('all-done');-->
+<!--    }-->
+
+<!--    // Retake button visibility-->
+<!--    retakeBtn.style.display = (done > 0 && done < 3) ? 'block' : 'none';-->
+
+<!--    // Save button-->
+<!--    saveBtn.disabled = (done < 3);-->
+
+<!--    // Capture button-->
+<!--    captureBtn.disabled = !cameraReady || currentAngle >= 3;-->
+<!--}-->
+
+<!--// ── Snapshot Capture ─────────────────────────────────────────-->
+<!--function captureAngle() {-->
+<!--    if (!cameraReady || video.readyState < 2) {-->
+<!--        showStatus('Camera is still initializing. Please wait.', 'warning');-->
+<!--        return;-->
+<!--    }-->
+<!--    if (currentAngle >= ANGLES.length) return;-->
+
+<!--    const w = video.videoWidth  || 640;-->
+<!--    const h = video.videoHeight || 480;-->
+<!--    canvas.width  = w;-->
+<!--    canvas.height = h;-->
+<!--    canvas.getContext('2d').drawImage(video, 0, 0, w, h);-->
+
+<!--    // Flash-->
+<!--    video.classList.add('flash');-->
+<!--    setTimeout(() => video.classList.remove('flash'), 250);-->
+
+<!--    const b64 = canvas.toDataURL('image/jpeg', 0.92);-->
+<!--    capturedB64[currentAngle] = b64;-->
+
+<!--    canvas.toBlob(blob => {-->
+<!--        capturedBlobs[currentAngle] = blob;-->
+
+<!--        // Mark badge green-->
+<!--        updateBadge(currentAngle, 'done');-->
+
+<!--        // Show preview briefly, then restore live feed-->
+<!--        const preview = document.createElement('img');-->
+<!--        preview.src = b64;-->
+<!--        preview.className = 'snapshot-preview';-->
+<!--        viewport.appendChild(preview);-->
+<!--        setTimeout(() => {-->
+<!--            if (preview.parentNode) preview.parentNode.removeChild(preview);-->
+<!--        }, 900);-->
+
+<!--        // Advance to next angle (or finish)-->
+<!--        if (currentAngle < ANGLES.length - 1) {-->
+<!--            currentAngle++;-->
+<!--            updateBadge(currentAngle, 'active');-->
+<!--            showStatus(-->
+<!--                `✔ Angle ${currentAngle} captured. Now: ${ANGLES[currentAngle].label}`,-->
+<!--                'success'-->
+<!--            );-->
+<!--        } else {-->
+<!--            currentAngle = ANGLES.length; // past end → all done-->
+<!--            faceGuideRing.classList.remove('active');-->
+<!--            faceGuideRing.classList.add('success');-->
+<!--            instructionPill.textContent = '✅ All 3 angles captured — ready to save!';-->
+<!--            captureBtn.disabled = true;-->
+<!--            showStatus('All 3 angles captured! Click "Complete & Save Biometrics" to register.', 'success');-->
+<!--        }-->
+
+<!--        // Set front-face b64 into hidden input (fallback path for file-based upload detection)-->
+<!--        imageDataInput.value = capturedB64[0] || '';-->
+<!--        refreshUI();-->
+
+<!--    }, 'image/jpeg', 0.92);-->
+<!--}-->
+
+<!--// ── Retake ───────────────────────────────────────────────────-->
+<!--function retakeCurrentAngle() {-->
+<!--    // Go back one step-->
+<!--    if (currentAngle > 0) currentAngle&#45;&#45;;-->
+<!--    capturedBlobs[currentAngle] = null;-->
+<!--    capturedB64[currentAngle]   = null;-->
+<!--    updateBadge(currentAngle, 'active');-->
+<!--    // Clear forward badges-->
+<!--    for (let i = currentAngle + 1; i < ANGLES.length; i++) {-->
+<!--        updateBadge(i, '');-->
+<!--    }-->
+<!--    captureBtn.disabled = !cameraReady;-->
+<!--    showStatus('Retaking angle ' + (currentAngle + 1) + '. Position your face and capture again.', 'info');-->
+<!--    refreshUI();-->
+<!--}-->
+
+<!--captureBtn.addEventListener('click', captureAngle);-->
+
+<!--// File upload clears camera captures-->
+<!--fileInput.addEventListener('change', () => {-->
+<!--    capturedBlobs = [null, null, null];-->
+<!--    capturedB64   = [null, null, null];-->
+<!--    imageDataInput.value = '';-->
+<!--    statusBox.classList.add('d-none');-->
+<!--    // With a file upload, enable the save button directly-->
+<!--    saveBtn.disabled = fileInput.files.length === 0;-->
+<!--});-->
+
+<!--// ── Helpers ──────────────────────────────────────────────────-->
+<!--function showStatus(msg, type) {-->
+<!--    statusBox.className = `alert alert-${type} py-2 mb-3`;-->
+<!--    statusBox.innerText = msg;-->
+<!--    statusBox.classList.remove('d-none');-->
+<!--}-->
+
+<!--function setLoading(on) {-->
+<!--    if (on) {-->
+<!--        saveBtn.disabled = true;-->
+<!--        saveBtn.innerHTML = '<span class="btn-spinner"></span>Processing…';-->
+<!--    } else {-->
+<!--        saveBtn.disabled = false;-->
+<!--        saveBtn.innerHTML = '<i class="bi bi-shield-check me-2"></i>Complete &amp; Save Biometrics';-->
+<!--    }-->
+<!--}-->
+
+<!--// ── Form Submission (AJAX) ────────────────────────────────────-->
+<!--form.addEventListener('submit', async function (e) {-->
+<!--    e.preventDefault();-->
+
+<!--    const employeeId = document.getElementById('employeeSelect').value;-->
+<!--    if (!employeeId) { showStatus('Please select an employee.', 'warning'); return; }-->
+
+<!--    const fd = new FormData();-->
+<!--    fd.append('employee_id', employeeId);-->
+<!--    fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');-->
+
+<!--    // Priority: front-face blob → file upload → base64-->
+<!--    if (capturedBlobs[0]) {-->
+<!--        fd.append('photo', capturedBlobs[0], 'enroll_front.jpg');-->
+<!--    } else if (fileInput.files.length > 0) {-->
+<!--        fd.append('photo', fileInput.files[0]);-->
+<!--    } else if (imageDataInput.value) {-->
+<!--        fd.append('image_data', imageDataInput.value);-->
+<!--    } else {-->
+<!--        showStatus('Please capture photos or upload an image file.', 'warning');-->
+<!--        return;-->
+<!--    }-->
+
+<!--    setLoading(true);-->
+<!--    processOverlay.classList.add('active');-->
+<!--    successOverlay.classList.remove('active');-->
+<!--    showStatus('Extracting facial vectors and registering biometrics…', 'info');-->
+
+<!--    try {-->
+<!--        const res  = await fetch('{% url "hrms:enroll_face" %}', { method: 'POST', body: fd });-->
+<!--        const data = await res.json().catch(() => { throw new Error('Server returned an invalid response.'); });-->
+
+<!--        processOverlay.classList.remove('active');-->
+
+<!--        if (res.ok && data.success) {-->
+<!--            document.getElementById('enrollSuccessText').innerText =-->
+<!--                data.message || 'Biometrics enrolled successfully!';-->
+<!--            successOverlay.classList.add('active');-->
+<!--            stopEnrollCamera();-->
+<!--            showStatus(data.message || 'Face registered successfully!', 'success');-->
+
+<!--            // Reset state after 3 seconds-->
+<!--            setTimeout(() => {-->
+<!--                capturedBlobs  = [null, null, null];-->
+<!--                capturedB64    = [null, null, null];-->
+<!--                currentAngle   = 0;-->
+<!--                imageDataInput.value = '';-->
+<!--                form.reset();-->
+<!--                successOverlay.classList.remove('active');-->
+<!--                // Re-init badge strip-->
+<!--                [0,1,2].forEach(i => updateBadge(i, ''));-->
+<!--                updateBadge(0, 'active');-->
+<!--                refreshUI();-->
+<!--                // Restart camera-->
+<!--                initCamera();-->
+<!--            }, 3500);-->
+
+<!--        } else {-->
+<!--            let errorMsg = data.error || 'Failed to detect face.';-->
+<!--            if (res.status === 409) {-->
+<!--                showStatus(errorMsg, 'warning');-->
+<!--            } else {-->
+<!--                showStatus(-->
+<!--                    errorMsg + (data.error ? '' :-->
+<!--                    '\nTips: good lighting · face camera directly · remove glasses/hat'),-->
+<!--                    'danger'-->
+<!--                );-->
+<!--            }-->
+<!--        }-->
+<!--    } catch (err) {-->
+<!--        processOverlay.classList.remove('active');-->
+<!--        showStatus(err.message || 'Server error. Please try again.', 'danger');-->
+<!--    } finally {-->
+<!--        setLoading(false);-->
+<!--    }-->
+<!--});-->
+<!--</script>-->
+
+
 
 <script>
-const video = document.getElementById('enrollVideo');
-const canvas = document.getElementById('enrollCanvas');
-const fileInput = document.getElementById('facePhoto');
-const form = document.getElementById('enrollForm');
-const statusBox = document.getElementById('enrollStatus');
-const submitBtn = document.getElementById('submitBtn');
-const processOverlay = document.getElementById('processOverlay');
-const enrollSuccessOverlay = document.getElementById('enrollSuccessOverlay');
-const viewport = document.getElementById('enrollViewport');
+const ANGLES = [
+  { label: 'Front Face',    instruction: 'Position your face in the oval · Front view', icon: 'bi-person-fill' },
+  { label: 'Slight Left',   instruction: 'Turn head slightly LEFT', icon: 'bi-arrow-left' },
+  { label: 'Slight Right',  instruction: 'Turn head slightly RIGHT', icon: 'bi-arrow-right' },
+];
 
-let capturedBlob = null;
-let enrollStream = null;
+const video           = document.getElementById('enrollVideo');
+const canvas          = document.getElementById('enrollCanvas');
+const fileInput       = document.getElementById('facePhoto');
+const form            = document.getElementById('enrollForm');
+const statusBox       = document.getElementById('enrollStatus');
+const captureBtn      = document.getElementById('captureBtn');
+const captureBtnText  = document.getElementById('captureBtnText');
+const retakeBtn       = document.getElementById('retakeBtn');
+const saveBtn         = document.getElementById('saveBtn');
+const processOverlay  = document.getElementById('processOverlay');
+const successOverlay  = document.getElementById('enrollSuccessOverlay');
+const viewport        = document.getElementById('enrollViewport');
+const imageDataInput  = document.getElementById('imageDataInput');
+const instructionPill = document.getElementById('instructionPill');
+const faceGuideRing   = document.getElementById('faceGuideRing');
+const angleCounterTxt = document.getElementById('angleCounterText');
+const camErrorBanner  = document.getElementById('camErrorBanner');
+const camErrorMsg     = document.getElementById('camErrorMsg');
 
-// Start camera stream
-navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 640 } })
-    .then(stream => {
-        enrollStream = stream;
-        video.srcObject = stream;
-    })
-    .catch(err => console.log('Camera preview optional.'));
+let enrollStream   = null;
+let cameraReady    = false;
+let currentAngle   = 0;
+let capturedBlobs  = [null, null, null];
+let capturedB64    = [null, null, null];
+
+function initCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showCameraError('Camera API unavailable.');
+        return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false })
+        .then(stream => {
+            enrollStream = stream;
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                video.play();
+                cameraReady = true;
+                captureBtn.disabled = false;
+                faceGuideRing.classList.add('active');
+            };
+        })
+        .catch(err => {
+            showCameraError('Camera access blocked. Please allow browser camera access.');
+        });
+}
+
+function showCameraError(msg) {
+    camErrorMsg.innerHTML = msg;
+    camErrorBanner.classList.add('visible');
+    captureBtn.disabled = true;
+}
 
 function stopEnrollCamera() {
     if (enrollStream) {
-        enrollStream.getTracks().forEach(track => track.stop());
+        enrollStream.getTracks().forEach(t => t.stop());
         enrollStream = null;
+    }
+    cameraReady = false;
+}
+
+window.addEventListener('beforeunload', stopEnrollCamera);
+initCamera();
+
+function updateBadge(idx, state) {
+    const badge = document.getElementById(`badge-${idx}`);
+    const icon  = document.getElementById(`badge-icon-${idx}`);
+    const conn  = document.getElementById(`connector-${idx}`);
+    if (!badge) return;
+
+    badge.classList.remove('active', 'done');
+    if (state === 'active') {
+        badge.classList.add('active');
+        icon.className = `bi ${ANGLES[idx].icon}`;
+    } else if (state === 'done') {
+        badge.classList.add('done');
+        icon.className = 'bi bi-check-circle-fill';
+        if (conn) conn.classList.add('done');
     }
 }
 
-function takeWebcamSnapshot() {
-    canvas.width = video.videoWidth || 480;
-    canvas.height = video.videoHeight || 480;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+function captureAngle() {
+    if (!cameraReady || video.readyState < 2) return;
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
 
-    // Flash effect
-    video.classList.add('flash');
-    setTimeout(() => video.classList.remove('flash'), 300);
+    const b64 = canvas.toDataURL('image/jpeg', 0.92);
+    capturedB64[currentAngle] = b64;
 
     canvas.toBlob(blob => {
-        capturedBlob = blob;
-        fileInput.value = ''; // clear manual file selection
-        statusBox.className = 'alert alert-success py-2';
-        statusBox.innerText = 'Live photo captured! Click "Extract Biometrics & Register" below.';
-        statusBox.classList.remove('d-none');
-    }, 'image/jpeg', 0.95);
+        capturedBlobs[currentAngle] = blob;
+        updateBadge(currentAngle, 'done');
+
+        // Clear any selected file when capturing via camera
+        fileInput.value = '';
+
+        if (currentAngle < ANGLES.length - 1) {
+            currentAngle++;
+            updateBadge(currentAngle, 'active');
+            captureBtnText.textContent = `Capture Angle ${currentAngle + 1} — ${ANGLES[currentAngle].label}`;
+            instructionPill.textContent = ANGLES[currentAngle].instruction;
+        } else {
+            currentAngle = ANGLES.length;
+            faceGuideRing.classList.add('success');
+            instructionPill.textContent = '✅ All angles captured — ready to save!';
+            captureBtn.disabled = true;
+        }
+
+        const done = capturedBlobs.filter(Boolean).length;
+        angleCounterTxt.textContent = `${done} / 3 angles captured`;
+        saveBtn.disabled = (done === 0);
+    }, 'image/jpeg', 0.92);
 }
 
+captureBtn.addEventListener('click', captureAngle);
+
+// If user selects a photo, prioritize it and wipe camera frames
 fileInput.addEventListener('change', () => {
-    capturedBlob = null; // reset webcam capture if file is picked
-    statusBox.classList.add('d-none');
+    if (fileInput.files.length > 0) {
+        capturedBlobs = [null, null, null];
+        capturedB64   = [null, null, null];
+        currentAngle  = 0;
+        [0, 1, 2].forEach(i => updateBadge(i, ''));
+        updateBadge(0, 'active');
+        angleCounterTxt.textContent = 'Uploaded file selected';
+        instructionPill.textContent = 'Using uploaded image for biometric extraction';
+        saveBtn.disabled = false;
+        captureBtn.disabled = false;
+        captureBtnText.textContent = 'Capture Angle 1 — Front Face';
+    }
 });
 
-form.addEventListener('submit', async function(e) {
+function showStatus(msg, type) {
+    statusBox.className = `alert alert-${type} py-2 mb-3`;
+    statusBox.innerText = msg;
+    statusBox.classList.remove('d-none');
+}
+
+// ── Correct Submission Handling ──
+form.addEventListener('submit', async function (e) {
     e.preventDefault();
 
     const employeeId = document.getElementById('employeeSelect').value;
     if (!employeeId) {
-        alert('Please select an employee.');
+        showStatus('Please select an employee.', 'warning');
         return;
     }
 
-    const formData = new FormData();
-    formData.append('employee_id', employeeId);
-    formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+    const fd = new FormData();
+    fd.append('employee_id', employeeId);
+    fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
 
-    if (capturedBlob) {
-        formData.append('photo', capturedBlob, 'captured_face.jpg');
-    } else if (fileInput.files.length > 0) {
-        formData.append('photo', fileInput.files[0]);
+    // FIX: Check file upload FIRST
+    if (fileInput.files.length > 0) {
+        fd.append('photo', fileInput.files[0]);
+    } else if (capturedBlobs[0]) {
+        fd.append('photo', capturedBlobs[0], 'enroll_front.jpg');
     } else {
-        alert('Please capture a photo using the webcam or select an image file.');
+        showStatus('Please capture a face or upload a photo.', 'warning');
         return;
     }
 
-    submitBtn.disabled = true;
-
-    // Show processing overlay
+    saveBtn.disabled = true;
     processOverlay.classList.add('active');
-    enrollSuccessOverlay.classList.remove('active');
-    statusBox.className = 'alert alert-info py-2';
-    statusBox.innerText = 'Extracting facial vectors…';
-    statusBox.classList.remove('d-none');
 
     try {
-        const response = await fetch('{% url "hrms:enroll_face" %}', {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await response.json();
-
+        const res = await fetch('{% url "hrms:enroll_face" %}', { method: 'POST', body: fd });
+        const data = await res.json();
         processOverlay.classList.remove('active');
 
-        if (response.ok) {
-            // Show success overlay and stop camera
-            document.getElementById('enrollSuccessText').innerText =
-                data.message || 'Face registered successfully!';
-            enrollSuccessOverlay.classList.add('active');
+        if (res.ok && data.success) {
+            successOverlay.classList.add('active');
             stopEnrollCamera();
-
-            statusBox.className = 'alert alert-success py-2';
-            statusBox.innerText = data.message || 'Face registered successfully!';
-            capturedBlob = null;
-            form.reset();
+            showStatus(data.message, 'success');
+            setTimeout(() => { window.location.reload(); }, 2000);
         } else {
-            // Enhanced error messaging
-            let errorMsg = data.error || 'Failed to detect face.';
-            if (response.status === 409) {
-                statusBox.className = 'alert alert-warning py-2';
-            } else {
-                statusBox.className = 'alert alert-danger py-2';
-                if (!data.error) {
-                    errorMsg = 'Could not detect a face. Tips:\n'
-                        + '• Ensure good, even lighting\n'
-                        + '• Look straight at the camera\n'
-                        + '• Remove sunglasses or hats\n'
-                        + '• Avoid tilting your head';
-                }
-            }
-            statusBox.innerText = errorMsg;
+            saveBtn.disabled = false;
+            showStatus(data.error || 'Failed to detect face.', 'danger');
         }
     } catch (err) {
         processOverlay.classList.remove('active');
-        statusBox.className = 'alert alert-danger py-2';
-        statusBox.innerText = 'Server error processing the image.';
-    } finally {
-        submitBtn.disabled = false;
+        saveBtn.disabled = false;
+        showStatus('Network/Server error.', 'danger');
     }
 });
 </script>
+
 {% endblock %}

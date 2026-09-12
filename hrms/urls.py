@@ -217,4 +217,7 @@ urlpatterns = [
     path('attendance/api/live-feed/', views.LiveTrackingFeedAPIView.as_view(), name='api_live_feed'),
     path('attendance/biometrics/', views.BiometricStatusListView.as_view(), name='biometric_status_list'),
 
+
+# Bulk Salary Bank Payout Sheet (Finance / HR only)
+    path('payroll/bulk-payout/', views.BulkPaymentDisbursementView.as_view(), name='bulk_payment_payout'),
 ]

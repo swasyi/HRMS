@@ -299,11 +299,11 @@
 
         <!-- Card 3: Time Off / Leave Requests -->
         <div class="col-6 col-md-4 col-xl">
-            <a href="{% url 'hrms:leave_balance' %}" class="stat-link">
+            <a href="{% url 'hrms:my_leave' %}" class="stat-link">
                 <div class="card attendo-card shadow-sm h-100 p-3">
                     <div class="d-flex align-items-center justify-content-between">
                         <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Time Off</span>
+                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Leave Applications</span>
                             <h2 class="mb-0 fw-bold text-dark mt-1">{{ time_off_count }}</h2>
                         </div>
                         <div class="icon-box icon-box-purple">
@@ -414,7 +414,7 @@
                         </div>
                         <div class="summary-pill" onclick="switchTab('tab-btn-onleave')">
                             <span class="dot-indicator dot-purple"></span>
-                            <span class="fw-bold text-dark me-1">{{ time_off_count }}</span> Time Off
+                            <span class="fw-bold text-dark me-1">{{ time_off_count }}</span> Leave Applications
                         </div>
                     </div>
                 </div>

@@ -1,181 +1,429 @@
 {% extends 'hrms/base.html' %}
 {% load static %}
 
-{% block title %}Delhi Office Attendance Kiosk{% endblock %}
+{% block title %}Office Attendance Kiosk{% endblock %}
 
 {% block extra_css %}
 <style>
-    .kiosk-viewport { position: relative; height: 330px; background: #0f172a; border-radius: 16px; overflow: hidden; }
-    .kiosk-viewport video { width: 100%; height: 100%; object-fit: cover; transition: filter 0.3s ease; }
-    .kiosk-viewport.scanning video { filter: blur(2px) brightness(0.5); }
+/* ── Card shell ─────────────────────────────────────────────── */
+.kiosk-card { max-width: 560px; border-radius: 20px; overflow: hidden; }
+.kiosk-card .card-header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+    padding: 20px 24px;
+}
 
-    /* Scanning overlay */
-    .kiosk-overlay {
-        position: absolute; inset: 0;
-        display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
-        gap: 14px; z-index: 5;
-        opacity: 0; pointer-events: none;
-        transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .kiosk-overlay.active { opacity: 1; pointer-events: all; }
+/* ── Viewport ───────────────────────────────────────────────── */
+.kiosk-viewport {
+    position: relative; height: 360px;
+    background: #0f172a; border-radius: 14px; overflow: hidden;
+}
+.kiosk-viewport video {
+    width: 100%; height: 100%; object-fit: cover;
+    transition: filter 0.3s ease;
+}
+.kiosk-viewport.scanning video {
+    filter: blur(1px) brightness(0.6);
+}
 
-    /* Scanning pulse ring */
-    .scan-ring {
-        width: 80px; height: 80px;
-        border: 4px solid rgba(99, 102, 241, 0.25);
-        border-top-color: #6366f1;
-        border-radius: 50%;
-        animation: scan-spin 0.7s linear infinite;
-    }
-    @keyframes scan-spin { to { transform: rotate(360deg); } }
+/* ── Scan overlay (spinner while processing) ────────────────── */
+.kiosk-scan-overlay {
+    position: absolute; inset: 0; z-index: 5;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(15,23,42,0.65); backdrop-filter: blur(4px);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s cubic-bezier(0.16,1,0.3,1);
+}
+.kiosk-scan-overlay.active { opacity: 1; pointer-events: all; }
 
-    /* Result card that appears inside viewport */
-    .result-card {
-        padding: 16px 24px;
-        border-radius: 12px;
-        text-align: center;
-        animation: slideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-        transform: translateY(20px);
-        opacity: 0;
-    }
-    .result-card.success { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); }
-    .result-card.error { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); }
-    @keyframes slideUp { to { transform: translateY(0); opacity: 1; } }
+.scan-ring {
+    width: 80px; height: 80px;
+    border: 4px solid rgba(99,102,241,0.2);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: scan-spin 0.8s linear infinite;
+}
+@keyframes scan-spin { to { transform: rotate(360deg); } }
+.scan-label { color: rgba(255,255,255,0.8); font-size: 13px; font-weight: 600; }
 
-    .result-icon { font-size: 40px; }
-    .result-name { color: #fff; font-size: 18px; font-weight: 700; margin: 6px 0 2px; }
-    .result-action { color: rgba(255,255,255,0.7); font-size: 13px; font-weight: 600; }
-    .result-time { color: #10b981; font-size: 22px; font-weight: 800; letter-spacing: 0.02em; }
-    .result-time.out { color: #f59e0b; }
-    .scan-text { color: rgba(255,255,255,0.75); font-size: 13px; font-weight: 600; }
+/* ── Floating result badge (over live camera) ───────────────── */
+.kiosk-result-badge {
+    position: absolute; inset: 0; z-index: 9;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+    opacity: 0; transform: scale(0.85);
+    transition: opacity 0.3s cubic-bezier(0.34,1.56,0.64,1),
+                transform 0.35s cubic-bezier(0.34,1.56,0.64,1);
+}
+.kiosk-result-badge.visible {
+    opacity: 1; transform: scale(1); pointer-events: all;
+}
+.kiosk-result-badge.exiting {
+    opacity: 0; transform: scale(0.9);
+    transition: opacity 0.4s ease, transform 0.35s ease;
+}
+
+.result-pill {
+    max-width: 360px; width: 90%;
+    padding: 20px 24px; border-radius: 16px; text-align: center;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.result-pill.success {
+    background: rgba(16,185,129,0.18);
+    border: 1.5px solid rgba(16,185,129,0.45);
+}
+.result-pill.error {
+    background: rgba(239,68,68,0.18);
+    border: 1.5px solid rgba(239,68,68,0.4);
+}
+
+.result-icon { font-size: 42px; line-height: 1; margin-bottom: 8px; }
+.result-name { color: #fff; font-size: 20px; font-weight: 800; margin: 4px 0; letter-spacing: -0.02em; }
+.result-action { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.result-pill.success .result-action { color: rgba(255,255,255,0.75); }
+.result-pill.error   .result-action { color: rgba(255,180,180,0.85); }
+.result-time { font-size: 26px; font-weight: 900; letter-spacing: 0.02em; }
+.result-time.punch-in  { color: #34d399; }
+.result-time.punch-out { color: #fbbf24; }
+
+/* Auto-dismiss progress bar */
+.auto-reset-bar {
+    height: 3px; width: 100%; border-radius: 2px;
+    background: rgba(255,255,255,0.15); margin-top: 12px; overflow: hidden;
+}
+.auto-reset-fill {
+    height: 100%; border-radius: 2px;
+    animation: shrink-bar 3s linear forwards;
+}
+.result-pill.success .auto-reset-fill { background: #34d399; }
+.result-pill.error   .auto-reset-fill { background: #f87171; }
+@keyframes shrink-bar { from { width: 100%; } to { width: 0%; } }
+
+/* ── Face guide oval ────────────────────────────────────────── */
+.kiosk-face-guide {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+}
+.kiosk-guide-ring {
+    width: 160px; height: 200px; border-radius: 50%;
+    border: 2px dashed rgba(99,102,241,0.4);
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.18);
+    transition: border-color 0.3s ease;
+}
+.kiosk-guide-ring.idle { animation: kring-pulse 2.5s ease infinite; }
+@keyframes kring-pulse {
+    0%,100% { border-color: rgba(99,102,241,0.3); }
+    50%      { border-color: rgba(99,102,241,0.7); }
+}
+
+/* Bottom label on idle camera */
+.kiosk-idle-label {
+    position: absolute; bottom: 14px; left: 0; right: 0; z-index: 3;
+    text-align: center; pointer-events: none;
+}
+.kiosk-idle-pill {
+    display: inline-block; padding: 5px 16px;
+    background: rgba(15,23,42,0.7); backdrop-filter: blur(6px);
+    border-radius: 20px; color: rgba(255,255,255,0.85);
+    font-size: 12px; font-weight: 600;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ── Camera error banner ────────────────────────────────────── */
+.cam-error-banner {
+    display: none; align-items: flex-start; gap: 10px;
+    background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+    font-size: 13px; color: #fca5a5; line-height: 1.5;
+}
+.cam-error-banner.visible { display: flex; }
+.cam-error-banner i { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+
+/* ── Scan button ────────────────────────────────────────────── */
+.btn-kiosk-scan {
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
+    border: none; color: #fff; font-weight: 700;
+    border-radius: 12px; padding: 14px 24px; font-size: 16px;
+    transition: all 0.25s ease; width: 100%;
+    box-shadow: 0 4px 20px rgba(99,102,241,0.35);
+    letter-spacing: 0.01em;
+}
+.btn-kiosk-scan:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 28px rgba(99,102,241,0.45);
+    color: #fff;
+}
+.btn-kiosk-scan:disabled {
+    opacity: 0.5; cursor: not-allowed; transform: none;
+    box-shadow: none;
+}
+
+/* Hint text */
+.kiosk-hint { font-size: 12px; color: #64748b; margin-top: 10px; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container py-4">
-    <div class="card shadow-sm border-0 mx-auto" style="max-width: 520px; border-radius: 16px; overflow: hidden;">
-        <div class="card-header bg-dark text-white text-center py-3">
-            <h5 class="mb-0 fw-bold"><i class="bi bi-tablet me-2"></i>Office Reception Kiosk</h5>
-            <small class="text-white-50">Look at the camera and tap to Punch In / Punch Out</small>
+<div class="card shadow border-0 mx-auto kiosk-card">
+
+    <!-- Header -->
+    <div class="card-header text-white text-center">
+        <h5 class="mb-1 fw-bold">
+            <i class="bi bi-tablet me-2"></i>Office Reception Kiosk
+        </h5>
+        <small class="text-white-50">Look at the camera · Tap the button to Punch In / Out</small>
+    </div>
+
+    <div class="card-body p-4 text-center">
+
+        <!-- Camera error banner -->
+        <div class="cam-error-banner" id="camErrorBanner">
+            <i class="bi bi-exclamation-triangle-fill text-danger"></i>
+            <span id="camErrorMsg">Camera access denied. Allow camera in the browser address bar and use
+                <strong>http://localhost:8000</strong> (not 127.0.0.1).</span>
         </div>
 
-        <div class="card-body p-4 text-center">
-            <!-- Viewfinder -->
-            <div class="kiosk-viewport mb-3" id="viewport">
-                <video id="kioskVideo" autoplay playsinline></video>
-                <canvas id="kioskCanvas" style="display: none;"></canvas>
+        <!-- Viewfinder -->
+        <div class="kiosk-viewport mb-3" id="kioskViewport">
+            <video id="kioskVideo" autoplay playsinline muted></video>
+            <canvas id="kioskCanvas" style="display:none;"></canvas>
 
-                <!-- Scanning overlay -->
-                <div class="kiosk-overlay" id="scanOverlay">
-                    <div class="scan-ring"></div>
-                    <div class="scan-text">Identifying face…</div>
-                </div>
-
-                <!-- Result overlay -->
-                <div class="kiosk-overlay" id="resultOverlay"></div>
+            <!-- Face guide oval -->
+            <div class="kiosk-face-guide">
+                <div class="kiosk-guide-ring idle" id="kioskGuideRing"></div>
             </div>
 
-            <!-- Action Button -->
-            <button id="scanBtn" class="btn btn-primary btn-lg w-100 fw-bold py-2 rounded-pill shadow-sm" onclick="scanFace()">
-                <i class="bi bi-camera-fill me-2"></i>Scan Face (Punch In / Out)
-            </button>
+            <!-- Idle bottom label -->
+            <div class="kiosk-idle-label" id="kioskIdleLabel">
+                <span class="kiosk-idle-pill">
+                    <i class="bi bi-camera me-1"></i>Position your face · then tap Scan
+                </span>
+            </div>
+
+            <!-- Scanning overlay (spinner) -->
+            <div class="kiosk-scan-overlay" id="kioskScanOverlay">
+                <div class="scan-ring"></div>
+                <div class="scan-label">Identifying face…</div>
+            </div>
+
+            <!-- ★ Floating result badge over live video ★ -->
+            <div class="kiosk-result-badge" id="kioskResultBadge"></div>
+        </div>
+
+        <!-- Scan button -->
+        <button id="scanBtn" class="btn btn-kiosk-scan" onclick="scanFace()" disabled>
+            <i class="bi bi-camera-fill me-2"></i>Scan Face — Punch In / Out
+        </button>
+
+        <div class="kiosk-hint">
+            <i class="bi bi-info-circle me-1"></i>
+            Auto-resets for the next person in 3 seconds after each scan
         </div>
     </div>
 </div>
+</div>
 
 <script>
-const video = document.getElementById('kioskVideo');
-const canvas = document.getElementById('kioskCanvas');
-const scanBtn = document.getElementById('scanBtn');
-const viewport = document.getElementById('viewport');
-const scanOverlay = document.getElementById('scanOverlay');
-const resultOverlay = document.getElementById('resultOverlay');
+/* ══════════════════════════════════════════════════════════════
+   KIOSK — Face Scan Controller
+   ══════════════════════════════════════════════════════════════ */
 
-// Initialize camera feed
-navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 480, height: 480 } })
-    .then(stream => {
-        video.srcObject = stream;
-    })
-    .catch(err => {
-        resultOverlay.innerHTML = `
-            <div class="result-card error">
-                <div class="result-icon">📷</div>
-                <div class="result-name">Camera Blocked</div>
-                <div class="result-action">Please allow browser camera access.</div>
-            </div>`;
-        resultOverlay.classList.add('active');
-        scanBtn.disabled = true;
-    });
+const video          = document.getElementById('kioskVideo');
+const canvas         = document.getElementById('kioskCanvas');
+const scanBtn        = document.getElementById('scanBtn');
+const viewport       = document.getElementById('kioskViewport');
+const scanOverlay    = document.getElementById('kioskScanOverlay');
+const resultBadge    = document.getElementById('kioskResultBadge');
+const guideRing      = document.getElementById('kioskGuideRing');
+const idleLabel      = document.getElementById('kioskIdleLabel');
+const camErrorBanner = document.getElementById('camErrorBanner');
+const camErrorMsg    = document.getElementById('camErrorMsg');
 
-function scanFace() {
+let cameraReady  = false;
+let kioskStream  = null;
+let resetTimer   = null;
+
+// ── Camera Startup ──────────────────────────────────────────
+function initKioskCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showCameraError('Camera API not available. Use a modern browser over http://localhost:8000.');
+        return;
+    }
+
+    const constraints = {
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: false
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
+        .then(stream => {
+            kioskStream = stream;
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                video.play().then(() => {
+                    cameraReady = true;
+                    scanBtn.disabled = false;
+                    guideRing.classList.add('idle');
+                    console.log('[Kiosk] Camera ready:', video.videoWidth, 'x', video.videoHeight);
+                }).catch(() => {
+                    cameraReady = true;
+                    scanBtn.disabled = false;
+                });
+            };
+        })
+        .catch(err => {
+            console.error('[Kiosk] Camera error:', err);
+            const isPermission = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
+            showCameraError(
+                isPermission
+                    ? 'Camera access denied. Click the camera icon in the browser address bar and select "Allow".'
+                    : 'Camera unavailable. Ensure this page is served over <strong>http://localhost:8000</strong> (not 127.0.0.1) and the device has a camera.'
+            );
+        });
+}
+
+function showCameraError(msg) {
+    camErrorMsg.innerHTML = msg;
+    camErrorBanner.classList.add('visible');
     scanBtn.disabled = true;
+}
 
-    // Show scanning state
+function stopKioskCamera() {
+    if (kioskStream) {
+        kioskStream.getTracks().forEach(t => t.stop());
+        kioskStream = null;
+    }
+    cameraReady = false;
+}
+
+window.addEventListener('beforeunload', stopKioskCamera);
+
+initKioskCamera();
+
+// ── Show Result Badge ────────────────────────────────────────
+function showResultBadge(html) {
+    resultBadge.innerHTML = html;
+    resultBadge.classList.remove('exiting');
+    resultBadge.classList.add('visible');
+}
+
+function dismissResultBadge() {
+    resultBadge.classList.add('exiting');
+    setTimeout(() => {
+        resultBadge.classList.remove('visible', 'exiting');
+        resultBadge.innerHTML = '';
+    }, 400);
+}
+
+// ── Auto-reset: re-enable scan button after 3 s ─────────────
+function scheduleReset() {
+    if (resetTimer) clearTimeout(resetTimer);
+    resetTimer = setTimeout(() => {
+        dismissResultBadge();
+        // Restore UI
+        viewport.classList.remove('scanning');
+        idleLabel.style.opacity = '1';
+        guideRing.classList.add('idle');
+        scanBtn.disabled = false;
+        scanBtn.innerHTML = '<i class="bi bi-camera-fill me-2"></i>Scan Face — Punch In / Out';
+    }, 3000);
+}
+
+// ── Face Scan ───────────────────────────────────────────────
+function scanFace() {
+    if (!cameraReady || video.readyState < 2) {
+        showResultBadge(`
+            <div class="result-pill error">
+                <div class="result-icon">⏳</div>
+                <div class="result-name" style="font-size:16px;">Camera Initializing</div>
+                <div class="result-action">Please wait a moment and try again.</div>
+            </div>`);
+        scheduleReset();
+        return;
+    }
+
+    // Disable button & enter scanning state
+    scanBtn.disabled = true;
+    scanBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Scanning…';
     viewport.classList.add('scanning');
     scanOverlay.classList.add('active');
-    resultOverlay.classList.remove('active');
+    dismissResultBadge();
+    idleLabel.style.opacity = '0';
+    guideRing.classList.remove('idle');
 
-    // Capture frame
-    canvas.width = 400;
-    canvas.height = 400;
-    canvas.getContext('2d').drawImage(video, 0, 0, 400, 400);
+    // Capture frame at actual video resolution
+    const w = video.videoWidth  || 640;
+    const h = video.videoHeight || 480;
+    canvas.width  = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
 
     canvas.toBlob(async blob => {
-        const formData = new FormData();
-        formData.append('punch_photo', blob, 'kiosk_frame.jpg');
+        const fd = new FormData();
+        fd.append('punch_photo', blob, 'kiosk_frame.jpg');
 
         try {
-            const res = await fetch('{% url "hrms:api_kiosk_punch" %}', {
+            const res  = await fetch('{% url "hrms:api_kiosk_punch" %}', {
                 method: 'POST',
-                body: formData
+                body: fd
             });
+            const data = await res.json().catch(() => { throw new Error('Invalid server response.'); });
 
-            const data = await res.json();
-
-            // Hide scanning state
+            // Hide scanning state (camera feed stays live)
             scanOverlay.classList.remove('active');
             viewport.classList.remove('scanning');
+            idleLabel.style.opacity = '1';
 
-            if (res.ok) {
-                const isPunchIn = data.action === "Punch In";
-                resultOverlay.innerHTML = `
-                    <div class="result-card success">
+            if (res.ok && data.success) {
+                const isPunchIn = data.action === 'Punch In';
+                showResultBadge(`
+                    <div class="result-pill success">
                         <div class="result-icon">${isPunchIn ? '✅' : '👋'}</div>
                         <div class="result-name">${data.employee_name}</div>
-                        <div class="result-action">${data.action}</div>
-                        <div class="result-time ${isPunchIn ? '' : 'out'}">${data.time}</div>
-                    </div>`;
+                        <div class="result-action">
+                            <i class="bi bi-${isPunchIn ? 'box-arrow-in-right' : 'box-arrow-right'} me-1"></i>
+                            ${data.action} · Verified
+                        </div>
+                        <div class="result-time ${isPunchIn ? 'punch-in' : 'punch-out'}">${data.time}</div>
+                        <div class="auto-reset-bar">
+                            <div class="auto-reset-fill"></div>
+                        </div>
+                    </div>`);
             } else {
-                resultOverlay.innerHTML = `
-                    <div class="result-card error">
+                const errMsg = data.error || 'Face not recognized.';
+                showResultBadge(`
+                    <div class="result-pill error">
                         <div class="result-icon">❌</div>
-                        <div class="result-name">${data.error || 'Face not recognized.'}</div>
-                        <div class="result-action">Please try again.</div>
-                    </div>`;
+                        <div class="result-name" style="font-size:16px;">Not Recognized</div>
+                        <div class="result-action">${errMsg}</div>
+                        <div class="auto-reset-bar">
+                            <div class="auto-reset-fill"></div>
+                        </div>
+                    </div>`);
             }
 
-            resultOverlay.classList.add('active');
-
-        } catch (e) {
+        } catch (err) {
             scanOverlay.classList.remove('active');
             viewport.classList.remove('scanning');
-            resultOverlay.innerHTML = `
-                <div class="result-card error">
+            idleLabel.style.opacity = '1';
+            showResultBadge(`
+                <div class="result-pill error">
                     <div class="result-icon">⚠️</div>
-                    <div class="result-name">Server Error</div>
-                    <div class="result-action">Please try again.</div>
-                </div>`;
-            resultOverlay.classList.add('active');
+                    <div class="result-name" style="font-size:16px;">Server Error</div>
+                    <div class="result-action">${err.message || 'Please try again.'}</div>
+                    <div class="auto-reset-bar">
+                        <div class="auto-reset-fill"></div>
+                    </div>
+                </div>`);
         }
 
-        // Auto-reset for next person after 4 seconds
-        setTimeout(() => {
-            scanBtn.disabled = false;
-            resultOverlay.classList.remove('active');
-        }, 4000);
+        // Auto-reset for next person in 3 s
+        scheduleReset();
 
-    }, 'image/jpeg', 0.85);
+    }, 'image/jpeg', 0.92);
 }
 </script>
 {% endblock %}

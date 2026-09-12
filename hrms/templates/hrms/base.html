@@ -222,13 +222,20 @@
           <div class="collapse {% if active_group == 'payroll' %}show{% endif %}" id="navPayroll">
             <ul class="nav flex-column hrms-sublist">
               {% if hrms_is_hr or request.user.is_superuser or is_finance_user %}
-                <li><a href="{% url 'hrms:salarystructure_list' %}" class="{% if active_item == 'salarystructure' %}current{% endif %}">Salary Structures</a></li>
+    <!--                <li><a href="{% url 'hrms:salarystructure_list' %}" class="{% if active_item == 'salarystructure' %}current{% endif %}">Salary Structures</a></li>-->
                 <li><a href="{% url 'hrms:employee_salary_list' %}" class="{% if active_item == 'employee_salary' %}current{% endif %}">Employee Salaries</a></li>
                 <li><a href="{% url 'hrms:loan_list' %}" class="{% if active_item == 'loan' %}current{% endif %}">Loans &amp; Advances</a></li>
                 <li><a href="{% url 'hrms:extra_list' %}" class="{% if active_item == 'extra' %}current{% endif %}">Incentives / Extras</a></li>
                 <li><a href="{% url 'hrms:payrollrun_list' %}" class="{% if active_item == 'payrollrun' %}current{% endif %}">Payroll Runs</a></li>
               {% endif %}
               <li><a href="{% url 'hrms:my_payslips' %}" class="{% if active_item == 'my_payslips' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}All Payslips{% else %}My Payslips{% endif %}</a></li>
+               {% if user.is_superuser or user.employee_profile.is_finance %}
+<li class="nav-item">
+    <a class="nav-link {% if active_item == 'bulk_payout' %}active{% endif %}" href="{% url 'hrms:bulk_payment_payout' %}">
+        <i class="bi bi-bank me-2 text-warning"></i> Bank Bulk Payout
+    </a>
+</li>
+{% endif %}
             </ul>
           </div>
         </li>
@@ -384,7 +391,39 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BIOMETRIC PAGE GUARD — runs synchronously BEFORE premium-ui.js
+     Immediately hides the loader on camera pages so the stream
+     is never occluded. Runs in <head> order, not deferred.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function () {
+  var CAMERA_PATHS = ['/attendance/enroll-face/', '/attendance/kiosk/', '/attendance/punch-in/'];
+  var pathname = window.location.pathname;
+  var isCameraPage = CAMERA_PATHS.some(function (p) { return pathname.indexOf(p) !== -1; });
+  if (isCameraPage) {
+    /* Immediately hide — do not wait for DOMContentLoaded */
+    var ldr = document.getElementById('hrmsPageLoader');
+    if (ldr) {
+      ldr.classList.add('hidden');
+      ldr.style.display = 'none';
+    }
+    /* Also re-hide on every DOM ready event in case browser caches state */
+    document.addEventListener('DOMContentLoaded', function () {
+      var l = document.getElementById('hrmsPageLoader');
+      if (l) { l.classList.add('hidden'); l.style.display = 'none'; }
+    });
+    window.addEventListener('pageshow', function () {
+      var l = document.getElementById('hrmsPageLoader');
+      if (l) { l.classList.add('hidden'); l.style.display = 'none'; }
+    });
+  }
+})();
+</script>
+
 <script src="{% static 'hrms/js/premium-ui.js' %}"></script>
+
 
 <!-- Context-Aware Loader: update orb colour & icon on nav click -->
 <script>

@@ -7426,9 +7426,12 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import Employee, EmployeeBiometric, AttendanceRecord, EmployeeLocationLog
 from .biometrics import verify_1_to_1, match_1_to_n, extract_face_encoding
 
+import base64
 import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
+
+from django.core.files.base import ContentFile
 
 _bio_logger = logging.getLogger('hrms.biometrics')
 
@@ -7503,40 +7506,77 @@ class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
         context['employees'] = Employee.objects.filter(status='active').order_by('first_name')
         return context
 
-    def post(self, request, *args, **kwargs):
-        """POST request: Receives image, extracts vector, and saves biometrics."""
-        employee_id = request.POST.get('employee_id')
+    def _get_image_source(self, request):
+        """
+        Extract image from either a file upload or a base64 canvas capture.
+        Returns (image_source_for_extraction, photo_file_for_storage, error_message).
+        """
+        # Priority 1: Standard file upload
         photo = request.FILES.get('photo')
+        if photo:
+            return photo, photo, None
 
-        if not employee_id or not photo:
-            return JsonResponse({'error': 'Employee ID and photo required.'}, status=400)
+        # Priority 2: Base64 string from canvas capture
+        image_data = request.POST.get('image_data', '').strip()
+        if image_data:
+            # Return the raw base64 string for extraction (biometrics.py handles it)
+            # Also build a ContentFile for saving to registered_photo
+            try:
+                import re
+                cleaned = re.sub(r'^data:image/[^;]+;base64,', '', image_data, flags=re.IGNORECASE)
+                raw_bytes = base64.b64decode(cleaned)
+                photo_file = ContentFile(raw_bytes, name='captured_face.jpg')
+                return image_data, photo_file, None
+            except Exception:
+                return None, None, 'Invalid image data received from camera.'
 
-        employee = Employee.objects.filter(id=employee_id).first()
+        return None, None, 'Please capture a photo using the webcam or select an image file.'
+
+    def post(self, request, *args, **kwargs):
+        """POST request: Receives image (file or base64), extracts vector, saves biometrics."""
+        employee_id = request.POST.get('employee_id')
+        if not employee_id:
+            return JsonResponse({'success': False, 'error': 'Please select an employee.'}, status=400)
+
+        employee = Employee.objects.filter(id=employee_id, status='active').first()
         if not employee:
-            return JsonResponse({'error': 'Employee not found.'}, status=404)
+            return JsonResponse({'success': False, 'error': 'Employee not found or inactive.'}, status=404)
 
-        encoding = extract_face_encoding(photo)
-        if not encoding:
+        # Get image from file upload or base64 canvas
+        image_source, photo_file, img_error = self._get_image_source(request)
+        if img_error:
+            return JsonResponse({'success': False, 'error': img_error}, status=400)
+
+        # Extract face encoding (new tuple return: encoding, error)
+        encoding, extract_error = extract_face_encoding(image_source)
+        if encoding is None:
             return JsonResponse({
-                'error': 'Could not detect a clear face in the photo. '
-                         'Ensure good lighting, face the camera directly, '
-                         'and avoid tilting your head.'
+                'success': False,
+                'error': extract_error or (
+                    'Could not detect a clear face in the photo. '
+                    'Ensure good lighting, face the camera directly, '
+                    'and avoid tilting your head.'
+                )
             }, status=400)
 
         # Check if this face is ALREADY enrolled for ANY OTHER employee
         existing_biometrics = EmployeeBiometric.objects.exclude(employee=employee).select_related('employee')
-        duplicate_emp, _ = match_1_to_n(photo, existing_biometrics, threshold=0.32)
+        duplicate_emp, _ = match_1_to_n(image_source, existing_biometrics, threshold=0.32)
         if duplicate_emp:
             return JsonResponse({
+                'success': False,
                 'error': f'Duplicate Face Detected! This face is already enrolled under '
                          f'{duplicate_emp.full_name} ({duplicate_emp.employee_code}).'
             }, status=409)
 
         EmployeeBiometric.objects.update_or_create(
             employee=employee,
-            defaults={'face_encoding': encoding, 'registered_photo': photo}
+            defaults={'face_encoding': encoding, 'registered_photo': photo_file}
         )
-        return JsonResponse({'status': 'success', 'message': f'Face enrolled for {employee.full_name}'})
+        return JsonResponse({
+            'success': True,
+            'message': f'Face enrolled successfully for {employee.full_name}'
+        })
 
 
 # ─────────────────────────────────────────────────────────────
@@ -7645,21 +7685,44 @@ class KioskPunchInView(View):
     def dispatch(self, *args, **kwargs):
         return super().dispatch(*args, **kwargs)
 
-    def post(self, request, *args, **kwargs):
+    def _get_image_source(self, request):
+        """
+        Extract image from file upload or base64 canvas data.
+        Returns (image_source, photo_file_for_storage, photo_bytes, error).
+        """
         photo = request.FILES.get('punch_photo')
-        if not photo:
-            return JsonResponse({'error': 'Camera frame required.'}, status=400)
+        if photo:
+            photo_bytes = photo.read()
+            photo.seek(0)
+            return photo, photo, photo_bytes, None
 
-        # Read photo bytes for background re-verification
-        photo_bytes = photo.read()
-        photo.seek(0)
+        image_data = request.POST.get('image_data', '').strip()
+        if image_data:
+            try:
+                import re
+                cleaned = re.sub(r'^data:image/[^;]+;base64,', '', image_data, flags=re.IGNORECASE)
+                raw_bytes = base64.b64decode(cleaned)
+                photo_file = ContentFile(raw_bytes, name='kiosk_frame.jpg')
+                return image_data, photo_file, raw_bytes, None
+            except Exception:
+                return None, None, None, 'Invalid image data from camera.'
 
-        # Vectorised 1:N match — fast NumPy batch operation
+        return None, None, None, 'Camera frame required.'
+
+    def post(self, request, *args, **kwargs):
+        image_source, photo_file, photo_bytes, img_error = self._get_image_source(request)
+        if img_error:
+            return JsonResponse({'success': False, 'error': img_error}, status=400)
+
+        # Vectorised 1:N match with calibrated threshold
         all_biometrics = EmployeeBiometric.objects.select_related('employee').all()
-        matched_employee, msg = match_1_to_n(photo, all_biometrics)
+        matched_employee, msg = match_1_to_n(image_source, all_biometrics)
 
         if not matched_employee:
-            return JsonResponse({'error': 'Face not recognized.'}, status=401)
+            return JsonResponse({
+                'success': False,
+                'error': 'Face not recognized. Please align your face or use your Employee ID.'
+            }, status=401)
 
         today = timezone.localdate()
         now = timezone.now()
@@ -7669,7 +7732,7 @@ class KioskPunchInView(View):
             attendance_date=today,
             defaults={
                 'check_in': now,
-                'punch_in_photo': photo,
+                'punch_in_photo': photo_file,
                 'is_face_verified': True,  # Already verified via 1:N match
                 'punch_source': 'kiosk',
                 'status': AttendanceRecord.Status.PRESENT,
@@ -7680,7 +7743,7 @@ class KioskPunchInView(View):
             if not attendance.check_in:
                 # First Punch In
                 attendance.check_in = now
-                attendance.punch_in_photo = photo
+                attendance.punch_in_photo = photo_file
                 attendance.is_face_verified = True
                 attendance.punch_source = 'kiosk'
                 attendance.status = AttendanceRecord.Status.PRESENT
@@ -7695,16 +7758,18 @@ class KioskPunchInView(View):
             action_type = "Punch In"
 
         # Optional: background re-verification for audit trail
-        _BIO_POOL.submit(
-            _verify_kiosk_async,
-            attendance.id,
-            photo_bytes,
-            matched_employee.id,
-        )
+        if photo_bytes:
+            _BIO_POOL.submit(
+                _verify_kiosk_async,
+                attendance.id,
+                photo_bytes,
+                matched_employee.id,
+            )
 
         return JsonResponse({
-            'status': 'success',
+            'success': True,
             'employee_name': matched_employee.full_name,
+            'employee_code': matched_employee.employee_code,
             'action': action_type,
             'time': now.strftime('%I:%M %p'),
             'message': f'{matched_employee.full_name}: {action_type} recorded at {now.strftime("%I:%M %p")}'
@@ -7819,3 +7884,185 @@ class BiometricStatusListView(LoginRequiredMixin, TemplateView):
         context['enrolled_count'] = len(enrolled_list)
         context['pending_count'] = len(pending_list)
         return context
+
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill
+from django.http import HttpResponse
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+
+class FinanceRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Restricts access to Superadmins, HRs, and employees with is_finance=True."""
+    def test_func(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        profile = getattr(user, 'employee_profile', None)
+        if profile:
+            return bool(profile.is_finance or is_hr_or_above(user))
+        return False
+
+    def handle_no_permission(self):
+        messages.error(self.request, "Access Denied: Only Finance & Accounts personnel can access the Bulk Payout module.")
+        return redirect('hrms:dashboard')
+
+
+class BulkPaymentDisbursementView(FinanceRequiredMixin, SidebarContextMixin, View):
+    """
+    Excel-like interactive workbench for Finance to review, adjust,
+    and export the Corporate Bank Bulk Payout spreadsheet.
+    """
+    template_name = 'hrms/payroll/bulk_payment_payout.html'
+    active_group, active_item = 'payroll', 'bulk_payout'
+
+    def get(self, request):
+        today = timezone.localdate()
+        sel_month = int(request.GET.get('month', today.month))
+        sel_year = int(request.GET.get('year', today.year))
+        activation_date = request.GET.get('activation_date', today.strftime('%Y-%m-%d'))
+        action = request.GET.get('action')
+
+        active_company_id = request.session.get('active_company_id')
+        comp_qs = m.Company.objects.all()
+        selected_company = None
+        if active_company_id and active_company_id != 'all':
+            selected_company = m.Company.objects.filter(id=active_company_id).first()
+        if not selected_company:
+            selected_company = comp_qs.first()
+
+        # 1. Fetch active staff with their salary and bank details
+        employees = m.Employee.objects.filter(
+            status=m.Employee.Status.ACTIVE
+        ).select_related('bank_detail', 'department', 'designation', 'company').order_by('employee_code')
+
+        if selected_company:
+            employees = employees.filter(company=selected_company)
+
+        # 2. Fetch processed payslips for the selected month/year
+        payslips = {
+            p.employee_id: p
+            for p in m.PaySlip.objects.filter(
+                payroll_run__month=sel_month,
+                payroll_run__year=sel_year
+            )
+        }
+
+        # 3. Build the automated rows
+        rows = []
+        crn_counter = 1
+        month_name = calendar.month_name[sel_month]
+        default_debit_acc = "926030003897014"  # Default corporate debit account
+
+        for emp in employees:
+            bank = getattr(emp, 'bank_detail', None)
+            slip = payslips.get(emp.id)
+
+            # Resolve salary amount
+            if slip and slip.net_pay > 0:
+                salary_amount = float(slip.net_pay)
+            else:
+                active_sal = emp.salaries.filter(is_active=True).first()
+                salary_amount = float(round(active_sal.ctc_annual / Decimal('12.0'), 2)) if active_sal else 0.0
+
+            beneficiary_name = (bank.account_holder if bank and bank.account_holder else emp.full_name).upper()
+            acc_num = bank.account_number if bank else ""
+            ifsc = bank.ifsc_code.upper() if bank else ""
+            crn_code = f"OHC{crn_counter:03d}"
+            remarks = f"{month_name} Salary"
+
+            row_data = {
+                'emp': emp,
+                'payment_method': 'I',  # 'I' for IMPS/NEFT corporate bulk
+                'amount': salary_amount,
+                'activation_date': activation_date,
+                'beneficiary_name': beneficiary_name,
+                'account_number': acc_num,
+                'email': emp.email or "",
+                'email_body': "",
+                'debit_account': default_debit_acc,
+                'crn_no': crn_code,
+                'ifsc': ifsc,
+                'account_type': '10',  # 10: Savings
+                'remarks': remarks,
+                'phone': emp.phone or "",
+                'has_bank': bool(bank and bank.account_number and bank.ifsc_code),
+                'bank_name': bank.bank_name if bank else 'No Bank Linked',
+            }
+            rows.append(row_data)
+            crn_counter += 1
+
+        # 4. Handle Excel Export matching the corporate bank upload template
+        if action == 'export_excel':
+            return self.export_bank_excel(rows, selected_company, month_name, sel_year)
+
+        total_payout = sum(r['amount'] for r in rows)
+
+        context = {
+            'active_group': self.active_group,
+            'active_item': self.active_item,
+            'rows': rows,
+            'total_payout': total_payout,
+            'total_employees': len(rows),
+            'sel_month': sel_month,
+            'sel_year': sel_year,
+            'month_name': month_name,
+            'activation_date': activation_date,
+            'months_choices': [(i, calendar.month_name[i]) for i in range(1, 13)],
+            'year_choices': [sel_year - 1, sel_year, sel_year + 1],
+            'selected_company': selected_company,
+        }
+        return render(request, self.template_name, context)
+
+    def export_bank_excel(self, rows, company, month_name, year):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+
+        # Headers matching corporate bank bulk payment specification
+        headers = [
+            'Payment Method Name', 'Payment Amount (Request)', 'Activation Date',
+            'Beneficiary Name (Request)', 'Account No', 'Email', 'Email Body',
+            'Debit Account No', 'CRN No', 'RECEIVER IFSC Code', 'RECEIVER Account Type',
+            'Remarks', 'Phone No'
+        ]
+        ws.append(headers)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="101B2D", end_color="101B2D", fill_type="solid")
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        for r in rows:
+            ws.append([
+                r['payment_method'],
+                r['amount'],
+                r['activation_date'],
+                r['beneficiary_name'],
+                str(r['account_number']),
+                r['email'],
+                r['email_body'],
+                str(r['debit_account']),
+                r['crn_no'],
+                r['ifsc'],
+                r['account_type'],
+                r['remarks'],
+                r['phone']
+            ])
+
+        # Formatting column widths
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = openpyxl.utils.get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 14)
+
+        filename = f"Bulk_Salary_Payout_{month_name}_{year}.xlsx"
+        response = HttpResponse(
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
