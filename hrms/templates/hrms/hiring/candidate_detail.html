@@ -2,46 +2,66 @@
 {% block title %}{{ candidate.first_name }} {{ candidate.last_name }}{% endblock %}
 {% block page_title %}{{ candidate.first_name }} {{ candidate.last_name }}{% endblock %}
 
+
 {% block content %}
 <div class="row g-3">
-  <div class="col-md-4">
-    <div class="card">
-      <div class="card-header bg-white fw-semibold">Profile</div>
-      <div class="card-body small">
-        <p class="mb-1"><strong>Email:</strong> {{ candidate.email }}</p>
-        <p class="mb-1"><strong>Phone:</strong> {{ candidate.phone|default:"—" }}</p>
-        <p class="mb-1"><strong>Current Company:</strong> {{ candidate.current_company|default:"—" }}</p>
-        <p class="mb-1"><strong>Experience:</strong> {{ candidate.experience_years }} yrs</p>
-        {% if candidate.resume %}<p class="mb-0"><a href="{{ candidate.resume.url }}" target="_blank">View Resume</a></p>{% endif %}
-      </div>
-    </div>
-  </div>
-  <div class="col-md-8">
-<div class="card">
-    <div class="card-header bg-white"><strong>Application Tracking Timeline</strong></div>
-    <div class="card-body">
-        <ul class="list-group list-group-flush">
-            {% for log in application.audit_logs.all %}
-            <li class="list-group-item d-flex justify-content-between align-items-center">
-                <div>
-                    <i class="bi bi-clock-history text-muted me-2"></i>
-                    <strong>{{ log.to_status|title }}</strong>
-                    <small class="text-muted d-block">{{ log.created_at|date:"M d, Y H:i" }}</small>
-                </div>
-                <div class="text-end">
-                    {% if not forloop.last %}
-                        <!-- Logic to show duration since last stage -->
-                        <span class="badge bg-light text-dark border">
-                           Step duration: {{ log.created_at|timesince:next_log_date }}
-                        </span>
-                    {% endif %}
-                </div>
-            </li>
-            {% endfor %}
-        </ul>
-    </div>
-</div>
+ <div class="col-md-4">
+   <div class="card">
+     <div class="card-header bg-white fw-semibold">Profile</div>
+     <div class="card-body small">
+       <p class="mb-1"><strong>Email:</strong> {{ candidate.email }}</p>
+       <p class="mb-1"><strong>Phone:</strong> {{ candidate.phone|default:"—" }}</p>
+       <p class="mb-1"><strong>Current Company:</strong> {{ candidate.current_company|default:"—" }}</p>
+       <p class="mb-1"><strong>Experience:</strong> {{ candidate.experience_years }} yrs</p>
+       {% if candidate.resume %}<p class="mb-0"><a href="{{ candidate.resume.url }}" target="_blank">View Resume</a></p>{% endif %}
+     </div>
+   </div>
+ </div>
 
-  </div>
+
+ <div class="col-md-8">
+   {% if candidate.applications.all %}
+     {% for application in candidate.applications.all %}
+       <div class="card mb-3">
+         <div class="card-header bg-white d-flex justify-content-between align-items-center">
+           <strong>{{ application.job_posting.title }}</strong>
+           <a href="{% url 'hrms:application_detail' application.pk %}" class="btn btn-sm btn-outline-secondary">Open Application</a>
+         </div>
+         <div class="card-body">
+           <div class="mb-2">
+             <span class="badge {% if application.status == 'hired' %}bg-success{% elif application.status == 'rejected' %}bg-danger{% elif application.status == 'offered' %}bg-info{% else %}bg-primary{% endif %}">
+               {{ application.get_status_display }}
+             </span>
+             <span class="text-muted ms-2">Applied {{ application.applied_on|date:"M d, Y" }}</span>
+           </div>
+
+
+           <ul class="list-group list-group-flush">
+             {% for log in application.audit_logs.all %}
+             <li class="list-group-item px-0">
+               <div class="d-flex justify-content-between align-items-start gap-3">
+                 <div>
+                   <i class="bi bi-clock-history text-muted me-2"></i>
+                   <strong>{{ log.to_status|title }}</strong>
+                   <small class="text-muted d-block">{{ log.created_at|date:"M d, Y H:i" }}</small>
+                 </div>
+                 {% if log.note %}
+                   <small class="text-muted fst-italic">{{ log.note }}</small>
+                 {% endif %}
+               </div>
+             </li>
+             {% empty %}
+             <li class="list-group-item px-0 text-muted">No audit entries for this application yet.</li>
+             {% endfor %}
+           </ul>
+         </div>
+       </div>
+     {% endfor %}
+   {% else %}
+     <div class="card">
+       <div class="card-body text-muted">No applications found for this candidate.</div>
+     </div>
+   {% endif %}
+ </div>
 </div>
 {% endblock %}

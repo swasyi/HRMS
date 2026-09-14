@@ -130,12 +130,13 @@
           <div class="collapse {% if active_group == 'hiring' %}show{% endif %}" id="navHiring">
             <ul class="nav flex-column hrms-sublist">
               {% if hrms_is_hr or request.user.is_superuser %}
-              <li><a href="{% url 'hrms:jobposting_list' %}" class="{% if active_item == 'jobposting' %}current{% endif %}">Job Postings</a></li>
-              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}">Candidates</a></li>
-              <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}">Applications</a></li>
-              <li><a href="{% url 'hrms:interview_list' %}" class="{% if active_item == 'interview' %}current{% endif %}">All Interviews</a></li>
+              <li><a href="{% url 'hrms:jobposting_list' %}" class="{% if active_item == 'jobposting' %}current{% endif %}"><i class="bi bi-briefcase me-1 text-purple-400"></i>Job Postings</a></li>
+              <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}"><i class="bi bi-kanban me-1"></i>Applications</a></li>
+              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}"><i class="bi bi-person-lines-fill me-1"></i>Candidates</a></li>
+              <li><a href="{% url 'hrms:interview_list' %}" class="{% if active_item == 'interview' %}current{% endif %}"><i class="bi bi-calendar-week me-1"></i>All Interviews</a></li>
+              <li><a href="{% url 'hrms:recruitmentstage_list' %}" class="{% if active_item == 'recruitmentstage' %}current{% endif %}"><i class="bi bi-diagram-3 me-1"></i>Pipeline Stages</a></li>
               {% endif %}
-              <li><a href="{% url 'hrms:my_interviews' %}" class="{% if active_item == 'my_interviews' %}current{% endif %}">My Interviews (Interviewer)</a></li>
+              <li><a href="{% url 'hrms:my_interviews' %}" class="{% if active_item == 'my_interviews' %}current{% endif %}"><i class="bi bi-camera-video me-1"></i>My Interviews</a></li>
             </ul>
           </div>
         </li>
@@ -201,8 +202,15 @@
               <li><a href="{% url 'hrms:leave_balance' %}" class="{% if active_item == 'leave_balance' %}current{% endif %}">Leave Balance</a></li>
               {% if hrms_is_hr or request.user.is_superuser %}
                 <li><a href="{% url 'hrms:leavetype_list' %}" class="{% if active_item == 'leavetype' %}current{% endif %}">Leave Types</a></li>
+                <li><a href="{% url 'hrms:comp_off_hr' %}" class="{% if active_item == 'comp_off_hr' %}current{% endif %}"><i class="bi bi-calendar-check me-1" style="color:#8b5cf6;"></i>Comp-Off Management (HR)</a></li>
               {% endif %}
-              <li><a href="{% url 'hrms:leave-bank' %}" class="{% if active_item == 'leave_bank' %}current{% endif %}">Leave Bank</a></li>
+<li>
+                <a href="{% url 'hrms:comp_off_history' %}" class="{% if active_item == 'comp_off_history' %}current{% endif %}">
+                  <i class="bi bi-clock-history me-1 text-primary"></i>My Comp-Off History
+                </a>
+              </li>
+                <li><a href="{% url 'hrms:leave-bank' %}" class="{% if active_item == 'leave_bank' %}current{% endif %}">Leave Bank</a></li>
+<!--              <li><a href="{% url 'hrms:comp_off_hr' %}?filter=comp_off" class="{% if active_item == 'comp_off' %}current{% endif %}"><i class="bi bi-calendar2-plus me-1" style="color:#8b5cf6;"></i>Comp-Off Records</a></li>-->
             </ul>
           </div>
         </li>
@@ -423,6 +431,13 @@
 </script>
 
 <script src="{% static 'hrms/js/premium-ui.js' %}"></script>
+
+<!-- ═══ HTMX — HTML-native AJAX ═══ -->
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+<!-- ═══ Alpine.js — lightweight reactivity ═══ -->
+<script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
+<!-- ═══ SortableJS — drag-and-drop ═══ -->
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 
 
 <!-- Context-Aware Loader: update orb colour & icon on nav click -->

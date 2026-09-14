@@ -50,7 +50,7 @@ class DepartmentForm(BootstrapModelForm):
 class DesignationForm(BootstrapModelForm):
     class Meta:
         model = m.Designation
-        fields = ['company', 'department', 'title', 'level']
+        fields = ['company', 'department', 'title']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

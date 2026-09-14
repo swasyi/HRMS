@@ -390,6 +390,14 @@ def approve_leave(application, approver_user):
     application.approved_on = timezone.now()
     application.save()
 
+    # STEP 4: Comp Off — mark credits as AVAILED (CO leave type only)
+    if (application.leave_type.code or '').upper().strip() == 'CO':
+        try:
+            from .comp_off_logic import deduct_comp_off_credits
+            deduct_comp_off_credits(application)
+        except Exception:
+            pass  # Never block approval on CO ledger error
+
     _log_action(application, 'hr_approved', performed_by=approver_user,
                 remarks=f'HR final approval. Balance: {msg}')
     return f"Success: {msg}"
@@ -425,6 +433,14 @@ def reject_leave(application, approver_user, reason=''):
     application.approved_by = approver_user
     application.save()
 
+    # Comp Off — restore credits if this was a CO leave (FIFO reversal)
+    if (application.leave_type.code or '').upper().strip() == 'CO':
+        try:
+            from .comp_off_logic import restore_comp_off_credits
+            restore_comp_off_credits(application)
+        except Exception:
+            pass
+
     _log_action(application, action_type, performed_by=approver_user, remarks=reason)
     return application
 @transaction.atomic
@@ -459,6 +475,14 @@ def cancel_leave(application, requested_by_employee, is_hr=False):
             attendance_date__range=[application.start_date, application.end_date],
             status=m.AttendanceRecord.Status.ON_LEAVE
         ).update(status=m.AttendanceRecord.Status.ABSENT, remarks="Leave Cancelled")
+
+    # Comp Off — restore credits if this was an approved CO leave being cancelled
+    if (application.leave_type.code or '').upper().strip() == 'CO' and application.status == m.LeaveApplication.Status.APPROVED:
+        try:
+            from .comp_off_logic import restore_comp_off_credits
+            restore_comp_off_credits(application)
+        except Exception:
+            pass
 
     application.status = m.LeaveApplication.Status.CANCELLED
     application.save()
@@ -574,6 +598,14 @@ def approve_leave(application, approver_user):
         application.approved_on = timezone.now()
         application.save(update_fields=['status', 'approved_by', 'approved_on'])
 
+        # 5. Comp Off — mark credits as AVAILED (CO leave type only)
+        if code == 'CO':
+            try:
+                from .comp_off_logic import deduct_comp_off_credits
+                deduct_comp_off_credits(application)
+            except Exception:
+                pass  # Never block approval on CO ledger error
+
         if '_log_action' in globals():
             _log_action(application, 'hr_approved', performed_by=approver_user, remarks='Approved by HR/Admin')
 
@@ -612,6 +644,14 @@ def reject_leave(application, approver_user, reason=''):
         application.rejection_reason = reason
         application.approved_by = approver_user
         application.save()
+
+        # Comp Off — restore credits if this was a CO leave
+        if code == 'CO':
+            try:
+                from .comp_off_logic import restore_comp_off_credits
+                restore_comp_off_credits(application)
+            except Exception:
+                pass
 
         if '_log_action' in globals():
             _log_action(application, action_type, performed_by=approver_user, remarks=reason)
@@ -997,6 +1037,14 @@ def approve_leave(application, approver_user):
         )
         curr += timedelta(days=1)
 
+    # --- Comp Off: mark credits as AVAILED (CO leaves only) ---
+    if code == 'CO':
+        try:
+            from .comp_off_logic import deduct_comp_off_credits
+            deduct_comp_off_credits(application)
+        except Exception:
+            pass
+
     application.status = getattr(m.LeaveApplication.Status, 'APPROVED', 'approved')
     application.approved_by = approver_user
     application.approved_on = timezone.now()
@@ -1013,10 +1061,19 @@ def approve_leave(application, approver_user):
 def reject_leave(application, approver_user, reason=''):
     emp = application.employee
     days = Decimal(str(application.total_days or 0.0))
+    code = (application.leave_type.code or '').upper().strip()
 
     # REFUND THE DEDUCTED DAYS BACK TO MASTER BANK
     if application.leave_type.is_paid and application.status != getattr(m.LeaveApplication.Status, 'REJECTED', 'rejected'):
         _sync_bank_balance(emp, application.leave_type, days, action='refund')
+
+    # --- Comp Off: restore consumed credits (CO leaves only) ---
+    if code == 'CO':
+        try:
+            from .comp_off_logic import restore_comp_off_credits
+            restore_comp_off_credits(application)
+        except Exception:
+            pass
 
     # Reset attendance records if any existed
     m.AttendanceRecord.objects.filter(
@@ -1058,10 +1115,19 @@ def cancel_leave(application, requested_by_employee, is_hr=False):
 
     emp = application.employee
     days = Decimal(str(application.total_days or 0.0))
+    code = (application.leave_type.code or '').upper().strip()
 
     # REFUND THE DEDUCTED DAYS BACK TO MASTER BANK
     if application.leave_type.is_paid:
         _sync_bank_balance(emp, application.leave_type, days, action='refund')
+
+    # --- Comp Off: restore consumed credits (CO leaves only) ---
+    if code == 'CO':
+        try:
+            from .comp_off_logic import restore_comp_off_credits
+            restore_comp_off_credits(application)
+        except Exception:
+            pass
 
     m.AttendanceRecord.objects.filter(
         employee=emp,

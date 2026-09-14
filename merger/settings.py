@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'inventory',
     'customer_dashboard',
     'hrms',
+    'rest_framework',
     'crispy_forms',
     'crispy_bootstrap5',
     'django.contrib.admin',

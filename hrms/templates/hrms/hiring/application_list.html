@@ -1,131 +1,187 @@
 {% extends "hrms/base.html" %}
+{% block title %}Applications{% endblock %}
+{% block page_title %}Applications{% endblock %}
+
+{% block extra_css %}
+<style>
+  .filter-card { background:#f8fafc; border:1.5px solid #e8eaf0; border-radius:14px; padding:1rem 1.25rem; }
+  .filter-card select, .filter-card input { border-radius:9px; border:1.5px solid #e5e7eb; font-size:.85rem; }
+  .filter-card select:focus, .filter-card input:focus { border-color:#8b5cf6; box-shadow:0 0 0 3px rgba(139,92,246,.13); }
+  .app-table { border-radius:14px; overflow:hidden; border:1.5px solid #e8eaf0; }
+  .app-table th { background:#f3f4f6; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:#6b7280; border:none; }
+  .app-table td { vertical-align:middle; border-color:#f1f5f9; font-size:.87rem; }
+  .app-table tbody tr { transition:background .12s; }
+  .app-table tbody tr:hover { background:#faf5ff; }
+  .status-badge { font-size:.72rem; font-weight:700; padding:.25rem .7rem; border-radius:99px; }
+  .sb-applied      { background:#e0f2fe; color:#0369a1; }
+  .sb-shortlisted  { background:#fef9c3; color:#92400e; }
+  .sb-interviewing { background:#ede9fe; color:#5b21b6; }
+  .sb-offered      { background:#d1fae5; color:#065f46; }
+  .sb-hired        { background:#dcfce7; color:#166534; }
+  .sb-rejected     { background:#fee2e2; color:#991b1b; }
+  .candidate-avatar { width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#8b5cf6,#6366f1); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.8rem; flex-shrink:0; }
+  .source-chip { font-size:.7rem; background:#f1f5f9; color:#475569; border-radius:6px; padding:.15rem .5rem; }
+  .ats-topbar { background:linear-gradient(135deg,#1e1b4b,#312e81); border-radius:14px; padding:1.25rem 1.5rem; color:#fff; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .btn-export { background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25); color:#fff; border-radius:9px; font-size:.83rem; }
+  .btn-export:hover { background:rgba(255,255,255,.22); color:#fff; }
+  .next-iv-badge { font-size:.7rem; background:#ede9fe; color:#5b21b6; border-radius:6px; padding:.1rem .45rem; }
+  .lock-icon { color:#9ca3af; }
+</style>
+{% endblock %}
+
 {% block content %}
+<div class="ats-topbar">
+  <div>
+    <div class="fw-bold" style="font-size:1.15rem;"><i class="bi bi-kanban me-2"></i>Applications Pipeline</div>
+    <div class="opacity-75" style="font-size:.82rem;">
+      {{ applications|length }} result{{ applications|length|pluralize }} shown
+      {% if current_job_id %} for Job #{{ current_job_id }}{% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{% url 'hrms:application_add' %}" class="btn btn-sm btn-light fw-semibold" style="border-radius:9px;">
+      <i class="bi bi-plus-lg me-1"></i>Add Application
+    </a>
+    <a href="{% url 'hrms:bulk_download_resumes' %}" class="btn btn-sm btn-export">
+      <i class="bi bi-download me-1"></i>Bulk Résumés
+    </a>
+  </div>
+</div>
 
-<div class="row mb-4">
-    <div class="col-md-8">
-        <h4>Candidates List
-            {% if current_job_id %}
-                <small class="text-muted">for Job ID #{{ current_job_id }}</small>
+<!-- Filters -->
+<div class="filter-card mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label small fw-semibold mb-1">Job</label>
+      <select name="job" class="form-select form-select-sm">
+        <option value="">All Jobs</option>
+        {% for job in jobs %}
+        <option value="{{ job.id }}" {% if current_job_id == job.id|stringformat:"i" %}selected{% endif %}>{{ job.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label small fw-semibold mb-1">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All Statuses</option>
+        {% for val, label in statuses %}
+        <option value="{{ val }}" {% if current_status == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label small fw-semibold mb-1">Search Candidate</label>
+      <input type="text" name="q" value="{{ request.GET.q }}" class="form-control form-control-sm" placeholder="Name or email…">
+    </div>
+    <div class="col-md-3 d-flex gap-2">
+      <button type="submit" class="btn btn-sm w-100" style="background:#6366f1; color:#fff; border-radius:9px;">
+        <i class="bi bi-funnel-fill me-1"></i>Filter
+      </button>
+      <a href="{% url 'hrms:application_list' %}" class="btn btn-sm btn-outline-secondary" style="border-radius:9px;">Clear</a>
+    </div>
+  </form>
+</div>
+
+<!-- Table -->
+<div class="card app-table shadow-sm">
+  <div class="table-responsive">
+    <table class="table mb-0" id="appsTable">
+      <thead>
+        <tr>
+          <th style="width:30px;"><input type="checkbox" id="selectAll" title="Select all"></th>
+          <th>Candidate</th>
+          <th>Job</th>
+          <th>Applied</th>
+          <th>Status</th>
+          <th>Source</th>
+          <th>Next Interview</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for app in applications %}
+        <tr>
+          <td><input type="checkbox" name="app_ids" value="{{ app.pk }}" class="app-check"></td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="candidate-avatar">{{ app.candidate.first_name|slice:":1" }}{{ app.candidate.last_name|slice:":1" }}</div>
+              <div>
+                <a href="{% url 'hrms:application_detail' app.pk %}" class="fw-semibold text-decoration-none" style="color:#1e1b4b;">
+                  {{ app.candidate.first_name }} {{ app.candidate.last_name }}
+                </a>
+                <div class="text-muted" style="font-size:.75rem;">{{ app.candidate.email }}</div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <a href="{% url 'hrms:application_list' %}?job={{ app.job_posting.pk }}" class="text-decoration-none text-dark fw-semibold" style="font-size:.84rem;">
+              {{ app.job_posting.title }}
+            </a>
+            {% if app.job_posting.department %}
+            <div class="text-muted" style="font-size:.73rem;">{{ app.job_posting.department }}</div>
             {% endif %}
-        </h4>
-    </div>
-    <div class="col-md-4 text-end">
-        <a href="{% url 'hrms:application_add' %}" class="btn btn-primary btn-sm">Add Application</a>
-    </div>
+          </td>
+          <td style="font-size:.82rem; color:#6b7280;">{{ app.applied_on|date:"d M Y" }}</td>
+          <td>
+            <span class="status-badge sb-{{ app.status }}">
+              {% if app.is_locked %}<i class="bi bi-lock-fill lock-icon me-1"></i>{% endif %}
+              {{ app.get_status_display }}
+            </span>
+          </td>
+          <td>
+            {% if app.source %}
+            <span class="source-chip">{{ app.get_source_display }}</span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% with nxt=app.interviews.last %}
+            {% if nxt %}<span class="next-iv-badge"><i class="bi bi-calendar-event me-1"></i>{{ nxt.scheduled_on|date:"d M H:i" }}</span>
+            {% else %}<span class="text-muted" style="font-size:.75rem;">—</span>{% endif %}
+            {% endwith %}
+          </td>
+          <td class="text-end">
+            <div class="d-flex gap-1 justify-content-end">
+              <a href="{% url 'hrms:application_detail' app.pk %}" class="btn btn-sm btn-outline-primary" title="View"><i class="bi bi-eye"></i></a>
+              {% if app.status not in 'hired,rejected' %}
+              <a href="{% url 'hrms:interview_add' app.pk %}" class="btn btn-sm btn-outline-secondary" title="Schedule Interview"><i class="bi bi-calendar-plus"></i></a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" class="text-center py-5 text-muted">
+            <i class="bi bi-inbox" style="font-size:2rem; display:block; margin-bottom:.5rem;"></i>
+            No applications match your filters.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<!-- FILTER BAR -->
-<div class="card mb-3 bg-light">
-    <div class="card-body">
-        <form method="get" class="row g-2 align-items-end">
-            <div class="col-md-4">
-                <label class="form-label small">Filter by Job</label>
-                <select name="job" class="form-select form-select-sm">
-                    <option value="">All Jobs</option>
-                    {% for job in jobs %}
-                    <option value="{{ job.id }}" {% if current_job_id == job.id|stringformat:"i" %}selected{% endif %}>
-                        {{ job.title }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-4">
-                <label class="form-label small">Filter by Status</label>
-                <select name="status" class="form-select form-select-sm">
-                    <option value="">All Statuses</option>
-                    {% for val, label in statuses %}
-                    <option value="{{ val }}" {% if current_status == val %}selected{% endif %}>{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-4">
-                <button type="submit" class="btn btn-sm btn-dark w-100">Apply Filters</button>
-                <a href="{% url 'hrms:application_list' %}" class="btn btn-link btn-sm w-100 text-decoration-none">Clear</a>
-            </div>
-        </form>
-    </div>
-</div>
+<!-- Pagination -->
+{% if is_paginated %}
+<nav class="mt-3">
+  <ul class="pagination pagination-sm justify-content-end">
+    {% if page_obj.has_previous %}
+    <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if current_job_id %}&job={{ current_job_id }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}">‹ Prev</a></li>
+    {% endif %}
+    <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span></li>
+    {% if page_obj.has_next %}
+    <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% if current_job_id %}&job={{ current_job_id }}{% endif %}{% if current_status %}&status={{ current_status }}{% endif %}">Next ›</a></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
 
-<!-- TABLE -->
-<div class="card">
-    <div class="table-responsive">
-<!-- Table inside your Applications List template -->
-        <table class="table align-middle">
-            <thead>
-                <tr>
-                    <th>Candidate</th>
-                    <th>Job Title</th>
-                    <th>Applied On</th>
-                    <th>Status (Quick Change)</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for app in applications %}
-                <tr>
-                    <!-- 1. Candidate Name linked to Detail Page -->
-                    <td>
-                        <a href="{% url 'hrms:application_detail' app.pk %}" class="fw-bold text-decoration-none">
-                            {{ app.candidate.first_name }} {{ app.candidate.last_name }}
-                        </a>
-                    </td>
+{% endblock %}
 
-                    <td>{{ app.job_posting.title }}</td>
-                    <td>{{ app.applied_at|date:"F d, Y" }}</td>
-
-                    <!-- 2. Status Dropdown (Change on the fly) -->
-<!-- Dashboard Template: Status (Quick Change) Column -->
-                    <td>
-                        <form method="post" action="{% url 'hrms:application_status' app.pk %}" class="d-inline">
-                            {% csrf_token %}
-                            <!-- We keep the name as 'status' -->
-                            <select name="status" class="form-select form-select-sm w-auto d-inline shadow-sm"
-                                    onchange="this.form.submit()"
-                                    style="border-color: #dee2e6;">
-                                {% for val, label in app.Status.choices %}
-                                    <option value="{{ val }}" {% if app.status == val %}selected{% endif %}>
-                                        {{ label }}
-                                    </option>
-                                {% endfor %}
-                            </select>
-
-                            <!-- FIX: This hidden input tells your view that this is a valid update action -->
-                            <input type="hidden" name="action" value="update_status">
-                        </form>
-                    </td>
-                    <!-- 3. Action Buttons connected to Interview Form -->
-                    <!-- Dashboard Template: Actions Column -->
-                    <td class="text-nowrap">
-                        <div class="btn-group">
-                            <!-- Direct link to detail page -->
-                            <a href="{% url 'hrms:application_detail' app.pk %}" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-eye"></i> View
-                            </a>
-
-                            <!-- Direct link to Interview Form -->
-                            {% if app.status != 'rejected' and app.status != 'hired' %}
-                                <a href="{% url 'hrms:interview_add' app.pk %}" class="btn btn-sm btn-outline-secondary">
-                                    <i class="bi bi-calendar-plus"></i> + Schedule
-                                </a>
-                            {% endif %}
-                        </div>
-
-                        <!-- Optional: Show scheduled info right here if it exists -->
-                        {% with last_iv=app.interviews.last %}
-                            {% if last_iv %}
-                                <div class="mt-1">
-                                    <span class="badge text-bg-info" style="font-size: 10px;">
-                                        Next: {{ last_iv.scheduled_on|date:"d M" }}
-                                    </span>
-                                </div>
-                            {% endif %}
-                        {% endwith %}
-                    </td>
-
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+{% block extra_js %}
+<script>
+document.getElementById('selectAll')?.addEventListener('change', function() {
+  document.querySelectorAll('.app-check').forEach(cb => cb.checked = this.checked);
+});
+</script>
 {% endblock %}

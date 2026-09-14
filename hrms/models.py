@@ -1863,7 +1863,90 @@ class PunchRegularizationRequest(TimeStampedModel):
 
 
 # ---------------------------------------------------------------------------
-# 13. PAYSLIP DOWNLOAD AUDIT (Module E)
+# 13. COMP OFF TRACKING (Module F)
+# ---------------------------------------------------------------------------
+class CompOffRecord(TimeStampedModel):
+    """
+    Tracks every Comp Off credit earned when an employee punches in on a
+    Sunday or a Company Holiday. One row per (employee, worked_date).
+
+    Lifecycle:  AVAILABLE → AVAILED  (when CO leave is approved)
+                AVAILABLE → EXPIRED  (if HR runs an expiry sweep)
+    """
+
+    class Status(models.TextChoices):
+        AVAILABLE = 'available', 'Available'
+        AVAILED   = 'availed',   'Availed'
+        EXPIRED   = 'expired',   'Expired'
+
+    employee = models.ForeignKey(
+        'Employee',
+        on_delete=models.CASCADE,
+        related_name='comp_off_records',
+    )
+    attendance_record = models.ForeignKey(
+        'AttendanceRecord',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='comp_off_source',
+        help_text='The attendance record that triggered this credit',
+    )
+    worked_date = models.DateField(
+        help_text='The Sunday or Holiday on which the employee worked',
+    )
+    holiday_name = models.CharField(
+        max_length=150,
+        blank=True,
+        default='Sunday / Weekly Off',
+        help_text='Name of the holiday or "Sunday / Weekly Off"',
+    )
+    hours_worked = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Total hours logged on the off-day (updated at checkout)',
+    )
+    credits_earned = models.DecimalField(
+        max_digits=3,
+        decimal_places=1,
+        default=Decimal('1.0'),
+        help_text='1.0 for a full day, 0.5 for a half day worked',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.AVAILABLE,
+    )
+    availed_on_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='The date the employee took this comp off as leave',
+    )
+    availed_leave_app = models.ForeignKey(
+        'LeaveApplication',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='availed_comp_off',
+        help_text='The approved LeaveApplication that consumed this credit',
+    )
+
+    class Meta:
+        ordering = ['-worked_date']
+        unique_together = ('employee', 'worked_date')
+        verbose_name = 'Comp Off Record'
+        verbose_name_plural = 'Comp Off Records'
+
+    def __str__(self):
+        return (
+            f"{self.employee.full_name} — Comp Off for "
+            f"{self.worked_date} ({self.get_status_display()})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 14. PAYSLIP DOWNLOAD AUDIT (Module E)
 # ---------------------------------------------------------------------------
 class PayslipDownloadLog(TimeStampedModel):
     """Silent audit log for payslip downloads — notifies HR/Superadmin."""

@@ -118,3 +118,16 @@ admin.site.register(m.PayslipDownloadLog)
 admin.site.register(m.AssetCategory)
 admin.site.register(m.Asset)
 admin.site.register(m.PerformanceReview)
+
+
+@admin.register(m.CompOffRecord)
+class CompOffRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        'employee', 'worked_date', 'holiday_name',
+        'hours_worked', 'credits_earned', 'status',
+        'availed_on_date',
+    )
+    list_filter  = ('status', 'worked_date')
+    search_fields = ('employee__first_name', 'employee__last_name', 'employee__employee_code')
+    readonly_fields = ('attendance_record', 'availed_leave_app', 'created_at', 'updated_at')
+    ordering = ('-worked_date',)

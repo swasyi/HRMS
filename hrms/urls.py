@@ -1,8 +1,10 @@
 from django.urls import path
 
 from . import views
+from .api_views import ApplicationStageMoveAPIView, BulkResumeUploadAPIView
 
 app_name = 'hrms'
+
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
@@ -41,6 +43,49 @@ urlpatterns = [
     path('me/documents/', views.MyDocumentsView.as_view(), name='my_documents'),
     path('me/documents/upload/', views.EmployeeDocumentBulkUploadView.as_view(), name='my_documents_bulk_upload'),
 
+    # # --- Hiring (HR/Admin) ---
+    # path('hiring/jobs/', views.JobPostingListView.as_view(), name='jobposting_list'),
+    # path('hiring/jobs/add/', views.JobPostingCreateView.as_view(), name='jobposting_add'),
+    # path('hiring/jobs/<int:pk>/edit/', views.JobPostingUpdateView.as_view(), name='jobposting_edit'),
+    # path('hiring/jobs/<int:pk>/delete/', views.JobPostingDeleteView.as_view(), name='jobposting_delete'),
+    #
+    # path('hiring/candidates/', views.CandidateListView.as_view(), name='candidate_list'),
+    # path('hiring/candidates/add/', views.CandidateCreateView.as_view(), name='candidate_add'),
+    # path('hiring/candidates/<int:pk>/', views.CandidateDetailView.as_view(), name='candidate_detail'),
+    #
+    # path('hiring/applications/', views.ApplicationListView.as_view(), name='application_list'),
+    # path('hiring/applications/add/', views.ApplicationCreateView.as_view(), name='application_add'),
+    # path('hiring/applications/<int:pk>/', views.ApplicationDetailView.as_view(), name='application_detail'),
+    # path('hiring/applications/<int:pk>/status/', views.ApplicationStatusView.as_view(), name='application_status'),
+    # path('hiring/applications/<int:pk>/unlock/', views.UnlockApplicationView.as_view(), name='application_unlock'),
+    # path('hiring/applications/<int:pk>/offer/', views.OfferLetterCreateView.as_view(), name='offer_create'),
+    #
+    # path('hiring/interviews/', views.InterviewListView.as_view(), name='interview_list'),
+    # path('hiring/interviews/mine/', views.MyInterviewsView.as_view(), name='my_interviews'),
+    # path('hiring/applications/<int:pk>/interviews/add/', views.InterviewCreateView.as_view(), name='interview_add'),
+    # path('hiring/interviews/<int:pk>/edit/', views.InterviewUpdateView.as_view(), name='interview_edit'),
+    # path('hiring/interviews/<int:pk>/feedback/', views.InterviewFeedbackView.as_view(), name='interview_feedback'),
+    #
+    # path('hiring/offers/<int:pk>/<str:action>/', views.OfferLetterActionView.as_view(), name='offer_action'),
+    # path('hiring/offers/<int:pk>/convert/', views.ConvertToEmployeeView.as_view(), name='offer_convert'),
+    #
+    # # Recruitment stages (reusable stage library)
+    # path('hiring/stages/', views.RecruitmentStageListView.as_view(), name='recruitmentstage_list'),
+    # path('hiring/stages/add/', views.RecruitmentStageCreateView.as_view(), name='recruitmentstage_add'),
+    # path('hiring/stages/<int:pk>/edit/', views.RecruitmentStageUpdateView.as_view(), name='recruitmentstage_edit'),
+    # path('hiring/stages/<int:pk>/delete/', views.RecruitmentStageDeleteView.as_view(), name='recruitmentstage_delete'),
+    #
+    # # Per-job pipeline management
+    # path('hiring/jobs/<int:pk>/pipeline/', views.JobPipelineManageView.as_view(), name='jobpipeline_manage'),
+    #
+    # # Offer templates
+    # path('hiring/offer-templates/', views.OfferTemplateListView.as_view(), name='offertemplate_list'),
+    # path('hiring/offer-templates/add/', views.OfferTemplateCreateView.as_view(), name='offertemplate_add'),
+    # path('hiring/offer-templates/<int:pk>/edit/', views.OfferTemplateUpdateView.as_view(), name='offertemplate_edit'),
+    # path('hiring/offer-templates/<int:pk>/delete/', views.OfferTemplateDeleteView.as_view(), name='offertemplate_delete'),
+    # path('hiring/offer-templates/<int:template_pk>/preview/<int:application_pk>/',
+    #      views.OfferTemplatePreviewView.as_view(), name='offertemplate_preview'),
+
     # --- Hiring (HR/Admin) ---
     path('hiring/jobs/', views.JobPostingListView.as_view(), name='jobposting_list'),
     path('hiring/jobs/add/', views.JobPostingCreateView.as_view(), name='jobposting_add'),
@@ -75,12 +120,17 @@ urlpatterns = [
 
     # Per-job pipeline management
     path('hiring/jobs/<int:pk>/pipeline/', views.JobPipelineManageView.as_view(), name='jobpipeline_manage'),
+    path('hiring/jobs/<int:pk>/kanban/', views.JobKanbanView.as_view(), name='job_kanban'),
+
+    # Application notes (HTMX)
+    path('hiring/applications/<int:pk>/notes/add/', views.ApplicationNoteCreateView.as_view(), name='application_note_add'),
 
     # Offer templates
     path('hiring/offer-templates/', views.OfferTemplateListView.as_view(), name='offertemplate_list'),
     path('hiring/offer-templates/add/', views.OfferTemplateCreateView.as_view(), name='offertemplate_add'),
     path('hiring/offer-templates/<int:pk>/edit/', views.OfferTemplateUpdateView.as_view(), name='offertemplate_edit'),
-    path('hiring/offer-templates/<int:pk>/delete/', views.OfferTemplateDeleteView.as_view(), name='offertemplate_delete'),
+    path('hiring/offer-templates/<int:pk>/delete/', views.OfferTemplateDeleteView.as_view(),
+         name='offertemplate_delete'),
     path('hiring/offer-templates/<int:template_pk>/preview/<int:application_pk>/',
          views.OfferTemplatePreviewView.as_view(), name='offertemplate_preview'),
 
@@ -220,4 +270,29 @@ urlpatterns = [
 
 # Bulk Salary Bank Payout Sheet (Finance / HR only)
     path('payroll/bulk-payout/', views.BulkPaymentDisbursementView.as_view(), name='bulk_payment_payout'),
+
+    # 2. Comp Off History (Self-Service)
+    path(
+        'leave/comp-off/my-history/',
+        views.CompOffHistoryView.as_view(),
+        name='comp_off_history'
+    ),
+
+    # 3. Comp Off Management (HR Overview & Filtering)
+    path(
+        'leave/comp-off/hr-overview/',
+        views.CompOffHRView.as_view(),
+        name='comp_off_hr'
+    ),
+
+   # --- Hiring automation endpoints ---
+   path('api/applications/<int:pk>/move-stage/', ApplicationStageMoveAPIView.as_view(), name='application_move_stage'),
+   path('api/jobs/<int:job_id>/bulk-upload-resumes/', BulkResumeUploadAPIView.as_view(), name='bulk_upload_resumes'),
+   path('hiring/applications/bulk-download-resumes/', views.bulk_download_resumes, name='bulk_download_resumes')
+
+
+
+
+
+
 ]

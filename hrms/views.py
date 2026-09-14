@@ -1,11 +1,20 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+import io
+import json
+import os
+import zipfile
+
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponse
+from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView, UpdateView, ListView, DetailView, FormView, View, CreateView, DeleteView
 from django.forms import modelformset_factory
 
+from django.core.files.storage import default_storage
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy, reverse
 from django.utils import timezone
@@ -17,6 +26,70 @@ from . import payroll_logic as pay
 from . import attendance_logic as att_logic
 from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE
 from .emails import send_leave_notification_email
+
+
+@login_required
+@require_POST
+def bulk_download_resumes(request):
+    """Download selected candidate resumes as a ZIP archive."""
+    if not is_hr_or_above(request.user):
+        raise PermissionDenied('HR or admin access is required to download resumes.')
+
+    try:
+        payload = json.loads(request.body.decode('utf-8')) if request.body else {}
+    except (TypeError, ValueError):
+        payload = {}
+
+    def parse_ids(raw_value):
+        if raw_value in (None, '', [], {}):
+            return []
+        if isinstance(raw_value, str):
+            values = [item.strip() for item in raw_value.split(',') if item.strip()]
+            return [int(value) for value in values]
+        if isinstance(raw_value, (list, tuple)):
+            return [int(item) for item in raw_value if str(item).strip()]
+        return [int(raw_value)]
+
+    application_ids = parse_ids(payload.get('application_ids') or request.POST.getlist('application_ids'))
+    candidate_ids = parse_ids(payload.get('candidate_ids') or request.POST.getlist('candidate_ids'))
+
+    if application_ids:
+        applications = m.Application.objects.filter(pk__in=application_ids).select_related('candidate')
+        candidate_ids.extend(app.candidate_id for app in applications if app.candidate_id)
+
+    candidate_ids = list(dict.fromkeys(filter(None, candidate_ids)))
+    if not candidate_ids:
+        return HttpResponse('No candidates selected for resume download.', status=400)
+
+    candidates = m.Candidate.objects.filter(pk__in=candidate_ids).exclude(resume='').exclude(resume__isnull=True)
+    resume_paths = []
+    seen = set()
+
+    for candidate in candidates:
+        resume_name = candidate.resume.name
+        if not resume_name or not candidate.resume.storage.exists(resume_name):
+            continue
+        if resume_name not in seen:
+            seen.add(resume_name)
+            resume_paths.append(resume_name)
+
+    if not resume_paths:
+        return HttpResponse('No valid resume files were found for the selected candidates.', status=400)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for resume_path in resume_paths:
+            try:
+                with default_storage.open(resume_path, 'rb') as file_handle:
+                    content = file_handle.read()
+            except Exception:
+                continue
+            archive.writestr(os.path.basename(resume_path), content)
+
+    zip_buffer.seek(0)
+    response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
+    response['Content-Disposition'] = 'attachment; filename="resumes.zip"'
+    return response
 
 # mixins.py or views.py
 class CompanyFilterMixin:
@@ -4141,8 +4214,7 @@ class ManagerDashboardView(LoginRequiredMixin, SidebarContextMixin, TemplateView
         ctx = super().get_context_data(**kwargs)
         user = self.request.user
         emp = get_employee_profile(user)
-        user_is_hr = is_hr_or_above(user)
-
+        user_is_hr = is_hr_or_above(user) or user.is_superuser
         # Get subordinates
         if user_is_hr:
             subordinates = m.Employee.objects.filter(status='active').select_related('department', 'designation', 'company')
@@ -4215,7 +4287,7 @@ class ManagerLeaveApproveView(LoginRequiredMixin, View):
     def post(self, request, pk):
         application = get_object_or_404(m.LeaveApplication, pk=pk)
         emp = get_employee_profile(request.user)
-        is_hr = is_hr_or_above(request.user)
+        is_hr = is_hr_or_above(request.user) or request.user.is_superuser
 
         # Check authorization
         if not is_hr and (not emp or application.employee.reporting_manager != emp):
@@ -4253,6 +4325,63 @@ class ManagerLeaveRejectView(LoginRequiredMixin, View):
             messages.error(request, str(e))
         return redirect(request.META.get('HTTP_REFERER', 'hrms:my_leave'))
 
+class ManagerLeaveApproveView(LoginRequiredMixin, View):
+    """Manager/Admin approves subordinate leave."""
+    def post(self, request, pk):
+        application = get_object_or_404(m.LeaveApplication, pk=pk)
+        user = request.user
+        emp = get_employee_profile(user)
+        is_hr = is_hr_or_above(user) or user.is_superuser
+
+        # Check authorization
+        if not is_hr and (not emp or application.employee.reporting_manager != emp):
+            messages.error(request, "You are not authorized to approve this leave request.")
+            return redirect(request.META.get('HTTP_REFERER', 'hrms:manager_dashboard'))
+
+        try:
+            # If the application is already pending HR, or a superuser/HR is giving final approval:
+            if application.status == m.LeaveApplication.Status.PENDING_HR and is_hr:
+                # Resolve the general approval function in leave_logic
+                approve_fn = getattr(lv, 'approve_leave', getattr(lv, 'hr_approve', None))
+                if approve_fn:
+                    approve_fn(application, approver_user=user)
+                else:
+                    # Fallback directly to manager approval if no dedicated HR function exists
+                    lv.manager_approve_leave(application, approver_user=user)
+
+                send_leave_notification_email(application, event_type='HR_APPROVED')
+                messages.success(request, f'Leave for {application.employee.full_name} fully approved.')
+            else:
+                lv.manager_approve_leave(application, approver_user=user)
+                send_leave_notification_email(application, event_type='MANAGER_APPROVED')
+                messages.success(request, f'Leave for {application.employee.full_name} approved and escalated to HR.')
+
+        except lv.LeaveError as e:
+            messages.error(request, str(e))
+
+        return redirect(request.META.get('HTTP_REFERER', 'hrms:manager_dashboard'))
+
+class ManagerLeaveRejectView(LoginRequiredMixin, View):
+    """Manager/Admin rejects subordinate leave with reason."""
+    def post(self, request, pk):
+        application = get_object_or_404(m.LeaveApplication, pk=pk)
+        user = request.user
+        emp = get_employee_profile(user)
+        is_hr = is_hr_or_above(user) or user.is_superuser
+
+        if not is_hr and (not emp or application.employee.reporting_manager != emp):
+            messages.error(request, "You are not authorized to reject this leave request.")
+            return redirect(request.META.get('HTTP_REFERER', 'hrms:manager_dashboard'))
+
+        reason = request.POST.get('rejection_reason', '').strip()
+        try:
+            lv.reject_leave(application, approver_user=user, reason=reason)
+            send_leave_notification_email(application, event_type='REJECTED')
+            messages.success(request, f'Leave for {application.employee.full_name} rejected.')
+        except lv.LeaveError as e:
+            messages.error(request, str(e))
+
+        return redirect(request.META.get('HTTP_REFERER', 'hrms:manager_dashboard'))
 
 class PenaltyListView(LoginRequiredMixin, SidebarContextMixin, ListView):
     """Penalties page for tracking late arrival penalties and automatic leave deductions."""
@@ -6112,6 +6241,7 @@ class JobKanbanView(HRRequiredMixin, SidebarContextMixin, DetailView):
         return ctx
 
 
+
 class ApplicationDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
     """
     The 360-Degree Candidate View.
@@ -6168,25 +6298,49 @@ class SubmitInterviewFeedbackView(LoginRequiredMixin, SidebarContextMixin, Creat
         return reverse('hrms:my_interviews')
 
 
-class FinalizeHiringActionView(HRRequiredMixin, View):
-    """
-    The 'Trigger' view to execute Candidate-to-Employee conversion.
-    """
+# class FinalizeHiringActionView(HRRequiredMixin, View):
+#     """
+#     The 'Trigger' view to execute Candidate-to-Employee conversion.
+#     """
+#
+#     def post(self, request, pk):
+#         application = get_object_or_404(m.Application, pk=pk)
+#
+#         if application.is_locked:
+#             messages.error(request, "This application is already locked.")
+#             return redirect('hrms:application_detail', pk=pk)
+#
+#         try:
+#             employee = HiringService.convert_to_employee(application, request.user)
+#             messages.success(request, f"Success! {employee.full_name} is now an active employee.")
+#             return redirect('hrms:employee_detail', pk=employee.pk)
+#         except Exception as e:
+#             messages.error(request, f"Conversion failed: {str(e)}")
+#             return redirect('hrms:application_detail', pk=pk)
 
+# ===========================================================================
+# APPLICATION NOTES (HTMX)
+# ===========================================================================
+class ApplicationNoteCreateView(LoginRequiredMixin, View):
+    """HTMX-aware endpoint: POST a note on an application.
+    Returns a rendered HTML fragment when called via HTMX,
+    or redirects to application_detail for full-page fallback.
+    """
     def post(self, request, pk):
         application = get_object_or_404(m.Application, pk=pk)
+        message = request.POST.get('message', '').strip()
+        is_private = request.POST.get('is_private') == 'true'
+        if message:
+            note = m.ApplicationNote.objects.create(
+                application=application,
+                author=request.user,
+                message=message,
+                is_private=is_private,
+            )
+            if request.headers.get('HX-Request'):
+                return render(request, 'hrms/hiring/_note_fragment.html', {'note': note})
+        return redirect('hrms:application_detail', pk=pk)
 
-        if application.is_locked:
-            messages.error(request, "This application is already locked.")
-            return redirect('hrms:application_detail', pk=pk)
-
-        try:
-            employee = HiringService.convert_to_employee(application, request.user)
-            messages.success(request, f"Success! {employee.full_name} is now an active employee.")
-            return redirect('hrms:employee_detail', pk=employee.pk)
-        except Exception as e:
-            messages.error(request, f"Conversion failed: {str(e)}")
-            return redirect('hrms:application_detail', pk=pk)
 
 # ===========================================================================
 # ASSET MANAGEMENT
@@ -7657,6 +7811,16 @@ class MobilePunchInView(LoginRequiredMixin, View):
         else:
             action_type = "Punch In"
 
+        # ── Comp Off Credit (Punch In on Sunday / Holiday only) ───────────
+        if action_type == "Punch In":
+            try:
+                from .comp_off_logic import is_off_day, credit_comp_off
+                is_off, _reason = is_off_day(employee, today)
+                if is_off:
+                    credit_comp_off(employee, attendance)
+            except Exception:
+                pass  # Never block the punch on a CO error
+
         # ──────────────────────────────────────────────────────
         # ASYNC VERIFICATION: Offload to background thread
         # ──────────────────────────────────────────────────────
@@ -7756,6 +7920,16 @@ class KioskPunchInView(View):
                 action_type = "Punch Out"
         else:
             action_type = "Punch In"
+
+        # ── Comp Off Credit (Punch In on Sunday / Holiday only) ───────────
+        if action_type == "Punch In":
+            try:
+                from .comp_off_logic import is_off_day, credit_comp_off
+                is_off, _reason = is_off_day(matched_employee, today)
+                if is_off:
+                    credit_comp_off(matched_employee, attendance)
+            except Exception:
+                pass  # Never block the punch on a CO error
 
         # Optional: background re-verification for audit trail
         if photo_bytes:
@@ -8066,3 +8240,131 @@ class BulkPaymentDisbursementView(FinanceRequiredMixin, SidebarContextMixin, Vie
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
         return response
+
+
+# ---------------------------------------------------------------------------
+# COMP OFF HISTORY VIEWS (Module F)
+# ---------------------------------------------------------------------------
+
+class CompOffHistoryView(LoginRequiredMixin, SidebarContextMixin, ListView):
+    """
+    Employee self-service view: shows the logged-in employee's own
+    CompOffRecord history — earned dates, credits, and redemption status.
+    """
+    template_name = 'hrms/leave/comp_off_history.html'
+    context_object_name = 'comp_off_records'
+    paginate_by = 20
+    active_group, active_item = 'leave', 'comp_off'
+
+    def get_queryset(self):
+        try:
+            employee = self.request.user.employee_profile
+        except AttributeError:
+            return m.CompOffRecord.objects.none()
+        return (
+            m.CompOffRecord.objects
+            .filter(employee=employee)
+            .select_related('attendance_record', 'availed_leave_app',
+                            'availed_leave_app__leave_type',
+                            'availed_leave_app__approved_by')
+            .order_by('-worked_date')
+        )
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        try:
+            employee = self.request.user.employee_profile
+            all_records = m.CompOffRecord.objects.filter(employee=employee)
+            from django.db.models import Sum
+            totals = all_records.aggregate(
+                total_earned=Sum('credits_earned'),
+                availed_credits=Sum(
+                    'credits_earned',
+                    filter=Q(status=m.CompOffRecord.Status.AVAILED)
+                ),
+            )
+            live = m.EmployeeLeaveBalanceLive.objects.filter(e_name=employee).first()
+            ctx['total_earned']    = totals['total_earned'] or 0
+            ctx['availed_credits'] = totals['availed_credits'] or 0
+            ctx['comp_off_balance'] = getattr(live, 'comp_off', 0) if live else 0
+        except AttributeError:
+            ctx['total_earned'] = ctx['availed_credits'] = ctx['comp_off_balance'] = 0
+        return ctx
+
+
+class CompOffHRView(HRRequiredMixin, SidebarContextMixin, ListView):
+    """
+    HR view: all employees' CompOffRecord rows with filters for
+    company, employee, status. Includes top-line metric counters.
+    """
+    template_name = 'hrms/leave/comp_off_hr.html'
+    context_object_name = 'comp_off_records'
+    paginate_by = 30
+    active_group, active_item = 'leave', 'comp_off'
+
+    def get_queryset(self):
+        qs = (
+            m.CompOffRecord.objects
+            .select_related(
+                'employee', 'employee__department',
+                'attendance_record',
+                'availed_leave_app', 'availed_leave_app__approved_by'
+            )
+            .order_by('-worked_date')
+        )
+        status = self.request.GET.get('status')
+        if status:
+            qs = qs.filter(status=status)
+        emp_id = self.request.GET.get('employee')
+        if emp_id:
+            qs = qs.filter(employee_id=emp_id)
+        # Company scoping: only filter if the user is locked to a specific company
+        # Superadmin (is_superuser) always sees all companies
+        if not self.request.user.is_superuser:
+            active_company_id = self.request.session.get('active_company_id')
+            if active_company_id:
+                qs = qs.filter(employee__company_id=active_company_id)
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        from django.db.models import Sum, Count
+
+        # Global stats (unfiltered for the counters at top)
+        all_qs = m.CompOffRecord.objects.all()
+        if not self.request.user.is_superuser:
+            active_company_id = self.request.session.get('active_company_id')
+            if active_company_id:
+                all_qs = all_qs.filter(employee__company_id=active_company_id)
+
+        agg = all_qs.aggregate(
+            total_earned=Sum('credits_earned'),
+            total_availed=Sum(
+                'credits_earned',
+                filter=Q(status=m.CompOffRecord.Status.AVAILED)
+            ),
+            total_available=Sum(
+                'credits_earned',
+                filter=Q(status=m.CompOffRecord.Status.AVAILABLE)
+            ),
+            total_records=Count('id'),
+        )
+        ctx['total_earned']    = agg['total_earned'] or 0
+        ctx['total_availed']   = agg['total_availed'] or 0
+        ctx['total_available'] = agg['total_available'] or 0
+        ctx['total_records']   = agg['total_records'] or 0
+
+        ctx['status_choices']     = m.CompOffRecord.Status.choices
+        ctx['selected_status']    = self.request.GET.get('status', '')
+        ctx['selected_employee']  = self.request.GET.get('employee', '')
+
+        # Employee list for filter dropdown
+        if active_company_id:
+            ctx['employees'] = m.Employee.objects.filter(
+                company_id=active_company_id, status='active'
+            ).order_by('first_name')
+        else:
+            ctx['employees'] = m.Employee.objects.filter(
+                status='active'
+            ).order_by('first_name')
+        return ctx
