@@ -5328,15 +5328,15 @@ class PayrollRunDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
                 'employee__department',
                 'employee__designation',
                 'employee__company',
-                'employee__bank_detail'
+                'employee__bank_detail',
             )
+            .prefetch_related('employee__salaries')
             .order_by('employee__employee_code')
         )
 
-        # 2. Extract & Apply Department / Employee Search Filters
-        dept_id = self.request.GET.get('department')
+        # 2. Apply Department / Search Filters
+        dept_id    = self.request.GET.get('department')
         emp_search = self.request.GET.get('q', '').strip()
-
         if dept_id:
             payslips = payslips.filter(employee__department_id=dept_id)
         if emp_search:
@@ -5346,32 +5346,74 @@ class PayrollRunDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
                 Q(employee__employee_code__icontains=emp_search)
             )
 
-        # 3. Dynamic Aggregated Totals based on Active Filter Selection
+        # 3. Aggregated Totals
         totals = payslips.aggregate(
             total_net=Sum('net_pay'),
             total_earnings=Sum('total_earnings'),
             total_deductions=Sum('total_deductions'),
             total_penalties=Sum('penalty_deduction'),
             total_paid_days=Sum('paid_days'),
-            # Calculate the theoretical total liability (Full Salary of everyone)
-
-            total_liability = Sum(F('employee__salaries__ctc_annual') / 12)
-
         )
 
-        ctx['payslips'] = payslips
-        ctx['total_net'] = round(totals['total_net'] or 0, 2)
-        ctx['total_earnings'] = round(totals['total_earnings'] or 0, 2)
-        ctx['total_deductions'] = round(totals['total_deductions'] or 0, 2)
-        ctx['total_penalties'] = round(totals['total_penalties'] or 0, 2)
-        ctx['total_paid_days'] = round(totals['total_paid_days'] or 0, 2)
-        ctx['total_liability'] = round(totals['total_liability'] or 0, 2)
-        ctx['total_employees_count'] = payslips.count()
+        # 4. Pre-build AttendancePenalty lookup for grace half-day count
+        #    (one query for the whole month instead of N queries in the template)
+        from .models import AttendancePenalty
+        import calendar as cal_mod
+        month_days = cal_mod.monthrange(payroll_run.year, payroll_run.month)[1]
+        from datetime import date as dt_date
+        period_start = dt_date(payroll_run.year, payroll_run.month, 1)
+        period_end   = dt_date(payroll_run.year, payroll_run.month, month_days)
 
-        # 4. Filter Dropdown Choices scoped to this Company
-        ctx['departments'] = m.Department.objects.filter(company=payroll_run.company).order_by('name')
+        # Count grace-triggered half-day penalties per employee
+        grace_counts = {}
+        try:
+            penalties = (
+                AttendancePenalty.objects
+                .filter(
+                    attendance_record__employee__company=payroll_run.company,
+                    attendance_record__attendance_date__range=[period_start, period_end],
+                    deduction_days=Decimal('0.5'),  # Grace-exhausted = 0.5 day deduction
+                    status=AttendancePenalty.DeductionStatus.APPLIED,
+                )
+                .values('attendance_record__employee_id')
+                .annotate(cnt=Count('id'))
+            )
+            grace_counts = {row['attendance_record__employee_id']: row['cnt'] for row in penalties}
+        except Exception:
+            grace_counts = {}
+
+        # 5. Annotate each payslip with computed display fields
+        from decimal import Decimal
+        enriched = []
+        for slip in payslips:
+            emp = slip.employee
+            sal = emp.salaries.all().filter(is_active=True).first() or emp.salaries.all().first()
+
+            # Earned Base: what the employee actually worked (attendance component only)
+            full  = Decimal(str(slip.full_days or 0))
+            half  = Decimal(str(slip.half_days or 0))
+            dw    = Decimal(str(slip.daily_wage or 0))
+            slip.earned_base = (dw * (full + half * Decimal('0.5'))).quantize(Decimal('0.01'))
+
+            # Grace half-day count for audit column
+            slip.grace_halfday_count = grace_counts.get(emp.pk, 0)
+
+            # Cache salary snapshot for PF/TDS display (avoids extra DB hit in template)
+            slip.sal_snap = sal
+            enriched.append(slip)
+
+        ctx['payslips']             = enriched
+        ctx['total_net']            = round(totals['total_net'] or 0, 2)
+        ctx['total_earnings']       = round(totals['total_earnings'] or 0, 2)
+        ctx['total_deductions']     = round(totals['total_deductions'] or 0, 2)
+        ctx['total_penalties']      = round(totals['total_penalties'] or 0, 2)
+        ctx['total_paid_days']      = round(totals['total_paid_days'] or 0, 2)
+        ctx['total_employees_count'] = len(enriched)
+
+        # Filter Dropdown
+        ctx['departments']  = m.Department.objects.filter(company=payroll_run.company).order_by('name')
         ctx['selected_dept'] = dept_id
-        ctx['search_query'] = emp_search
+        ctx['search_query']  = emp_search
         return ctx
 
 
@@ -5379,6 +5421,7 @@ class PayrollExportCSVView(HRRequiredMixin, View):
     """Exports the complete, filtered Payroll & Bank Disbursement CSV."""
 
     def get(self, request, pk):
+        from decimal import Decimal
         payroll_run = get_object_or_404(m.PayrollRun, pk=pk)
         payslips = (
             payroll_run.payslips
@@ -5386,13 +5429,14 @@ class PayrollExportCSVView(HRRequiredMixin, View):
                 'employee',
                 'employee__department',
                 'employee__designation',
-                'employee__bank_detail'
+                'employee__bank_detail',
             )
+            .prefetch_related('employee__salaries')
             .order_by('employee__employee_code')
         )
 
-        # Apply same filters to CSV export
-        dept_id = request.GET.get('department')
+        # Apply same filters as the register view
+        dept_id    = request.GET.get('department')
         emp_search = request.GET.get('q', '').strip()
         if dept_id:
             payslips = payslips.filter(employee__department_id=dept_id)
@@ -5403,40 +5447,87 @@ class PayrollExportCSVView(HRRequiredMixin, View):
                 Q(employee__employee_code__icontains=emp_search)
             )
 
-        response = HttpResponse(content_type='text/csv')
-        filename = f"Payroll_{payroll_run.company.name}_{payroll_run.month}_{payroll_run.year}.csv".replace(' ', '_')
+        response = HttpResponse(content_type='text/csv; charset=utf-8-sig')
+        filename = (
+            f"Payroll_{payroll_run.company.name}_"
+            f"{payroll_run.month}_{payroll_run.year}.csv"
+        ).replace(' ', '_')
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
         writer = csv.writer(response)
+
+        # Header row — matches register column order exactly
         writer.writerow([
+            # Identity
             'EMP ID', 'EMPLOYEE NAME', 'DEPARTMENT', 'DESIGNATION',
-            'PAID DAYS', 'ABSENT DAYS', 'DAILY WAGE',
-            'FIXED MONTHLY CTC', 'EARNED BASIC & ALLOWANCES', 'EXTRAS & INCENTIVES',
-            'GROSS EARNED', 'TOTAL DEDUCTIONS', 'PENALTIES', 'NET PAYOUT',
-            'BANK NAME', 'ACCOUNT NUMBER', 'IFSC CODE'
+            # Attendance
+            'FULL DAYS', 'HALF DAYS', 'HD AFTER GRACE', 'OFF / HOL',
+            'PAID LEAVES', 'COMP OFF', 'PAID DAYS', 'UNPAID (LWP)',
+            # Earnings
+            'MONTHLY CTC', 'DAILY WAGE', 'EARNED BASE',
+            'EXTRAS / INCENTIVES', 'GROSS EARNED',
+            # Deductions
+            'PF (EMPLOYEE)', 'TDS', 'LOAN / EMI',
+            'PENALTY DEDUCTION', 'TOTAL DEDUCTIONS',
+            # Payout
+            'NET TAKE-HOME', 'PAYMENT STATUS',
+            # Bank
+            'BANK NAME', 'ACCOUNT NUMBER', 'IFSC CODE',
         ])
 
         for s in payslips:
-            emp = s.employee
+            emp  = s.employee
             bank = getattr(emp, 'bank_detail', None)
+            sal  = emp.salaries.all().filter(is_active=True).first() \
+                   or emp.salaries.all().first()
+
+            # Earned Base = daily_wage × (full_days + half_days × 0.5)
+            full = Decimal(str(s.full_days or 0))
+            half = Decimal(str(s.half_days or 0))
+            dw   = Decimal(str(s.daily_wage or 0))
+            earned_base = (dw * (full + half * Decimal('0.5'))).quantize(Decimal('0.01'))
+
+            # Monthly CTC from salary record
+            monthly_ctc = Decimal('0.00')
+            if sal and sal.ctc_annual:
+                monthly_ctc = (sal.ctc_annual / Decimal('12.0')).quantize(Decimal('0.01'))
+
+            pf  = sal.pf_employee if sal else 0
+            tds = sal.tds if sal else 0
+
             writer.writerow([
                 emp.employee_code,
                 emp.full_name,
-                emp.department.name if emp.department else '—',
-                emp.designation.title if emp.designation else '—',
-                s.paid_days,
-                s.absent_days,
-                s.daily_wage,
-                s.gross_salary,
-                s.total_earnings - s.extra_earning,
-                s.extra_earning,
-                s.total_earnings,
-                s.total_deductions,
-                s.penalty_deduction,
-                s.net_pay,
-                bank.bank_name if bank else '—',
-                bank.account_number if bank else '—',
-                bank.ifsc_code if bank else '—',
+                emp.department.name if emp.department else '',
+                emp.designation.title if emp.designation else '',
+                # Attendance
+                round(float(s.full_days), 1),
+                round(float(s.half_days), 1),
+                getattr(s, 'grace_halfday_count', 0),
+                round(float(s.off_days), 1),
+                round(float(s.paid_leave_days), 1),
+                round(float(s.comp_off_days), 1),
+                round(float(s.paid_days), 1),
+                round(float(s.absent_days), 1),
+                # Earnings
+                float(monthly_ctc),
+                float(s.daily_wage),
+                float(earned_base),
+                float(s.extra_earning),
+                float(s.total_earnings),
+                # Deductions
+                float(pf),
+                float(tds),
+                float(s.loan_deduction),
+                float(s.penalty_deduction),
+                float(s.total_deductions),
+                # Payout
+                float(s.net_pay),
+                s.get_payment_status_display(),
+                # Bank
+                bank.bank_name if bank else '',
+                bank.account_number if bank else '',
+                bank.ifsc_code if bank else '',
             ])
 
         return response
@@ -8332,6 +8423,7 @@ class CompOffHRView(HRRequiredMixin, SidebarContextMixin, ListView):
 
         # Global stats (unfiltered for the counters at top)
         all_qs = m.CompOffRecord.objects.all()
+        active_company_id = None  # default — superadmin sees all companies
         if not self.request.user.is_superuser:
             active_company_id = self.request.session.get('active_company_id')
             if active_company_id:
