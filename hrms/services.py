@@ -1,143 +1,12 @@
 """
 HRMS Service Layer — encapsulates business processes such as attendance penalties,
-leave deductions, and automated payroll adjustments.
-"""
-from decimal import Decimal
-import logging
-from django.db import transaction
-from django.utils import timezone
-from . import models as m
-
-logger = logging.getLogger(__name__)
-
-
-def process_late_arrival_penalty(record, reason=None):
-    """
-    Automated Late Arrival Penalty and Leave Deduction system.
-    
-    Triggered when an employee exceeds their monthly grace limit or arrives
-    beyond the grace window and is marked as 'Half Day' (HD).
-    
-    Business Rules:
-    1. Duplicate Prevention: Checks if a penalty already exists for (employee, penalty_date).
-    2. Fallback Deduction Hierarchy (for Full-Time):
-       - First Priority: Deduct 0.5 from CL (Casual Leave) if CL >= 0.5.
-       - Second Priority: Deduct 0.5 from EL (Earned Leave) if EL >= 0.5.
-       - Third Priority: If both CL and EL < 0.5, mark Deduction Source as 'LWP / Salary' (0.5 day wage deduction).
-    3. Intern Handling:
-       - Direct half-day stipend/salary calculation without deducting from standard paid leaves.
-    4. Records entry in AttendancePenalty with status, source, and audit timestamps.
-    """
-    if not record or not record.employee:
-        return None
-
-    employee = record.employee
-    penalty_date = record.attendance_date or timezone.localdate()
-
-    # 1. Prevent duplicate penalty logs for the same employee and date
-    existing_penalty = m.AttendancePenalty.objects.filter(
-        employee=employee,
-        penalty_date=penalty_date
-    ).first()
-    if existing_penalty:
-        return existing_penalty
-
-    late_mins = int(record.late_minutes or 0)
-    deduction_amount = Decimal('0.5')
-    employment_type = getattr(employee, 'employment_type', 'full_time') or 'full_time'
-
-    penalty_reason = reason or f"Grace limit exceeded - Late Arrival ({late_mins} mins late)"
-
-    with transaction.atomic():
-        # Case A: INTERN EMPLOYEES
-        if employment_type == 'intern':
-            salary_deduction = Decimal('0.00')
-            try:
-                emp_salary = m.EmployeeSalary.objects.filter(
-                    employee=employee, is_active=True
-                ).first()
-                if emp_salary and emp_salary.ctc_annual:
-                    daily_wage = (emp_salary.ctc_annual / Decimal('12')) / Decimal('30')
-                    salary_deduction = (daily_wage / Decimal('2')).quantize(Decimal('0.01'))
-            except Exception as e:
-                logger.warning(f"Failed calculating intern salary deduction for {employee}: {e}")
-
-            penalty = m.AttendancePenalty.objects.create(
-                employee=employee,
-                attendance_record=record,
-                penalty_date=penalty_date,
-                reason=penalty_reason,
-                late_minutes=late_mins,
-                deduction_days=deduction_amount,
-                deduction_source="LWP / Salary",
-                status=m.AttendancePenalty.DeductionStatus.INTERN_SALARY,
-                is_intern_penalty=True,
-                salary_deduction_amount=salary_deduction,
-                employment_type_snapshot=employment_type,
-            )
-            return penalty
-
-        # Case B: FULL-TIME EMPLOYEES (CL -> EL -> LWP Hierarchy)
-        live_balance, _ = m.EmployeeLeaveBalanceLive.objects.select_for_update().get_or_create(e_name=employee)
-        bank_balance = m.EmployeeLeaveBalance.objects.select_for_update().filter(e_name=employee).first()
-
-        cl_available = Decimal(str(live_balance.casual_leave or 0.0))
-        el_available = Decimal(str(live_balance.earned_leave or 0.0))
-
-        if cl_available >= deduction_amount:
-            # First priority: Deduct 0.5 from CL
-            new_cl = float(cl_available - deduction_amount)
-            live_balance.casual_leave = new_cl
-            live_balance.save(update_fields=['casual_leave'])
-
-            if bank_balance:
-                bank_balance.casual_leave = max(0.0, float(Decimal(str(bank_balance.casual_leave or 0.0)) - deduction_amount))
-                bank_balance.save(update_fields=['casual_leave'])
-
-            deduction_source = "CL"
-            penalty_status = m.AttendancePenalty.DeductionStatus.APPLIED
-
-        elif el_available >= deduction_amount:
-            # Second priority: Deduct 0.5 from EL
-            new_el = float(el_available - deduction_amount)
-            live_balance.earned_leave = new_el
-            live_balance.save(update_fields=['earned_leave'])
-
-            if bank_balance:
-                bank_balance.earned_leave = max(0.0, float(Decimal(str(bank_balance.earned_leave or 0.0)) - deduction_amount))
-                bank_balance.save(update_fields=['earned_leave'])
-
-            deduction_source = "EL"
-            penalty_status = m.AttendancePenalty.DeductionStatus.APPLIED
-
-        else:
-            # Third priority: Both exhausted -> Mark as LWP / Salary deduction
-            deduction_source = "LWP / Salary"
-            penalty_status = m.AttendancePenalty.DeductionStatus.LWP
-
-        penalty = m.AttendancePenalty.objects.create(
-            employee=employee,
-            attendance_record=record,
-            penalty_date=penalty_date,
-            reason=penalty_reason,
-            late_minutes=late_mins,
-            deduction_days=deduction_amount,
-            deduction_source=deduction_source,
-            status=penalty_status,
-            is_intern_penalty=False,
-            employment_type_snapshot=employment_type,
-        )
-        return penalty
-
-
-"""
-HRMS Service Layer — encapsulates business processes such as attendance penalties,
 leave deductions, automated payroll adjustments, and applicant resume parsing.
 """
 import io
 import os
 import re
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 import logging
 
@@ -156,6 +25,10 @@ from . import models as m
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Resume / PDF helpers
+# ---------------------------------------------------------------------------
 
 def _normalize_text(value):
     if value is None:
@@ -281,10 +154,31 @@ def _split_name(full_name):
 
 
 def create_candidate_from_resume(file_obj, job_posting_id):
-    """Parse a resume PDF, save a Candidate, and create an Application for the target job."""
+    """
+    Parse a resume PDF, deduplicate by email, and create/link a Candidate + Application.
+
+    Deduplication rules:
+      - If a Candidate with the parsed email exists → reuse it (no new Candidate).
+      - If that Candidate already has an Application for this job → skip creation.
+      - Otherwise → create a fresh Application pointing to the first pipeline stage.
+
+    Returns a dict::
+        {
+          "status": "created" | "duplicate_linked" | "duplicate_skipped",
+          "candidate_id": int,
+          "candidate_name": str,
+          "email": str,
+          "phone": str,
+          "experience_years": float,
+          "application_id": int | None,
+          "filename": str,
+        }
+    """
     job_posting = get_object_or_404(m.JobPosting, pk=job_posting_id)
     if file_obj is None:
         raise ValueError("No resume file was provided.")
+
+    filename = getattr(file_obj, "name", "resume.pdf")
 
     if hasattr(file_obj, "read"):
         original_position = None
@@ -311,12 +205,65 @@ def create_candidate_from_resume(file_obj, job_posting_id):
     experience_years = float(parsed.get("experience_years", 0) or 0)
 
     if not email:
-        email = f"{slugify(name) or 'candidate'}-{uuid.uuid4().hex[:8]}@example.invalid"
+        email = f"{slugify(name) or 'candidate'}-{uuid.uuid4().hex[:8]}@upload.invalid"
 
     first_name, last_name = _split_name(name)
-    default_stage = job_posting.pipeline_stages.select_related('stage').order_by('order').first()
+    default_pipeline = job_posting.pipeline_stages.select_related("stage").order_by("order").first()
+    first_stage = default_pipeline.stage if default_pipeline else None
 
     with transaction.atomic():
+        # ── Deduplication by email ──────────────────────────────────────────
+        existing_candidate = m.Candidate.objects.filter(email__iexact=email).first()
+
+        if existing_candidate:
+            candidate = existing_candidate
+            # Check if already applied to this specific job
+            existing_app = m.Application.objects.filter(
+                candidate=candidate,
+                job_posting=job_posting,
+            ).first()
+
+            if existing_app:
+                # Fully duplicate — skip
+                return {
+                    "status": "duplicate_skipped",
+                    "candidate_id": candidate.pk,
+                    "candidate_name": str(candidate),
+                    "email": candidate.email,
+                    "phone": candidate.phone,
+                    "experience_years": float(candidate.experience_years),
+                    "application_id": existing_app.pk,
+                    "filename": filename,
+                }
+
+            # Candidate exists, but hasn't applied to this job → link new Application
+            application = m.Application.objects.create(
+                candidate=candidate,
+                job_posting=job_posting,
+                status=m.Application.Status.APPLIED,
+                current_stage=first_stage,
+                progress_percentage=0,
+                source=m.Application.Source.CAREER_SITE,
+            )
+            m.RecruitmentAuditLog.objects.create(
+                application=application,
+                from_status="New",
+                to_status=m.Application.Status.APPLIED,
+                action="Bulk uploaded — linked to existing candidate profile",
+                note=f"Resume file: {filename}",
+            )
+            return {
+                "status": "duplicate_linked",
+                "candidate_id": candidate.pk,
+                "candidate_name": str(candidate),
+                "email": candidate.email,
+                "phone": candidate.phone,
+                "experience_years": float(candidate.experience_years),
+                "application_id": application.pk,
+                "filename": filename,
+            }
+
+        # ── Brand new candidate ─────────────────────────────────────────────
         candidate = m.Candidate.objects.create(
             first_name=first_name,
             last_name=last_name,
@@ -327,26 +274,108 @@ def create_candidate_from_resume(file_obj, job_posting_id):
 
         safe_name = f"{slugify(name) or 'candidate'}-{uuid.uuid4().hex[:8]}.pdf"
         candidate.resume.save(safe_name, ContentFile(file_bytes), save=False)
-        candidate.save(update_fields=['resume', 'updated_at'])
+        candidate.save(update_fields=["resume", "updated_at"])
 
         application = m.Application.objects.create(
             candidate=candidate,
             job_posting=job_posting,
             status=m.Application.Status.APPLIED,
-            current_stage=(default_stage.stage if default_stage else None),
+            current_stage=first_stage,
             progress_percentage=0,
             source=m.Application.Source.CAREER_SITE,
         )
+        m.RecruitmentAuditLog.objects.create(
+            application=application,
+            from_status="New",
+            to_status=m.Application.Status.APPLIED,
+            action="Bulk uploaded and parsed from PDF resume",
+            note=f"Resume file: {filename}",
+        )
 
     return {
+        "status": "created",
         "candidate_id": candidate.pk,
-        "application_id": application.pk,
-        "candidate_name": candidate.first_name + (" " + candidate.last_name if candidate.last_name else ""),
+        "candidate_name": str(candidate),
         "email": candidate.email,
         "phone": candidate.phone,
         "experience_years": experience_years,
+        "application_id": application.pk,
+        "filename": filename,
     }
 
+
+# ---------------------------------------------------------------------------
+# ICS Calendar File Generator
+# ---------------------------------------------------------------------------
+
+def generate_ics_file(interview):
+    """
+    Generate an RFC 5545 compliant .ics calendar file for an Interview.
+
+    Returns bytes suitable for attaching to an email or serving as a download.
+    """
+    application = interview.application
+    candidate = application.candidate
+    company = application.job_posting.company
+
+    dtstart = interview.scheduled_on
+    dtend = dtstart + timedelta(hours=1)
+
+    def fmt_dt(dt):
+        """Format datetime as iCal UTC timestamp."""
+        import pytz
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(pytz.utc)
+        return dt.strftime("%Y%m%dT%H%M%SZ")
+
+    uid = f"interview-{interview.pk}-{uuid.uuid4().hex}@oblu-hrms"
+    now_str = fmt_dt(timezone.now())
+    start_str = fmt_dt(dtstart)
+    end_str = fmt_dt(dtend)
+
+    round_label = interview.interview_round or "Interview"
+    summary = f"{round_label} — {candidate} @ {company.name}"
+    description = (
+        f"Candidate: {candidate}\\n"
+        f"Role: {application.job_posting.title}\\n"
+        f"Mode: {interview.get_mode_display()}\\n"
+        f"Contact: {candidate.email}"
+    )
+
+    ics_lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Oblu HRMS//Interview Scheduler//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:REQUEST",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{now_str}",
+        f"DTSTART:{start_str}",
+        f"DTEND:{end_str}",
+        f"SUMMARY:{summary}",
+        f"DESCRIPTION:{description}",
+        f"ORGANIZER;CN={company.name}:mailto:{company.email or 'noreply@oblu.com'}",
+        "STATUS:CONFIRMED",
+        "SEQUENCE:0",
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ]
+
+    # Add ATTENDEEs
+    if candidate.email:
+        ics_lines.insert(-2, f"ATTENDEE;ROLE=REQ-PARTICIPANT;CN={candidate}:mailto:{candidate.email}")
+
+    for interviewer in interview.interviewer.all():
+        if interviewer.email:
+            ics_lines.insert(-2, f"ATTENDEE;ROLE=REQ-PARTICIPANT;CN={interviewer}:mailto:{interviewer.email}")
+
+    return "\r\n".join(ics_lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Attendance Penalty
+# ---------------------------------------------------------------------------
 
 def process_late_arrival_penalty(record, reason=None):
     """
@@ -428,13 +457,11 @@ def process_late_arrival_penalty(record, reason=None):
             live_balance.save(update_fields=['casual_leave'])
 
             if bank_balance:
-                bank_balance.casual_leave = max(0.0, float(
-                    Decimal(str(bank_balance.casual_leave or 0.0)) - deduction_amount))
+                bank_balance.casual_leave = max(0.0, float(Decimal(str(bank_balance.casual_leave or 0.0)) - deduction_amount))
                 bank_balance.save(update_fields=['casual_leave'])
 
             deduction_source = "CL"
             penalty_status = m.AttendancePenalty.DeductionStatus.APPLIED
-
 
         elif el_available >= deduction_amount:
             # Second priority: Deduct 0.5 from EL
@@ -449,7 +476,6 @@ def process_late_arrival_penalty(record, reason=None):
 
             deduction_source = "EL"
             penalty_status = m.AttendancePenalty.DeductionStatus.APPLIED
-
 
         else:
             # Third priority: Both exhausted -> Mark as LWP / Salary deduction

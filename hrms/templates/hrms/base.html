@@ -132,11 +132,13 @@
               {% if hrms_is_hr or request.user.is_superuser %}
               <li><a href="{% url 'hrms:jobposting_list' %}" class="{% if active_item == 'jobposting' %}current{% endif %}"><i class="bi bi-briefcase me-1 text-purple-400"></i>Job Postings</a></li>
               <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}"><i class="bi bi-kanban me-1"></i>Applications</a></li>
-              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}"><i class="bi bi-person-lines-fill me-1"></i>Candidates</a></li>
+<!--              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}"><i class="bi bi-person-lines-fill me-1"></i>Candidates</a></li>-->
+              <li><a href="{% url 'hrms:talent_pool' %}" class="{% if active_item == 'talent_pool' %}current{% endif %}"><i class="bi bi-people me-1"></i>Talent Pool</a></li>
               <li><a href="{% url 'hrms:interview_list' %}" class="{% if active_item == 'interview' %}current{% endif %}"><i class="bi bi-calendar-week me-1"></i>All Interviews</a></li>
               <li><a href="{% url 'hrms:recruitmentstage_list' %}" class="{% if active_item == 'recruitmentstage' %}current{% endif %}"><i class="bi bi-diagram-3 me-1"></i>Pipeline Stages</a></li>
-              {% endif %}
+              {% else %}
               <li><a href="{% url 'hrms:my_interviews' %}" class="{% if active_item == 'my_interviews' %}current{% endif %}"><i class="bi bi-camera-video me-1"></i>My Interviews</a></li>
+              {% endif %}
             </ul>
           </div>
         </li>
@@ -291,22 +293,22 @@
         </li>
 
         <!-- Performance -->
-        <li class="nav-item">
-          <a class="nav-link hrms-group-toggle {% if active_group == 'performance' %}active{% endif %}"
-             data-bs-toggle="collapse" href="#navPerformance" role="button"
-             aria-expanded="{% if active_group == 'performance' %}true{% else %}false{% endif %}"
-             data-section="performance"
-             data-loader-icon="bi-trophy-fill" data-loader-title="Performance &amp; Reviews"
-             data-loader-from="#d97706" data-loader-to="#fde047">
-            <span class="nav-icon-box"><i class="bi bi-trophy-fill"></i></span>
-            Performance <i class="bi bi-chevron-right ms-auto chev"></i>
-          </a>
-          <div class="collapse {% if active_group == 'performance' %}show{% endif %}" id="navPerformance">
-            <ul class="nav flex-column hrms-sublist">
-              <li><a href="{% url 'hrms:performance_list' %}" class="{% if active_item == 'performance' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}All Reviews{% else %}My Reviews{% endif %}</a></li>
-            </ul>
-          </div>
-        </li>
+<!--        <li class="nav-item">-->
+<!--          <a class="nav-link hrms-group-toggle {% if active_group == 'performance' %}active{% endif %}"-->
+<!--             data-bs-toggle="collapse" href="#navPerformance" role="button"-->
+<!--             aria-expanded="{% if active_group == 'performance' %}true{% else %}false{% endif %}"-->
+<!--             data-section="performance"-->
+<!--             data-loader-icon="bi-trophy-fill" data-loader-title="Performance &amp; Reviews"-->
+<!--             data-loader-from="#d97706" data-loader-to="#fde047">-->
+<!--            <span class="nav-icon-box"><i class="bi bi-trophy-fill"></i></span>-->
+<!--            Performance <i class="bi bi-chevron-right ms-auto chev"></i>-->
+<!--          </a>-->
+<!--          <div class="collapse {% if active_group == 'performance' %}show{% endif %}" id="navPerformance">-->
+<!--            <ul class="nav flex-column hrms-sublist">-->
+<!--              <li><a href="{% url 'hrms:performance_list' %}" class="{% if active_item == 'performance' %}current{% endif %}">{% if hrms_is_hr or request.user.is_superuser %}All Reviews{% else %}My Reviews{% endif %}</a></li>-->
+<!--            </ul>-->
+<!--          </div>-->
+<!--        </li>-->
 
       </ul>
     </nav>

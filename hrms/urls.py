@@ -6,6 +6,7 @@ from .api_views import ApplicationStageMoveAPIView, BulkResumeUploadAPIView
 app_name = 'hrms'
 
 
+
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
 
@@ -118,9 +119,13 @@ urlpatterns = [
     path('hiring/stages/<int:pk>/edit/', views.RecruitmentStageUpdateView.as_view(), name='recruitmentstage_edit'),
     path('hiring/stages/<int:pk>/delete/', views.RecruitmentStageDeleteView.as_view(), name='recruitmentstage_delete'),
 
-    # Per-job pipeline management
+    # Per-job pipeline management + bulk upload page
     path('hiring/jobs/<int:pk>/pipeline/', views.JobPipelineManageView.as_view(), name='jobpipeline_manage'),
     path('hiring/jobs/<int:pk>/kanban/', views.JobKanbanView.as_view(), name='job_kanban'),
+    path('hiring/jobs/<int:pk>/bulk-upload/', views.BulkUploadPageView.as_view(), name='bulk_upload'),
+
+    # Talent Pool
+    path('hiring/talent-pool/', views.TalentPoolView.as_view(), name='talent_pool'),
 
     # Application notes (HTMX)
     path('hiring/applications/<int:pk>/notes/add/', views.ApplicationNoteCreateView.as_view(), name='application_note_add'),
@@ -285,10 +290,18 @@ urlpatterns = [
         name='comp_off_hr'
     ),
 
-   # --- Hiring automation endpoints ---
-   path('api/applications/<int:pk>/move-stage/', ApplicationStageMoveAPIView.as_view(), name='application_move_stage'),
-   path('api/jobs/<int:job_id>/bulk-upload-resumes/', BulkResumeUploadAPIView.as_view(), name='bulk_upload_resumes'),
-   path('hiring/applications/bulk-download-resumes/', views.bulk_download_resumes, name='bulk_download_resumes')
+    # --- Hiring automation endpoints ---
+    path('api/applications/<int:pk>/move-stage/', ApplicationStageMoveAPIView.as_view(), name='application_move_stage'),
+    path('api/jobs/<int:job_id>/bulk-upload-resumes/', BulkResumeUploadAPIView.as_view(), name='bulk_upload_resumes'),
+    path('hiring/applications/bulk-download-resumes/', views.bulk_download_resumes, name='bulk_download_resumes'),
+
+    # --- Pipeline management API ---
+    path('api/jobs/<int:pk>/pipeline/reorder/', views.PipelineReorderAPIView.as_view(), name='pipeline_reorder'),
+    path('api/jobs/<int:pk>/pipeline/add-stage/', views.PipelineAddStageAPIView.as_view(), name='pipeline_add_stage'),
+    path('api/pipeline-stages/<int:pk>/remove/', views.PipelineRemoveStageAPIView.as_view(), name='pipeline_remove_stage'),
+
+    # --- Application quick-email API ---
+    path('api/applications/<int:pk>/send-email/', views.ApplicationSendEmailAPIView.as_view(), name='application_send_email'),
 
 
 

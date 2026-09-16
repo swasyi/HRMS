@@ -1,10 +1,14 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+import collections
+import logging
 
 import io
 import json
 import os
 import zipfile
+
+logger = logging.getLogger(__name__)
 
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
@@ -13,6 +17,7 @@ from django.http import HttpResponse
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView, UpdateView, ListView, DetailView, FormView, View, CreateView, DeleteView
 from django.forms import modelformset_factory
+from django.db import models, transaction
 
 from django.core.files.storage import default_storage
 from django.shortcuts import render, redirect, get_object_or_404
@@ -24,6 +29,7 @@ from . import models as m
 from . import leave_logic as lv
 from . import payroll_logic as pay
 from . import attendance_logic as att_logic
+from . import hiring_logic as hire
 from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE
 from .emails import send_leave_notification_email
 
@@ -6226,8 +6232,14 @@ class JobPipelineManageView(HRRequiredMixin, SidebarContextMixin, View):
 
     def get(self, request, pk):
         formset = f.JobPipelineFormSet(instance=self.job)
+        pipeline_stages = m.JobPipeline.objects.filter(job=self.job).select_related('stage').order_by('order')
+        used_stage_ids = set(pipeline_stages.values_list('stage_id', flat=True))
+        all_stages = m.RecruitmentStage.objects.all().order_by('name')
         return render(request, self.template_name, {
             'job': self.job, 'formset': formset,
+            'pipeline_stages': pipeline_stages,
+            'used_stage_ids': used_stage_ids,
+            'all_stages': all_stages,
             'active_group': self.active_group, 'active_item': self.active_item,
         })
 
@@ -6352,7 +6364,7 @@ class ApplicationDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
 
         # Detailed Interview Scores
         ctx['interviews'] = app.interviews.prefetch_related(
-            'interviewers',
+            'interviewer',
             'individual_feedbacks__interviewer'
         ).all()
 
@@ -8460,3 +8472,281 @@ class CompOffHRView(HRRequiredMixin, SidebarContextMixin, ListView):
                 status='active'
             ).order_by('first_name')
         return ctx
+
+
+# ===========================================================================
+# HIRING MODULE — NEW VIEWS (Bulk Upload Page, Talent Pool, Pipeline APIs)
+# ===========================================================================
+
+class BulkUploadPageView(HRRequiredMixin, SidebarContextMixin, DetailView):
+    """Page view that renders the Alpine.js dropzone for bulk resume uploads.
+    The actual upload POST hits BulkResumeUploadAPIView (api_views.py)."""
+    model = m.JobPosting
+    template_name = 'hrms/hiring/bulk_upload.html'
+    context_object_name = 'job'
+    active_group, active_item = 'hiring', 'jobposting'
+
+
+class TalentPoolView(HRRequiredMixin, SidebarContextMixin, ListView):
+    """Keyword search across all Candidates — by name, email, company, experience range."""
+    model = m.Candidate
+    template_name = 'hrms/hiring/talent_pool.html'
+    context_object_name = 'candidates'
+    paginate_by = 50
+    active_group, active_item = 'hiring', 'talent_pool'
+
+    def get_queryset(self):
+        qs = m.Candidate.objects.prefetch_related(
+            'applications__job_posting'
+        ).order_by('-created_at')
+        q = self.request.GET.get('q', '').strip()
+        if q:
+            qs = qs.filter(
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q) |
+                Q(email__icontains=q) |
+                Q(phone__icontains=q) |
+                Q(current_company__icontains=q)
+            )
+        exp_min = self.request.GET.get('exp_min', '').strip()
+        exp_max = self.request.GET.get('exp_max', '').strip()
+        if exp_min:
+            try:
+                qs = qs.filter(experience_years__gte=float(exp_min))
+            except ValueError:
+                pass
+        if exp_max:
+            try:
+                qs = qs.filter(experience_years__lte=float(exp_max))
+            except ValueError:
+                pass
+        company = self.request.GET.get('company', '').strip()
+        if company:
+            qs = qs.filter(current_company__icontains=company)
+        return qs
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Management API Endpoints
+# ---------------------------------------------------------------------------
+
+class PipelineReorderAPIView(HRRequiredMixin, View):
+    """POST /hrms/api/jobs/<pk>/pipeline/reorder/
+    Body: {"stages": [{"pipeline_pk": 3, "order": 1}, ...]}
+    """
+    def post(self, request, pk):
+        import json as _json
+        from django.http import JsonResponse
+        job = get_object_or_404(m.JobPosting, pk=pk)
+        try:
+            payload = _json.loads(request.body)
+            stages = payload.get('stages', [])
+            if not stages:
+                return JsonResponse({'error': 'No stages provided.'}, status=400)
+            with transaction.atomic():
+                for item in stages:
+                    m.JobPipeline.objects.filter(
+                        pk=item['pipeline_pk'], job=job
+                    ).update(order=item['order'])
+            return JsonResponse({'ok': True, 'reordered': len(stages)})
+        except Exception as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+
+
+class PipelineAddStageAPIView(HRRequiredMixin, View):
+    """POST /hrms/api/jobs/<pk>/pipeline/add-stage/
+    Body: {existing_stage_id: int} OR {new_stage_name: str, new_stage_description: str, evaluation_criteria: dict}
+    """
+    def post(self, request, pk):
+        import json as _json
+        from django.http import JsonResponse
+        job = get_object_or_404(m.JobPosting, pk=pk)
+        try:
+            payload = _json.loads(request.body)
+            existing_id = payload.get('existing_stage_id')
+            if existing_id:
+                stage = get_object_or_404(m.RecruitmentStage, pk=existing_id)
+            else:
+                name = (payload.get('new_stage_name') or '').strip()
+                if not name:
+                    return JsonResponse({'error': 'Stage name is required.'}, status=400)
+                stage, _ = m.RecruitmentStage.objects.get_or_create(
+                    name=name,
+                    defaults={
+                        'description': payload.get('new_stage_description', ''),
+                        'evaluation_criteria': payload.get('evaluation_criteria', {}),
+                    }
+                )
+
+            # Check not already in pipeline
+            if m.JobPipeline.objects.filter(job=job, stage=stage).exists():
+                return JsonResponse({'error': f'"{stage.name}" is already in this pipeline.'}, status=400)
+
+            max_order = m.JobPipeline.objects.filter(job=job).aggregate(
+                m=models.Max('order'))['m'] or 0
+            m.JobPipeline.objects.create(job=job, stage=stage, order=max_order + 1)
+            return JsonResponse({'ok': True, 'stage_id': stage.pk, 'stage_name': stage.name})
+        except Exception as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+
+
+class PipelineRemoveStageAPIView(HRRequiredMixin, View):
+    """DELETE /hrms/api/pipeline-stages/<pk>/remove/"""
+    def delete(self, request, pk):
+        from django.http import JsonResponse
+        pipeline_entry = get_object_or_404(m.JobPipeline, pk=pk)
+        pipeline_entry.delete()
+        return JsonResponse({'ok': True})
+
+
+# ---------------------------------------------------------------------------
+# Quick Email API (Application Detail page modal)
+# ---------------------------------------------------------------------------
+
+class ApplicationSendEmailAPIView(HRRequiredMixin, View):
+    """POST /hrms/api/applications/<pk>/send-email/
+    Body: {"to": str, "subject": str, "body": str}
+    Sends a plain-text email from the configured DEFAULT_FROM_EMAIL.
+    """
+    def post(self, request, pk):
+        import json as _json
+        from django.http import JsonResponse
+        from django.core.mail import send_mail
+        from django.conf import settings
+        application = get_object_or_404(m.Application, pk=pk)
+        try:
+            payload = _json.loads(request.body)
+            to = payload.get('to', '').strip()
+            subject = payload.get('subject', '').strip()
+            body = payload.get('body', '').strip()
+            if not (to and subject and body):
+                return JsonResponse({'ok': False, 'error': 'to, subject and body are required.'}, status=400)
+            send_mail(
+                subject, body,
+                getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@oblu.com'),
+                [to],
+                fail_silently=False
+            )
+            m.RecruitmentAuditLog.objects.create(
+                application=application,
+                from_status=application.status,
+                to_status=application.status,
+                action=f'Quick email sent: "{subject}"',
+                performed_by=request.user,
+            )
+            return JsonResponse({'ok': True})
+        except Exception as exc:
+            return JsonResponse({'ok': False, 'error': str(exc)}, status=500)
+
+
+# ---------------------------------------------------------------------------
+# Enhanced ConvertToEmployeeView (with resume migration + leave balance seeding)
+# ---------------------------------------------------------------------------
+
+class ConvertToEmployeeView(HRRequiredMixin, SidebarContextMixin, View):
+    """Once an offer is ACCEPTED, turn the candidate into a real Employee record.
+    Also:
+      - Migrates the candidate's resume to EmployeeDocument (document_type='resume')
+      - Auto-creates EmployeeLeaveBalance and EmployeeLeaveBalanceLive rows
+      - Sets Application.is_locked = True and writes an audit log
+    """
+    active_group, active_item = 'hiring', 'application'
+    template_name = 'hrms/hiring/convert_form.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        self.offer = get_object_or_404(m.OfferLetter, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, pk):
+        form = f.ConvertToEmployeeForm()
+        return render(request, self.template_name, {
+            'form': form, 'offer': self.offer,
+            'active_group': self.active_group, 'active_item': self.active_item,
+        })
+
+    def post(self, request, pk):
+        from . import hiring_logic as hire
+        form = f.ConvertToEmployeeForm(request.POST)
+        if form.is_valid():
+            try:
+                employee = hire.convert_to_employee(
+                    self.offer, request.user,
+                    company=form.cleaned_data['company'],
+                    department=form.cleaned_data.get('department'),
+                    designation=form.cleaned_data.get('designation'),
+                    employee_code=form.cleaned_data['employee_code'],
+                )
+
+                candidate = self.offer.application.candidate
+
+                # ── Migrate resume to EmployeeDocument ──────────────────────
+                if candidate.resume:
+                    try:
+                        from django.core.files.base import ContentFile
+                        resume_content = candidate.resume.read()
+                        doc = m.EmployeeDocument(
+                            employee=employee,
+                            document_type='resume',
+                            document_name=f'Resume - {candidate}',
+                        )
+                        doc.file.save(
+                            f'resume_{employee.employee_code}.pdf',
+                            ContentFile(resume_content),
+                            save=True
+                        )
+                    except Exception as e:
+                        logger.warning(f'Resume migration failed for {employee}: {e}')
+
+                # ── Seed leave balances from company LeaveTypes ──────────────
+                try:
+                    leave_types = m.LeaveType.objects.filter(
+                        company=employee.company, is_active=True
+                    )
+                    live_bal, _ = m.EmployeeLeaveBalanceLive.objects.get_or_create(e_name=employee)
+                    bank_bal, _ = m.EmployeeLeaveBalance.objects.get_or_create(e_name=employee)
+                    for lt in leave_types:
+                        alloc = float(lt.default_days_per_year or 0)
+                        if 'casual' in lt.name.lower() or lt.name.upper() in ('CL',):
+                            if not live_bal.casual_leave:
+                                live_bal.casual_leave = alloc
+                            if not bank_bal.casual_leave:
+                                bank_bal.casual_leave = alloc
+                        elif 'earned' in lt.name.lower() or lt.name.upper() in ('EL', 'PL'):
+                            if not live_bal.earned_leave:
+                                live_bal.earned_leave = alloc
+                            if not bank_bal.earned_leave:
+                                bank_bal.earned_leave = alloc
+                        elif 'sick' in lt.name.lower() or lt.name.upper() in ('SL', 'ML'):
+                            if not live_bal.sick_leave:
+                                live_bal.sick_leave = alloc
+                            if not bank_bal.sick_leave:
+                                bank_bal.sick_leave = alloc
+                    live_bal.save()
+                    bank_bal.save()
+                except Exception as e:
+                    logger.warning(f'Leave balance seeding failed for {employee}: {e}')
+
+                # ── Lock application + audit ─────────────────────────────────
+                application = self.offer.application
+                if not application.is_locked:
+                    application.is_locked = True
+                    application.locked_by = request.user
+                    application.locked_at = timezone.now()
+                    application.save(update_fields=['is_locked', 'locked_by', 'locked_at', 'updated_at'])
+                m.RecruitmentAuditLog.objects.create(
+                    application=application,
+                    from_status=application.status,
+                    to_status=application.status,
+                    action=f'Converted to Employee ({employee.employee_code})',
+                    performed_by=request.user,
+                    note='Resume migrated; leave balances seeded.',
+                )
+
+                messages.success(request, f'{employee.full_name} onboarded as {employee.employee_code}.')
+                return redirect('hrms:employee_detail', pk=employee.pk)
+            except Exception as e:
+                form.add_error(None, str(e))
+        return render(request, self.template_name, {
+            'form': form, 'offer': self.offer,
+            'active_group': self.active_group, 'active_item': self.active_item,
+        })
