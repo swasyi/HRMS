@@ -228,7 +228,7 @@
 
 <script>
 /* ══════════════════════════════════════════════════════════════
-   KIOSK — Face Scan Controller
+   KIOSK — Face Scan Controller with Client-Side Face Detection
    ══════════════════════════════════════════════════════════════ */
 
 const video          = document.getElementById('kioskVideo');
@@ -242,9 +242,129 @@ const idleLabel      = document.getElementById('kioskIdleLabel');
 const camErrorBanner = document.getElementById('camErrorBanner');
 const camErrorMsg    = document.getElementById('camErrorMsg');
 
-let cameraReady  = false;
-let kioskStream  = null;
-let resetTimer   = null;
+let cameraReady      = false;
+let kioskStream      = null;
+let resetTimer       = null;
+let faceDetected     = false;   // Client-side face detection flag
+let faceCheckTimer   = null;    // Interval for continuous face checking
+let nativeFaceDetector = null;  // Browser FaceDetector API (Chrome/Edge)
+
+// ── Client-Side Face Detection Setup ────────────────────────
+// Uses the browser's native FaceDetector API if available (Chrome/Edge),
+// otherwise falls back to a canvas-based skin-tone heuristic.
+async function initFaceDetector() {
+    if (window.FaceDetector) {
+        try {
+            nativeFaceDetector = new FaceDetector({ maxDetectedFaces: 1, fastMode: true });
+            console.log('[Kiosk] Native FaceDetector API available.');
+        } catch (e) {
+            console.warn('[Kiosk] FaceDetector init failed, using fallback:', e);
+            nativeFaceDetector = null;
+        }
+    } else {
+        console.log('[Kiosk] FaceDetector API not available, using skin-tone heuristic fallback.');
+    }
+}
+initFaceDetector();
+
+/**
+ * Check if a face is present in the current video frame.
+ * Returns true if a face is detected, false otherwise.
+ */
+async function checkFaceInFrame() {
+    if (!cameraReady || video.readyState < 2) return false;
+
+    // ── Method 1: Native FaceDetector API (accurate) ──
+    if (nativeFaceDetector) {
+        try {
+            const faces = await nativeFaceDetector.detect(video);
+            if (faces.length > 0) {
+                // Verify face bounding box is reasonably sized (not a tiny artifact)
+                const face = faces[0];
+                const faceArea = face.boundingBox.width * face.boundingBox.height;
+                const frameArea = video.videoWidth * video.videoHeight;
+                const faceRatio = faceArea / frameArea;
+
+                // Face should be at least 2% of frame and no more than 80%
+                return faceRatio >= 0.02 && faceRatio <= 0.80;
+            }
+            return false;
+        } catch (e) {
+            // Fall through to heuristic
+        }
+    }
+
+    // ── Method 2: Skin-tone heuristic fallback ──
+    // Sample center region of the frame and check for skin-tone pixels
+    try {
+        const checkCanvas = document.createElement('canvas');
+        const ctx = checkCanvas.getContext('2d');
+        const sampleW = 160, sampleH = 200;
+        checkCanvas.width = sampleW;
+        checkCanvas.height = sampleH;
+
+        // Sample from center of video (where the guide oval is)
+        const sx = (video.videoWidth - sampleW * (video.videoWidth / 320)) / 2;
+        const sy = (video.videoHeight - sampleH * (video.videoHeight / 360)) / 2;
+        const sw = sampleW * (video.videoWidth / 320);
+        const sh = sampleH * (video.videoHeight / 360);
+
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sampleW, sampleH);
+        const imageData = ctx.getImageData(0, 0, sampleW, sampleH);
+        const data = imageData.data;
+
+        let skinPixels = 0;
+        const totalPixels = sampleW * sampleH;
+
+        for (let i = 0; i < data.length; i += 16) { // Sample every 4th pixel for speed
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+
+            // Skin tone detection in RGB space (works for diverse skin tones)
+            // Based on widely-used skin color model
+            const isSkin = (
+                r > 60 && g > 40 && b > 20 &&
+                r > g && r > b &&
+                (r - g) > 10 &&
+                Math.max(r, g, b) - Math.min(r, g, b) > 12 &&
+                Math.abs(r - g) <= 90
+            );
+
+            if (isSkin) skinPixels++;
+        }
+
+        const skinRatio = skinPixels / (totalPixels / 4);
+        // Need at least 15% skin-tone pixels in the face region
+        return skinRatio >= 0.15;
+    } catch (e) {
+        // If heuristic fails, allow the scan (server will reject if no face)
+        return true;
+    }
+}
+
+/**
+ * Continuously check for face presence and update UI accordingly.
+ */
+function startFaceMonitoring() {
+    if (faceCheckTimer) clearInterval(faceCheckTimer);
+
+    faceCheckTimer = setInterval(async () => {
+        if (!cameraReady || viewport.classList.contains('scanning')) return;
+
+        const detected = await checkFaceInFrame();
+
+        if (detected !== faceDetected) {
+            faceDetected = detected;
+
+            if (detected) {
+                guideRing.style.borderColor = 'rgba(16, 185, 129, 0.7)';
+                guideRing.style.boxShadow = '0 0 0 2000px rgba(0,0,0,0.18), 0 0 18px rgba(16,185,129,0.3)';
+            } else {
+                guideRing.style.borderColor = '';
+                guideRing.style.boxShadow = '';
+            }
+        }
+    }, 500);  // Check every 500ms
+}
 
 // ── Camera Startup ──────────────────────────────────────────
 function initKioskCamera() {
@@ -268,9 +388,12 @@ function initKioskCamera() {
                     scanBtn.disabled = false;
                     guideRing.classList.add('idle');
                     console.log('[Kiosk] Camera ready:', video.videoWidth, 'x', video.videoHeight);
+                    // Start continuous face monitoring
+                    startFaceMonitoring();
                 }).catch(() => {
                     cameraReady = true;
                     scanBtn.disabled = false;
+                    startFaceMonitoring();
                 });
             };
         })
@@ -292,6 +415,7 @@ function showCameraError(msg) {
 }
 
 function stopKioskCamera() {
+    if (faceCheckTimer) { clearInterval(faceCheckTimer); faceCheckTimer = null; }
     if (kioskStream) {
         kioskStream.getTracks().forEach(t => t.stop());
         kioskStream = null;
@@ -332,14 +456,34 @@ function scheduleReset() {
     }, 3000);
 }
 
-// ── Face Scan ───────────────────────────────────────────────
-function scanFace() {
+// ── Face Scan (with client-side gate) ───────────────────────
+async function scanFace() {
     if (!cameraReady || video.readyState < 2) {
         showResultBadge(`
             <div class="result-pill error">
                 <div class="result-icon">⏳</div>
                 <div class="result-name" style="font-size:16px;">Camera Initializing</div>
                 <div class="result-action">Please wait a moment and try again.</div>
+            </div>`);
+        scheduleReset();
+        return;
+    }
+
+    // ── CLIENT-SIDE FACE DETECTION GATE ──────────────────────
+    // Check for face BEFORE sending to server
+    const hasFace = await checkFaceInFrame();
+    if (!hasFace) {
+        showResultBadge(`
+            <div class="result-pill error">
+                <div class="result-icon">🚫</div>
+                <div class="result-name" style="font-size:16px;">No Face Detected</div>
+                <div class="result-action">
+                    Please position your face in the oval guide.<br>
+                    Ensure good lighting and face the camera directly.
+                </div>
+                <div class="auto-reset-bar">
+                    <div class="auto-reset-fill"></div>
+                </div>
             </div>`);
         scheduleReset();
         return;

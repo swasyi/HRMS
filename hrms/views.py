@@ -378,7 +378,10 @@ def dashboard(request):
             import calendar
             curr_month = today.month
             curr_year = today.year
-            num_days = calendar.monthrange(curr_year, curr_month)[1]
+            first_weekday, num_days = calendar.monthrange(curr_year, curr_month)
+            leading_empty_range = list(range(first_weekday))
+            trailing_empty_count = (7 - ((first_weekday + num_days) % 7)) % 7
+            trailing_empty_range = list(range(trailing_empty_count))
             month_days = [date(curr_year, curr_month, d) for d in range(1, num_days + 1)]
 
             # Today's punch record
@@ -486,6 +489,8 @@ def dashboard(request):
                 'recent_attendance': month_records.order_by('-attendance_date')[:7],
                 'recent_notices': m.CompanyNotice.objects.filter(company=employee.company, is_active=True).order_by('-notice_date')[:5],
                 'calendar_cells': calendar_cells,
+                'leading_empty_range': leading_empty_range,
+                'trailing_empty_range': trailing_empty_range,
                 'monthly_attendance_pct': min(100, att_pct),
                 'present_days': present_days,
                 'half_days': half_days,
@@ -752,7 +757,10 @@ def dashboard(request):
 
       curr_month = today.month
       curr_year = today.year
-      num_days = calendar.monthrange(curr_year, curr_month)[1]
+      first_weekday, num_days = calendar.monthrange(curr_year, curr_month)
+      leading_empty_range = list(range(first_weekday))
+      trailing_empty_count = (7 - ((first_weekday + num_days) % 7)) % 7
+      trailing_empty_range = list(range(trailing_empty_count))
       month_days = [
           date(curr_year, curr_month, d) for d in range(1, num_days + 1)
       ]
@@ -884,6 +892,8 @@ def dashboard(request):
               company=employee.company, is_active=True
           ).order_by('-notice_date')[:5],
           'calendar_cells': calendar_cells,
+          'leading_empty_range': leading_empty_range,
+          'trailing_empty_range': trailing_empty_range,
           'monthly_attendance_pct': min(100, att_pct),
           'present_days': present_days,
           'half_days': half_days,
@@ -2221,6 +2231,8 @@ class AttendanceRecordUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateVie
         return super().form_valid(form)
 
 
+
+
 class MyAttendanceView(LoginRequiredMixin, SidebarContextMixin, ListView):
     """Employee's own attendance history + today's check-in/out card."""
     model = m.AttendanceRecord
@@ -2271,23 +2283,28 @@ class MyAttendanceView(LoginRequiredMixin, SidebarContextMixin, ListView):
             # This uses the method you defined in your Company Model
             policy = employee.company.get_policy_for_date(today)
 
-            # Use 'grace_allowed_count' (the field name in your model)
-            ctx['grace_max'] = policy.grace_allowed_count
-            ctx['grace_minutes_limit'] = policy.grace_minutes
+            if policy:
+                ctx['grace_max'] = getattr(policy, 'grace_allowed_count', getattr(policy, 'max_grace_per_month', 3))
+                ctx['grace_minutes_limit'] = getattr(policy, 'grace_minutes', getattr(policy, 'grace_window_minutes', 15))
 
-            # 3. Calculate Grace Used this month
-            # We count records where user was late but within the grace limit
-            grace_used_count = m.AttendanceRecord.objects.filter(
-                employee=employee,
-                attendance_date__month=today.month,
-                attendance_date__year=today.year,
-                late_minutes__gt=0,
-                late_minutes__lte=policy.grace_minutes
-            ).count()
+                # 3. Calculate Grace Used this month
+                grace_used_count = m.AttendanceRecord.objects.filter(
+                    employee=employee,
+                    attendance_date__month=today.month,
+                    attendance_date__year=today.year,
+                    late_minutes__gt=0,
+                    late_minutes__lte=ctx['grace_minutes_limit']
+                ).count()
 
-            ctx['grace_used'] = grace_used_count
+                ctx['grace_used'] = grace_used_count
+            else:
+                ctx['grace_max'] = 0
+                ctx['grace_minutes_limit'] = 15
+                ctx['grace_used'] = 0
 
         return ctx
+
+
 
 
 class CheckInView(LoginRequiredMixin, View):
@@ -7681,7 +7698,7 @@ from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from .models import Employee, EmployeeBiometric, AttendanceRecord, EmployeeLocationLog
-from .biometrics import verify_1_to_1, match_1_to_n, extract_face_encoding
+from .biometrics import verify_1_to_1, match_1_to_n, extract_face_encoding, DUPLICATE_THRESHOLD
 
 import base64
 import io
@@ -7818,7 +7835,7 @@ class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
 
         # Check if this face is ALREADY enrolled for ANY OTHER employee
         existing_biometrics = EmployeeBiometric.objects.exclude(employee=employee).select_related('employee')
-        duplicate_emp, _ = match_1_to_n(image_source, existing_biometrics, threshold=0.32)
+        duplicate_emp, _ = match_1_to_n(image_source, existing_biometrics, threshold=DUPLICATE_THRESHOLD)
         if duplicate_emp:
             return JsonResponse({
                 'success': False,
@@ -7837,7 +7854,7 @@ class FaceEnrollmentView(LoginRequiredMixin, TemplateView):
 
 
 # ─────────────────────────────────────────────────────────────
-# 2. MOBILE PUNCH (1:1 — Instant Capture, Async Verification)
+# 2. MOBILE PUNCH (1:1 — Synchronous Verification, Strict Rejection)
 # ─────────────────────────────────────────────────────────────
 class MobilePunchInView(LoginRequiredMixin, View):
     @method_decorator(csrf_exempt)
@@ -7869,15 +7886,29 @@ class MobilePunchInView(LoginRequiredMixin, View):
             return JsonResponse({'error': 'Face not enrolled. Contact HR.'}, status=400)
 
         # ──────────────────────────────────────────────────────
-        # INSTANT CAPTURE: Lock the timestamp NOW, before any ML
+        # SYNCHRONOUS 1:1 VERIFICATION — Must pass BEFORE record
         # ──────────────────────────────────────────────────────
         punch_time = timezone.now()
         today = timezone.localdate()
 
-        # Read photo bytes into memory for the background thread
+        # Read photo bytes for verification
         photo_bytes = photo.read()
         photo.seek(0)  # Reset for Django's file save
 
+        is_match, verify_msg = verify_1_to_1(photo_bytes, biometric.face_encoding)
+        _bio_logger.info(
+            "[Mobile Punch] Employee %s (%s) — match=%s, %s",
+            employee.full_name, employee.employee_code, is_match, verify_msg
+        )
+
+        if not is_match:
+            return JsonResponse({
+                'error': f'Face verification failed. {verify_msg} '
+                         f'Please ensure you are facing the camera directly with good lighting.',
+                'status': 'rejected'
+            }, status=403)
+
+        # ── Face verified — now create/update attendance record ──
         attendance, created = AttendanceRecord.objects.get_or_create(
             employee=employee,
             attendance_date=today,
@@ -7886,7 +7917,7 @@ class MobilePunchInView(LoginRequiredMixin, View):
                 'punch_in_latitude': lat,
                 'punch_in_longitude': lng,
                 'punch_in_photo': photo,
-                'is_face_verified': False,  # Will be set True by background thread
+                'is_face_verified': True,
                 'punch_source': 'mobile',
                 'status': AttendanceRecord.Status.PRESENT,
             }
@@ -7899,7 +7930,7 @@ class MobilePunchInView(LoginRequiredMixin, View):
                 attendance.punch_in_latitude = lat
                 attendance.punch_in_longitude = lng
                 attendance.punch_in_photo = photo
-                attendance.is_face_verified = False
+                attendance.is_face_verified = True
                 attendance.punch_source = 'mobile'
                 attendance.status = AttendanceRecord.Status.PRESENT
                 attendance.save()
@@ -7924,23 +7955,13 @@ class MobilePunchInView(LoginRequiredMixin, View):
             except Exception:
                 pass  # Never block the punch on a CO error
 
-        # ──────────────────────────────────────────────────────
-        # ASYNC VERIFICATION: Offload to background thread
-        # ──────────────────────────────────────────────────────
-        _BIO_POOL.submit(
-            _verify_mobile_async,
-            attendance.id,
-            photo_bytes,
-            biometric.face_encoding
-        )
-
         return JsonResponse({
             'status': 'success',
             'action': action_type,
             'attendance_id': attendance.id,
             'time': punch_time.strftime('%I:%M %p'),
             'message': f'{action_type} recorded at {punch_time.strftime("%I:%M %p")}. '
-                       f'Face verification in progress…'
+                       f'Face verified successfully.'
         })
 
 

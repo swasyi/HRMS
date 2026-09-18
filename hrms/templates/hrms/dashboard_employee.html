@@ -140,42 +140,48 @@
           </div>
 
           <div class="card-body p-2 p-md-4">
-            <!-- Calendar Days Header (Hardcoded for compatibility) -->
-            <div class="row row-cols-7 g-1 text-center mb-3 fw-bold small text-muted">
-                <div class="col py-2 bg-light rounded-start-3">Mon</div>
-                <div class="col py-2 bg-light">Tue</div>
-                <div class="col py-2 bg-light">Wed</div>
-                <div class="col py-2 bg-light">Thu</div>
-                <div class="col py-2 bg-light">Fri</div>
-                <div class="col py-2 bg-light">Sat</div>
-                <div class="col py-2 bg-light rounded-end-3 text-danger">Sun</div>
+            <!-- Calendar Days Header (Mon-Sun) -->
+            <div class="calendar-grid-7 text-center mb-2 fw-bold small text-muted">
+                <div class="py-2 bg-light rounded-start-3">Mon</div>
+                <div class="py-2 bg-light">Tue</div>
+                <div class="py-2 bg-light">Wed</div>
+                <div class="py-2 bg-light">Thu</div>
+                <div class="py-2 bg-light">Fri</div>
+                <div class="py-2 bg-light">Sat</div>
+                <div class="py-2 bg-light rounded-end-3 text-danger">Sun</div>
             </div>
 
             <!-- Calendar Grid -->
-            <div class="row row-cols-7 g-1 g-md-2 text-center">
-              {% for cell in calendar_cells %}
-                <div class="col">
-                  <div class="p-1 p-md-2 rounded-3 border h-100 d-flex flex-column justify-content-between calendar-day-box
-                        {% if cell.status == 'present' %}bg-success-subtle border-success-subtle
-                        {% elif cell.status == 'half_day' %}bg-warning-subtle border-warning-subtle
-                        {% elif cell.status == 'leave' %}bg-primary-subtle border-primary-subtle
-                        {% elif cell.status == 'holiday' %}bg-info-subtle border-info-subtle
-                        {% elif cell.status == 'week_off' %}bg-light text-muted
-                        {% elif cell.status == 'future' %}bg-transparent opacity-25
-                        {% else %}bg-danger-subtle border-danger-subtle{% endif %}"
-                       style="min-height: 65px; cursor: {% if cell.is_past %}pointer{% else %}default{% endif %};"
-                       {% if cell.is_past %}onclick="openRegularizeModal('{{ cell.date|date:'Y-m-d' }}', '{{ cell.date|date:'D, d M Y' }}')"{% endif %}>
+            <div class="calendar-grid-7 text-center">
+              {% for _ in leading_empty_range %}
+                <div class="calendar-empty-cell"></div>
+              {% endfor %}
 
-                    <div class="fw-bold small">{{ cell.date|date:"j" }}</div>
-                    <div class="d-none d-md-block">
-                        <span class="badge bg-{{ cell.badge_color }} rounded-pill" style="font-size: 0.65rem;">{{ cell.label|truncatechars:10 }}</span>
-                    </div>
-                    <!-- Mobile Dot Indicator -->
-                    <div class="d-md-none">
-                        <div class="rounded-circle bg-{{ cell.badge_color }} mx-auto" style="width: 6px; height: 6px;"></div>
-                    </div>
+              {% for cell in calendar_cells %}
+                <div class="p-1 p-md-2 rounded-3 border h-100 d-flex flex-column justify-content-between calendar-day-box
+                      {% if cell.status == 'present' %}bg-success-subtle border-success-subtle
+                      {% elif cell.status == 'half_day' %}bg-warning-subtle border-warning-subtle
+                      {% elif cell.status == 'leave' %}bg-primary-subtle border-primary-subtle
+                      {% elif cell.status == 'holiday' %}bg-info-subtle border-info-subtle
+                      {% elif cell.status == 'week_off' %}bg-light text-muted
+                      {% elif cell.status == 'future' %}bg-transparent opacity-25
+                      {% else %}bg-danger-subtle border-danger-subtle{% endif %}"
+                     style="min-height: 65px; cursor: {% if cell.is_past %}pointer{% else %}default{% endif %};"
+                     {% if cell.is_past %}onclick="openRegularizeModal('{{ cell.date|date:'Y-m-d' }}', '{{ cell.date|date:'D, d M Y' }}')"{% endif %}>
+
+                  <div class="fw-bold small">{{ cell.date|date:"j" }}</div>
+                  <div class="d-none d-md-block">
+                      <span class="badge bg-{{ cell.badge_color }} rounded-pill text-truncate d-inline-block mw-100" style="font-size: 0.65rem;">{{ cell.label|truncatechars:10 }}</span>
+                  </div>
+                  <!-- Mobile Dot Indicator -->
+                  <div class="d-md-none">
+                      <div class="rounded-circle bg-{{ cell.badge_color }} mx-auto" style="width: 6px; height: 6px;"></div>
                   </div>
                 </div>
+              {% endfor %}
+
+              {% for _ in trailing_empty_range %}
+                <div class="calendar-empty-cell"></div>
               {% endfor %}
             </div>
 
@@ -276,10 +282,28 @@
   </div>
 
 <style>
+  .calendar-grid-7 {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 6px;
+  }
+  @media (min-width: 768px) {
+    .calendar-grid-7 {
+      gap: 8px;
+    }
+  }
+  .calendar-empty-cell {
+    visibility: hidden;
+    min-height: 65px;
+    pointer-events: none;
+  }
+  .calendar-day-box {
+    min-width: 0;
+    transition: all 0.2s ease;
+  }
   .calendar-day-box:hover {
     transform: translateY(-3px);
     box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    transition: all 0.2s ease;
   }
   .hover-shadow:hover {
     box-shadow: 0 5px 15px rgba(0,0,0,0.1) !important;

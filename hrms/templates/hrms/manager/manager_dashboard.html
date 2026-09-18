@@ -213,33 +213,33 @@
         </div>
 
         <!-- Subordinates Quick Directory -->
-        <div class="col-lg-4">
-            <div class="card-shell">
-                <div class="p-3 border-bottom">
-                    <div class="fw-bold text-dark fs-6">
-                        <i class="bi bi-people text-indigo me-2"></i>My Subordinates ({{ subordinate_count }})
-                    </div>
-                </div>
-                <div class="p-3">
-                    <div class="list-group list-group-flush">
-                        {% for sub in subordinates %}
-                        <div class="list-group-item px-0 py-2 border-bottom d-flex align-items-center justify-content-between">
-                            <div class="d-flex align-items-center">
-                                <div class="emp-avatar me-3" style="width: 32px; height: 32px; font-size: 0.8rem;">{{ sub.first_name|first }}{{ sub.last_name|first }}</div>
-                                <div>
-                                    <div class="fw-bold text-dark small">{{ sub.full_name }}</div>
-                                    <small class="text-muted" style="font-size: 0.72rem;">{{ sub.designation.title|default:"Staff" }}</small>
-                                </div>
-                            </div>
-                            <span class="badge bg-light text-dark border small">{{ sub.employee_code }}</span>
-                        </div>
-                        {% empty %}
-                        <div class="text-muted small text-center py-3">No subordinates reporting directly to you.</div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-        </div>
+<!--        <div class="col-lg-4">-->
+<!--            <div class="card-shell">-->
+<!--                <div class="p-3 border-bottom">-->
+<!--                    <div class="fw-bold text-dark fs-6">-->
+<!--                        <i class="bi bi-people text-indigo me-2"></i>My Subordinates ({{ subordinate_count }})-->
+<!--                    </div>-->
+<!--                </div>-->
+<!--                <div class="p-3">-->
+<!--                    <div class="list-group list-group-flush">-->
+<!--                        {% for sub in subordinates %}-->
+<!--                        <div class="list-group-item px-0 py-2 border-bottom d-flex align-items-center justify-content-between">-->
+<!--                            <div class="d-flex align-items-center">-->
+<!--                                <div class="emp-avatar me-3" style="width: 32px; height: 32px; font-size: 0.8rem;">{{ sub.first_name|first }}{{ sub.last_name|first }}</div>-->
+<!--                                <div>-->
+<!--                                    <div class="fw-bold text-dark small">{{ sub.full_name }}</div>-->
+<!--                                    <small class="text-muted" style="font-size: 0.72rem;">{{ sub.designation.title|default:"Staff" }}</small>-->
+<!--                                </div>-->
+<!--                            </div>-->
+<!--                            <span class="badge bg-light text-dark border small">{{ sub.employee_code }}</span>-->
+<!--                        </div>-->
+<!--                        {% empty %}-->
+<!--                        <div class="text-muted small text-center py-3">No subordinates reporting directly to you.</div>-->
+<!--                        {% endfor %}-->
+<!--                    </div>-->
+<!--                </div>-->
+<!--            </div>-->
+<!--        </div>-->
     </div>
 </div>
 

@@ -183,17 +183,17 @@
                             <div class="d-flex justify-content-center gap-3">
                                 <form method="post" action="{% url 'hrms:attendance_check_in' %}">
                                     {% csrf_token %}
-                                    <button type="submit" class="btn btn-punch btn-punch-in"
-                                            {% if today_record and today_record.check_in %}disabled{% endif %}>
-                                        <i class="bi bi-box-arrow-in-right me-2"></i>Punch In
-                                    </button>
+<!--                                    <button type="submit" class="btn btn-punch btn-punch-in"-->
+<!--                                            {% if today_record and today_record.check_in %}disabled{% endif %}>-->
+<!--                                        <i class="bi bi-box-arrow-in-right me-2"></i>Punch In-->
+<!--                                    </button>-->
                                 </form>
                                 <form method="post" action="{% url 'hrms:attendance_check_out' %}">
                                     {% csrf_token %}
-                                    <button type="submit" class="btn btn-punch btn-punch-out"
-                                            {% if not today_record or not today_record.check_in or today_record.check_out %}disabled{% endif %}>
-                                        Punch Out
-                                    </button>
+<!--                                    <button type="submit" class="btn btn-punch btn-punch-out"-->
+<!--                                            {% if not today_record or not today_record.check_in or today_record.check_out %}disabled{% endif %}>-->
+<!--                                        Punch Out-->
+<!--                                    </button>-->
                                 </form>
                             </div>
                         </div>
@@ -299,7 +299,7 @@
                 </thead>
                 <tbody class="border-top-0">
                     {% for rec in records %}
-                    <tr style="border-bottom: 1px solid #f8fafc;">
+                    <tr style="border-bottom: 1px solid #f8fafc;">'
                         <td class="ps-4">
                             <div class="fw-bold text-slate-700">{{ rec.attendance_date|date:"d M" }}</div>
                             <div class="text-muted" style="font-size: 0.75rem;">{{ rec.attendance_date|date:"l" }}</div>

@@ -131,3 +131,6 @@ class CompOffRecordAdmin(admin.ModelAdmin):
     search_fields = ('employee__first_name', 'employee__last_name', 'employee__employee_code')
     readonly_fields = ('attendance_record', 'availed_leave_app', 'created_at', 'updated_at')
     ordering = ('-worked_date',)
+
+admin.site.register(m.EmployeeBiometric)
+
