@@ -479,6 +479,8 @@ class Candidate(TimeStampedModel):
     resume = models.FileField(upload_to='candidates/resumes/', blank=True, null=True)
     current_company = models.CharField(max_length=150, blank=True)
     experience_years = models.DecimalField(max_digits=4, decimal_places=1, default=0)
+    city = models.CharField(max_length=100, blank=True, help_text="Candidate's current city")
+    state = models.CharField(max_length=100, blank=True, help_text="Candidate's current state")
 
     def __str__(self):
         return f'{self.first_name} {self.last_name}'.strip()

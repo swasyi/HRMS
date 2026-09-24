@@ -133,14 +133,112 @@ def _extract_experience_years(text):
     return round(max(candidates), 2)
 
 
+# Indian states and union territories (title case for matching)
+_INDIAN_STATES = [
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
+    "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
+    "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram",
+    "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu",
+    "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    "Delhi", "New Delhi", "Chandigarh", "Jammu and Kashmir", "Jammu & Kashmir",
+    "Ladakh", "Puducherry", "Lakshadweep", "Andaman and Nicobar",
+    "Dadra and Nagar Haveli", "Daman and Diu",
+]
+
+# Major Indian cities (covers metros + tier-2 cities commonly found in resumes)
+_INDIAN_CITIES = [
+    "Mumbai", "Delhi", "Bangalore", "Bengaluru", "Hyderabad", "Ahmedabad",
+    "Chennai", "Kolkata", "Pune", "Jaipur", "Lucknow", "Kanpur", "Nagpur",
+    "Indore", "Thane", "Bhopal", "Visakhapatnam", "Patna", "Vadodara",
+    "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Faridabad", "Meerut",
+    "Rajkot", "Varanasi", "Srinagar", "Aurangabad", "Dhanbad", "Amritsar",
+    "Allahabad", "Prayagraj", "Ranchi", "Howrah", "Coimbatore", "Jabalpur",
+    "Gwalior", "Vijayawada", "Jodhpur", "Madurai", "Raipur", "Kochi",
+    "Chandigarh", "Mysore", "Mysuru", "Gurgaon", "Gurugram", "Noida",
+    "Greater Noida", "Trivandrum", "Thiruvananthapuram", "Mangalore",
+    "Mangaluru", "Dehradun", "Hubli", "Shimla", "Jammu", "Udaipur",
+    "Jamshedpur", "Bhubaneswar", "Cuttack", "Kota", "Ajmer", "Bareilly",
+    "Moradabad", "Gorakhpur", "Aligarh", "Jalandhar", "Tiruchirappalli",
+    "Salem", "Warangal", "Guntur", "Bhilai", "Bikaner", "Amravati",
+    "Bokaro", "Navi Mumbai", "Panipat", "Rohtak", "Sonipat", "Karnal",
+    "Hisar", "Ambala", "Bathinda", "Patiala", "Mohali", "Zirakpur",
+    "Pondicherry", "Gangtok", "Imphal", "Shillong", "Aizawl", "Kohima",
+    "Itanagar", "Agartala", "Panaji", "Daman", "Silvassa", "Kavaratti",
+    "Port Blair", "Surat", "Nellore",
+]
+
+
+def _extract_city_state(text):
+    """
+    Extract city and state from resume text using curated Indian location lists.
+
+    Strategy:
+    1. First check for explicit "City:" or "Location:" labels in the resume.
+    2. Then scan for known Indian state names (longer names first to avoid partial matches).
+    3. Then scan for known Indian city names.
+
+    Returns (city: str, state: str).
+    """
+    city = ""
+    state = ""
+
+    # Normalize text for searching (keep original case info via case-insensitive matching)
+    search_text = _normalize_text(text)
+
+    # ── Strategy 1: Look for explicit location labels ──
+    # Patterns like "Location: Mumbai, Maharashtra" or "City: Delhi"
+    location_patterns = [
+        r"(?:location|city|address|place|residing|current\s+location|based\s+(?:in|at))\s*[:–—-]\s*([^\n,;]{2,60})",
+        r"(?:city|town)\s*[:–—-]\s*([^\n,;]{2,40})",
+        r"(?:state|province)\s*[:–—-]\s*([^\n,;]{2,40})",
+    ]
+    for pattern in location_patterns:
+        match = re.search(pattern, search_text, flags=re.IGNORECASE)
+        if match:
+            location_text = match.group(1).strip()
+            # Try to parse "City, State" or just a single value
+            parts = [p.strip() for p in re.split(r"[,|/]", location_text) if p.strip()]
+            for part in parts:
+                if not state:
+                    for s in _INDIAN_STATES:
+                        if re.search(r'\b' + re.escape(s) + r'\b', part, re.IGNORECASE):
+                            state = s
+                            break
+                if not city:
+                    for c in _INDIAN_CITIES:
+                        if re.search(r'\b' + re.escape(c) + r'\b', part, re.IGNORECASE):
+                            city = c
+                            break
+
+    # ── Strategy 2: Scan full text for state names (longer names first) ──
+    if not state:
+        # Sort by length descending so "Madhya Pradesh" matches before "Pradesh"
+        for s in sorted(_INDIAN_STATES, key=len, reverse=True):
+            if re.search(r'\b' + re.escape(s) + r'\b', search_text, re.IGNORECASE):
+                state = s
+                break
+
+    # ── Strategy 3: Scan full text for city names ──
+    if not city:
+        for c in sorted(_INDIAN_CITIES, key=len, reverse=True):
+            if re.search(r'\b' + re.escape(c) + r'\b', search_text, re.IGNORECASE):
+                city = c
+                break
+
+    return city, state
+
+
 def parse_resume_pdf(file_path_or_buffer):
     """Extract structured metadata from a PDF resume."""
     raw_text = _extract_pdf_text(file_path_or_buffer)
+    city, state = _extract_city_state(raw_text)
     return {
         "name": _normalize_text(_extract_name(raw_text) or "Candidate"),
         "email": _extract_email(raw_text) or "",
         "phone": _extract_phone_number(raw_text) or "",
         "experience_years": _extract_experience_years(raw_text),
+        "city": city,
+        "state": state,
         "raw_text": raw_text,
     }
 
@@ -203,6 +301,8 @@ def create_candidate_from_resume(file_obj, job_posting_id):
     email = parsed.get("email") or ""
     phone = parsed.get("phone") or ""
     experience_years = float(parsed.get("experience_years", 0) or 0)
+    city = parsed.get("city") or ""
+    state = parsed.get("state") or ""
 
     if not email:
         email = f"{slugify(name) or 'candidate'}-{uuid.uuid4().hex[:8]}@upload.invalid"
@@ -270,6 +370,8 @@ def create_candidate_from_resume(file_obj, job_posting_id):
             email=email,
             phone=phone,
             experience_years=Decimal(str(experience_years)),
+            city=city,
+            state=state,
         )
 
         safe_name = f"{slugify(name) or 'candidate'}-{uuid.uuid4().hex[:8]}.pdf"
@@ -299,6 +401,8 @@ def create_candidate_from_resume(file_obj, job_posting_id):
         "email": candidate.email,
         "phone": candidate.phone,
         "experience_years": experience_years,
+        "city": city,
+        "state": state,
         "application_id": application.pk,
         "filename": filename,
     }

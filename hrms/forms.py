@@ -446,7 +446,7 @@ class JobPostingForm(BootstrapModelForm):
 class CandidateForm(BootstrapModelForm):
     class Meta:
         model = m.Candidate
-        fields = ['first_name', 'last_name', 'email', 'phone', 'resume', 'current_company', 'experience_years']
+        fields = ['first_name', 'last_name', 'email', 'phone', 'city', 'state', 'resume', 'current_company', 'experience_years']
 
 class ApplicationForm(BootstrapModelForm):
     class Meta:
@@ -473,7 +473,7 @@ class UnifiedCandidateForm(forms.ModelForm):
 
     class Meta:
         model = m.Candidate
-        fields = ['first_name', 'last_name', 'email', 'phone', 'resume', 'current_company', 'experience_years']
+        fields = ['first_name', 'last_name', 'email', 'phone', 'city', 'state', 'resume', 'current_company', 'experience_years']
 
 
 # --- UPDATE: InterviewForm — pipeline stage + scorecard --------------------

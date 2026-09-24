@@ -3,16 +3,22 @@
 
 {% block extra_css %}
 <style>
-    /* Attendo Modern Theme Enhancements */
-    .attendo-card {
+    /* Executive Card & Dashboard Theme */
+    .executive-card {
         background: #ffffff;
-        border-radius: 14px;
+        border-radius: 16px;
         border: 1px solid #e7ecf3;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        position: relative;
+        overflow: hidden;
     }
-    .attendo-card:hover {
+    .executive-card:hover {
         transform: translateY(-3px);
-        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08) !important;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08) !important;
+        border-color: #cbd5e1;
+    }
+    .executive-card-interactive {
+        cursor: pointer;
     }
     .stat-link {
         text-decoration: none;
@@ -20,13 +26,14 @@
         display: block;
     }
     .icon-box {
-        width: 46px;
-        height: 46px;
+        width: 44px;
+        height: 44px;
         border-radius: 12px;
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 1.35rem;
+        flex-shrink: 0;
     }
     .icon-box-primary { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
     .icon-box-success { background: rgba(16, 185, 129, 0.1); color: #10b981; }
@@ -38,54 +45,70 @@
     .icon-box-amber   { background: rgba(217, 119, 6, 0.1);  color: #d97706; }
     .icon-box-sky     { background: rgba(14, 165, 233, 0.1); color: #0ea5e9; }
 
-    /* Mini summary indicators */
-    .summary-pill {
-        display: inline-flex;
+    /* Multi-point bullet details in cards */
+    .card-points-list {
+        list-style: none;
+        padding: 0;
+        margin: 10px 0 0 0;
+        border-top: 1px dashed #e2e8f0;
+        padding-top: 8px;
+    }
+    .card-points-list li {
+        display: flex;
+        justify-content: space-between;
         align-items: center;
-        padding: 8px 16px;
-        border-radius: 10px;
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        font-weight: 500;
-        font-size: 0.85rem;
-        cursor: pointer;
-        transition: background 0.15s ease;
-    }
-    .summary-pill:hover {
-        background: #f1f5f9;
-    }
-    .dot-indicator {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        margin-right: 8px;
-        display: inline-block;
-    }
-    .dot-blue   { background-color: #2563eb; }
-    .dot-red    { background-color: #ef4444; }
-    .dot-purple { background-color: #8b5cf6; }
-
-    /* Custom Table Styling */
-    .attendance-table th {
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-weight: 700;
+        font-size: 0.76rem;
+        padding: 2.5px 0;
         color: #64748b;
-        background-color: #f8fafc;
-        border-bottom: 1px solid #e2e8f0;
-        padding-top: 12px;
-        padding-bottom: 12px;
     }
-    .attendance-table td {
-        padding-top: 14px;
-        padding-bottom: 14px;
-        vertical-align: middle;
-        font-size: 0.86rem;
+    .card-points-list li strong {
+        color: #1e293b;
+    }
+    .card-points-list li a {
+        color: #2563eb;
+        text-decoration: none;
+        font-weight: 500;
+    }
+    .card-points-list li a:hover {
+        text-decoration: underline;
+    }
+
+    /* Featured Quick Attendance Summary Card */
+    .attendance-hero-card {
+        background: linear-gradient(145deg, #ffffff, #f8fafc);
+        border: 1px solid #cbd5e1;
+        border-radius: 16px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .attendance-hero-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 16px 32px rgba(37, 99, 235, 0.09) !important;
+        border-color: #93c5fd;
+    }
+    .hero-stat-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 14px 16px;
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .hero-stat-box:hover {
+        background: #f8fafc;
+        border-color: #cbd5e1;
+    }
+
+    /* Live Punch Badges */
+    .punch-badge {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.76rem;
+        padding: 3px 8px;
+        border-radius: 6px;
     }
     .emp-avatar {
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         border-radius: 50%;
         background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
         color: #3730a3;
@@ -93,14 +116,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.85rem;
+        font-size: 0.82rem;
         flex-shrink: 0;
-    }
-    .punch-badge {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 0.76rem;
-        padding: 4px 10px;
-        border-radius: 8px;
     }
 
     /* Live running clock */
@@ -108,18 +125,18 @@
         background: #ecfdf5;
         color: #065f46;
         border: 1px solid #a7f3d0;
-        padding: 4px 10px;
-        border-radius: 8px;
+        padding: 3px 8px;
+        border-radius: 6px;
         font-weight: 600;
-        font-size: 0.78rem;
+        font-size: 0.76rem;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
         font-family: ui-monospace, monospace;
     }
     .pulse-dot {
-        width: 7px;
-        height: 7px;
+        width: 6px;
+        height: 6px;
         background-color: #10b981;
         border-radius: 50%;
         display: inline-block;
@@ -128,43 +145,31 @@
     }
     @keyframes pulse {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-        70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+        70% { transform: scale(1); box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
 
-    /* Tab navigation buttons */
-    .tab-pills-custom .nav-link {
-        border-radius: 8px;
-        padding: 6px 16px;
-        font-size: 0.84rem;
-        font-weight: 600;
-        color: #64748b;
-        border: none;
-        background: transparent;
-        transition: all 0.2s ease;
-    }
-    .tab-pills-custom .nav-link.active {
-        background-color: #2563eb;
-        color: #ffffff;
-        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
-    }
-
-    /* Module explorer (all-features grid) */
+    /* Module explorer grid */
     .module-card {
         background: #ffffff;
         border-radius: 14px;
         border: 1px solid #e7ecf3;
         height: 100%;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .module-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
     }
     .module-card-header {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 14px 16px;
+        padding: 12px 14px;
         border-bottom: 1px solid #eef1f6;
     }
     .module-card-title {
-        font-size: 0.86rem;
+        font-size: 0.85rem;
         font-weight: 700;
         color: #0f172a;
         margin: 0;
@@ -172,7 +177,7 @@
     .module-link-list {
         list-style: none;
         margin: 0;
-        padding: 8px;
+        padding: 6px;
     }
     .module-link-list li a {
         display: flex;
@@ -181,9 +186,9 @@
         gap: 8px;
         text-decoration: none;
         color: #334155;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 500;
-        padding: 8px 10px;
+        padding: 7px 10px;
         border-radius: 8px;
         transition: background 0.15s ease, color 0.15s ease;
     }
@@ -192,16 +197,13 @@
         color: #2563eb;
     }
     .module-link-list li a i.bi-chevron-right {
-        font-size: 0.7rem;
+        font-size: 0.68rem;
         opacity: 0;
         transition: opacity 0.15s ease;
     }
     .module-link-list li a:hover i.bi-chevron-right {
         opacity: 1;
     }
-
-
-
 </style>
 {% endblock %}
 
@@ -216,15 +218,15 @@
                 {% if is_today %}
                     <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2" style="font-size:0.7rem;">Live Today</span>
                 {% else %}
-                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2" style="font-size:0.7rem;">Historical</span>
+                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2" style="font-size:0.7rem;">Historical Record</span>
                 {% endif %}
             </div>
             <p class="text-muted small mb-0 mt-1">
                 Showing analytics for <span class="fw-semibold text-primary">{{ display_date }}</span>
                 {% if active_company_id and active_company_id != "all" %}
-                    • Filtered by unit
+                    • Filtered by unit: <strong class="text-dark">{{ current_company_name }}</strong>
                 {% else %}
-                    • All global units
+                    • All Global Units
                 {% endif %}
             </p>
         </div>
@@ -232,7 +234,7 @@
         <div class="d-flex flex-wrap align-items-center gap-2">
             <!-- Calendar Date Picker -->
             <form method="GET" class="d-flex align-items-center bg-white p-1 rounded-3 border shadow-sm" id="dateFilterForm">
-                <span class="px-2 text-muted"><i class="bi bi-calendar-event"></i></span>
+                <span class="px-2 text-muted"><i class="bi bi-calendar-event text-primary"></i></span>
                 <input type="date" name="date" value="{{ selected_date }}"
                        class="form-control form-control-sm border-0 fw-semibold text-dark"
                        style="width: 140px;"
@@ -244,7 +246,7 @@
                 {% endif %}
             </form>
 
-            <!-- Company Switcher -->
+            <!-- Company Switcher (Live updates employee counts & cards per unit) -->
             <form action="{% url 'hrms:set_active_company' %}" method="POST" class="d-flex align-items-center bg-white p-1 rounded-3 border shadow-sm">
                 {% csrf_token %}
                 <span class="px-2 text-muted"><i class="bi bi-building"></i></span>
@@ -255,530 +257,617 @@
                     {% endfor %}
                 </select>
             </form>
+
+            <!-- Quick Jump to Daily Punch Monitor -->
+            <a href="{% url 'hrms:attendance_daily_monitor' %}?date={{ selected_date }}" class="btn btn-primary btn-sm rounded-3 shadow-sm fw-medium d-flex align-items-center gap-1">
+                <i class="bi bi-clock-history"></i>
+                <span class="d-none d-sm-inline">Daily Punch Monitor</span>
+            </a>
         </div>
     </div>
 
-    <!-- 6 ATTENDO POWER METRIC CARDS (DEEP LINKED) -->
+    <!-- 6 EXECUTIVE MULTI-POINT STAT CARDS (ALL LINKED & COMPANY-FILTERED) -->
     <div class="row g-3 mb-4">
-        <!-- Card 1: Total Employees -->
-        <div class="col-6 col-md-4 col-xl">
-            <a href="{% url 'hrms:employee_list' %}" class="stat-link">
-                <div class="card attendo-card shadow-sm h-100 p-3">
-                    <div class="d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Total Employees</span>
-                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_employees }}</h2>
-                        </div>
-                        <div class="icon-box icon-box-primary">
-                            <i class="bi bi-people-fill"></i>
-                        </div>
+
+        <!-- Card 1: Total Employees & Organization -->
+        <div class="col-12 col-sm-6 col-xl-4 col-xxl">
+            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #2563eb;">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Total Workforce</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_employees }}</h2>
                     </div>
-                    <div class="mt-2 pt-1 small text-primary fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
-                        <span>View Directory</span> <i class="bi bi-arrow-right-short"></i>
+                    <div class="icon-box icon-box-primary">
+                        <i class="bi bi-people-fill"></i>
                     </div>
                 </div>
-            </a>
+                <ul class="card-points-list">
+                    <li>
+                        <span>• Departments</span>
+                        <span><strong>{{ total_departments }}</strong> (<a href="{% url 'hrms:department_list' %}">Manage</a>)</span>
+                    </li>
+                    <li>
+                        <span>• Designations</span>
+                        <span><strong>{{ total_designations }}</strong> (<a href="{% url 'hrms:designation_list' %}">Manage</a>)</span>
+                    </li>
+                    <li>
+                        <span>• New this month</span>
+                        <span class="text-success fw-semibold">+{{ new_joiners_count }} joiners</span>
+                    </li>
+                </ul>
+                <div class="mt-2 pt-1">
+                    <a href="{% url 'hrms:employee_list' %}" class="small text-primary fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem;">
+                        <span>View Employee Directory</span> <i class="bi bi-arrow-right-short"></i>
+                    </a>
+                </div>
+            </div>
         </div>
 
-        <!-- Card 2: Currently Working -->
-        <div class="col-6 col-md-4 col-xl">
-            <a href="{% url 'hrms:attendance_records' %}" class="stat-link">
-                <div class="card attendo-card shadow-sm h-100 p-3">
-                    <div class="d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Currently Working</span>
-                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ currently_working }}</h2>
-                        </div>
-                        <div class="icon-box icon-box-success">
-                            <i class="bi bi-person-check-fill"></i>
-                        </div>
+                <!-- Card 5: Leave Applications & Time-Off -->
+        <div class="col-12 col-sm-6 col-xl-4 col-xxl">
+            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #8b5cf6;">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Leave Applications</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ pending_leaves }}</h2>
                     </div>
-                    <div class="mt-2 pt-1 small text-success fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
-                        <span>Active on Clock</span> <i class="bi bi-arrow-right-short"></i>
+                    <div class="icon-box icon-box-purple">
+                        <i class="bi bi-umbrella-fill"></i>
                     </div>
                 </div>
-            </a>
+                <ul class="card-points-list">
+                    <li>
+                        <span>• On Leave Today</span>
+                        <span class="text-purple fw-semibold" style="color: #8b5cf6;">{{ time_off_count }} staff</span>
+                    </li>
+                    <li>
+                        <span>• Month Approvals</span>
+                        <span class="text-success fw-semibold">{{ approved_leaves_month }} leaves</span>
+                    </li>
+                    <li>
+                        <span>• Leave Balances</span>
+                        <span><a href="{% url 'hrms:leave_balance' %}">View Balances</a></span>
+                    </li>
+                </ul>
+                <div class="mt-2 pt-1">
+                    <a href="{% url 'hrms:my_leave' %}" class="small fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem; color: #8b5cf6;">
+                        <span>Review Leave Requests</span> <i class="bi bi-arrow-right-short"></i>
+                    </a>
+                </div>
+            </div>
         </div>
 
-        <!-- Card 3: Time Off / Leave Requests -->
-        <div class="col-6 col-md-4 col-xl">
-            <a href="{% url 'hrms:my_leave' %}" class="stat-link">
-                <div class="card attendo-card shadow-sm h-100 p-3">
-                    <div class="d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Leave Applications</span>
-                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ time_off_count }}</h2>
-                        </div>
-                        <div class="icon-box icon-box-purple">
-                            <i class="bi bi-umbrella-fill"></i>
-                        </div>
+
+        <!-- Card 2: Hiring & Talent Pipeline -->
+        <div class="col-12 col-sm-6 col-xl-4 col-xxl">
+            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #6366f1;">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Active Jobs</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ open_jobs|default:0 }}</h2>
                     </div>
-                    <div class="mt-2 pt-1 small text-purple fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem; color: #8b5cf6;">
-                        <span>{{ pending_leaves }} Pending Approvals</span> <i class="bi bi-arrow-right-short"></i>
+                    <div class="icon-box icon-box-indigo">
+                        <i class="bi bi-briefcase-fill"></i>
                     </div>
                 </div>
-            </a>
+                <ul class="card-points-list">
+                    <li>
+                        <span>• Shortlisted</span>
+                        <span><strong class="text-primary">{{ shortlisted_candidates|default:0 }}</strong> (<a href="{% url 'hrms:candidate_list' %}">Candidates</a>)</span>
+                    </li>
+                    <li>
+                        <span>• In Interviews</span>
+                        <span><strong class="text-warning">{{ interviewing_candidates|default:0 }}</strong> (<a href="{% url 'hrms:interview_list' %}">Schedule</a>)</span>
+                    </li>
+                    <li>
+                        <span>• Applications</span>
+                        <span><strong>{{ total_applications|default:0 }}</strong> (<a href="{% url 'hrms:application_list' %}">Review</a>)</span>
+                    </li>
+                </ul>
+                <div class="mt-2 pt-1">
+                    <a href="{% url 'hrms:jobposting_list' %}" class="small text-indigo fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem; color: #6366f1;">
+                        <span>Recruitment Pipeline</span> <i class="bi bi-arrow-right-short"></i>
+                    </a>
+                </div>
+            </div>
         </div>
 
-        <!-- Card 4: Company Assets -->
-        <div class="col-6 col-md-4 col-xl">
-            <a href="{% url 'hrms:asset_list' %}" class="stat-link">
-                <div class="card attendo-card shadow-sm h-100 p-3">
-                    <div class="d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Company Assets</span>
-                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_assets|default:0 }}</h2>
-                        </div>
-                        <div class="icon-box icon-box-teal">
-                            <i class="bi bi-laptop-fill"></i>
-                        </div>
+        <!-- Card 3: Attendance & Shift Policies -->
+        <div class="col-12 col-sm-6 col-xl-4 col-xxl">
+            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #f59e0b;">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Company Policies</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_policies_count|default:0 }}</h2>
                     </div>
-                    <div class="mt-2 pt-1 small fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem; color:#14b8a6;">
-                        <span>{{ assigned_assets|default:0 }} Assigned • {{ unassigned_assets|default:0 }} Free</span> <i class="bi bi-arrow-right-short"></i>
+                    <div class="icon-box icon-box-warning">
+                        <i class="bi bi-shield-check"></i>
                     </div>
                 </div>
-            </a>
+                <ul class="card-points-list">
+                    <li>
+                        <span>• Shift Window</span>
+                        <span class="text-dark fw-semibold">{{ active_shift_start }} – {{ active_shift_end }}</span>
+                    </li>
+                    <li>
+                        <span>• Grace Buffer</span>
+                        <span class="badge bg-warning-subtle text-warning border px-1" style="font-size: 0.68rem;">{{ active_grace_minutes }}m allowed</span>
+                    </li>
+                    <li>
+                        <span>• Holidays</span>
+                        <span><a href="{% url 'hrms:holiday_list' %}">Holiday Calendar</a></span>
+                    </li>
+                </ul>
+                <div class="mt-2 pt-1">
+                    <a href="{% url 'hrms:attendance_policy' %}" class="small text-warning fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem; color: #d97706 !important;">
+                        <span>Configure Work Policies</span> <i class="bi bi-arrow-right-short"></i>
+                    </a>
+                </div>
+            </div>
         </div>
 
-        <!-- Card 5: Face Biometrics -->
-        <div class="col-6 col-md-4 col-xl">
-            <a href="{% url 'hrms:biometric_status_list' %}" class="stat-link">
-                <div class="card attendo-card shadow-sm h-100 p-3">
-                    <div class="d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Face Biometrics</span>
-                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ enrolled_biometrics }} <span class="text-muted fw-normal" style="font-size: 1rem;">/ {{ total_employees }}</span></h2>
-                        </div>
-                        <div class="icon-box icon-box-rose">
-                            <i class="bi bi-fingerprint"></i>
-                        </div>
+        <!-- Card 4: Face Biometrics & Security -->
+        <div class="col-12 col-sm-6 col-xl-4 col-xxl">
+            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #f43f5e;">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Face Biometrics</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ enrolled_biometrics }} <span class="text-muted fw-normal" style="font-size: 0.95rem;">/ {{ total_employees }}</span></h2>
                     </div>
-                    <div class="mt-2 pt-1 small text-danger fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem;">
-                        <span>{{ pending_biometrics }} Pending Enrollment</span> <i class="bi bi-arrow-right-short"></i>
+                    <div class="icon-box icon-box-rose">
+                        <i class="bi bi-fingerprint"></i>
                     </div>
                 </div>
-            </a>
+                <ul class="card-points-list">
+                    <li>
+                        <span>• Enrolled Faces</span>
+                        <span class="text-success fw-semibold">{{ enrolled_biometrics }} ({{ biometric_percentage }}%)</span>
+                    </li>
+                    <li>
+                        <span>• Pending Setup</span>
+                        <span class="text-danger fw-semibold">{{ pending_biometrics }} (<a href="{% url 'hrms:enroll_face' %}">Enroll</a>)</span>
+                    </li>
+                    <li>
+                        <span>• Office Kiosk</span>
+                        <span><a href="{% url 'hrms:kiosk_page' %}" target="_blank">Open Kiosk</a></span>
+                    </li>
+                </ul>
+                <div class="mt-2 pt-1">
+                    <a href="{% url 'hrms:biometric_status_list' %}" class="small text-danger fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem;">
+                        <span>Biometrics Console</span> <i class="bi bi-arrow-right-short"></i>
+                    </a>
+                </div>
+            </div>
         </div>
 
-        <!-- Card 6: Open Positions (Hiring) -->
-<!--        <div class="col-6 col-md-4 col-xl">-->
-<!--            <a href="{% url 'hrms:jobposting_list' %}" class="stat-link">-->
-<!--                <div class="card attendo-card shadow-sm h-100 p-3">-->
-<!--                    <div class="d-flex align-items-center justify-content-between">-->
-<!--                        <div>-->
-<!--                            <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem; letter-spacing: 0.04em;">Open Positions</span>-->
-<!--                            <h2 class="mb-0 fw-bold text-dark mt-1">{{ open_jobs_count|default:0 }}</h2>-->
-<!--                        </div>-->
-<!--                        <div class="icon-box icon-box-indigo">-->
-<!--                            <i class="bi bi-briefcase-fill"></i>-->
-<!--                        </div>-->
+<!--        &lt;!&ndash; Card 5: Leave Applications & Time-Off &ndash;&gt;-->
+<!--        <div class="col-12 col-sm-6 col-xl-4 col-xxl">-->
+<!--            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #8b5cf6;">-->
+<!--                <div class="d-flex align-items-center justify-content-between">-->
+<!--                    <div>-->
+<!--                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Leave Applications</span>-->
+<!--                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ pending_leaves }}</h2>-->
 <!--                    </div>-->
-<!--                    <div class="mt-2 pt-1 small fw-medium d-flex align-items-center gap-1" style="font-size: 0.75rem; color:#6366f1;">-->
-<!--                        <span>{{ total_applications|default:0 }} Applications</span> <i class="bi bi-arrow-right-short"></i>-->
+<!--                    <div class="icon-box icon-box-purple">-->
+<!--                        <i class="bi bi-umbrella-fill"></i>-->
 <!--                    </div>-->
 <!--                </div>-->
-<!--            </a>-->
+<!--                <ul class="card-points-list">-->
+<!--                    <li>-->
+<!--                        <span>• On Leave Today</span>-->
+<!--                        <span class="text-purple fw-semibold" style="color: #8b5cf6;">{{ time_off_count }} staff</span>-->
+<!--                    </li>-->
+<!--                    <li>-->
+<!--                        <span>• Month Approvals</span>-->
+<!--                        <span class="text-success fw-semibold">{{ approved_leaves_month }} leaves</span>-->
+<!--                    </li>-->
+<!--                    <li>-->
+<!--                        <span>• Leave Balances</span>-->
+<!--                        <span><a href="{% url 'hrms:leave_balance' %}">View Balances</a></span>-->
+<!--                    </li>-->
+<!--                </ul>-->
+<!--                <div class="mt-2 pt-1">-->
+<!--                    <a href="{% url 'hrms:my_leave' %}" class="small fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem; color: #8b5cf6;">-->
+<!--                        <span>Review Leave Requests</span> <i class="bi bi-arrow-right-short"></i>-->
+<!--                    </a>-->
+<!--                </div>-->
+<!--            </div>-->
 <!--        </div>-->
+
+        <!-- Card 6: Company Assets & Inventory -->
+        <div class="col-12 col-sm-6 col-xl-4 col-xxl">
+            <div class="card executive-card shadow-sm h-100 p-3" style="border-top: 3px solid #14b8a6;">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.04em;">Company Assets</span>
+                        <h2 class="mb-0 fw-bold text-dark mt-1">{{ total_assets|default:0 }}</h2>
+                    </div>
+                    <div class="icon-box icon-box-teal">
+                        <i class="bi bi-laptop-fill"></i>
+                    </div>
+                </div>
+                <ul class="card-points-list">
+                    <li>
+                        <span>• Assigned</span>
+                        <span class="text-teal fw-semibold" style="color:#14b8a6;">{{ assigned_assets|default:0 }} in use</span>
+                    </li>
+                    <li>
+                        <span>• In Stock</span>
+                        <span class="text-success fw-semibold">{{ unassigned_assets|default:0 }} available</span>
+                    </li>
+                    <li>
+                        <span>• Register New</span>
+                        <span><a href="{% url 'hrms:asset_add' %}">Add Asset</a></span>
+                    </li>
+                </ul>
+                <div class="mt-2 pt-1">
+                    <a href="{% url 'hrms:asset_list' %}" class="small fw-medium text-decoration-none d-flex align-items-center gap-1" style="font-size: 0.74rem; color:#14b8a6;">
+                        <span>Hardware Inventory</span> <i class="bi bi-arrow-right-short"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- MAIN TWO-COLUMN LAYOUT -->
     <div class="row g-4">
 
-        <!-- LEFT COLUMN: Quick Attendance Summary & Tabbed Feed -->
+        <!-- LEFT COLUMN: Featured Quick Attendance Summary Card & Recent Live Punches -->
         <div class="col-lg-8 col-xl-9">
-            <div class="card attendo-card shadow-sm border-0 overflow-hidden">
 
-                <!-- Header Bar with Title, Summary Pills & Search -->
-                <div class="card-header bg-white py-3 px-3 px-md-4 border-bottom">
-                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+            <!-- FEATURED INTERACTIVE QUICK ATTENDANCE SUMMARY CARD -->
+            <div class="card attendance-hero-card shadow-sm p-4 mb-4 executive-card-interactive"
+                 onclick="window.location.href='{% url 'hrms:attendance_daily_monitor' %}?date={{ selected_date }}';">
+                
+                <!-- Card Header -->
+                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 mb-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="icon-box icon-box-success" style="width:38px; height:38px; font-size:1.1rem;">
+                            <i class="bi bi-clock-history"></i>
+                        </div>
                         <div>
                             <h5 class="mb-0 fw-bold text-dark">Quick Attendance Summary</h5>
-                            <span class="text-muted small">Live punch monitoring for {{ display_date }}</span>
+                            <span class="text-muted small">Live punch monitoring for <span class="fw-semibold text-primary">{{ display_date }}</span></span>
                         </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-primary text-white rounded-pill px-3 py-2 fw-semibold shadow-sm" style="font-size: 0.75rem;">
+                            Open Full Punch Monitor & Calendar <i class="bi bi-box-arrow-up-right ms-1"></i>
+                        </span>
+                    </div>
+                </div>
 
-                        <!-- Search Bar -->
-                        <div class="position-relative" style="min-width: 250px;">
-                            <i class="bi bi-search position-absolute text-muted" style="top: 8px; left: 12px;"></i>
-                            <input type="text" id="employeeSearchInput"
-                                   class="form-control form-control-sm rounded-pill ps-4 pe-3 bg-light border-0"
-                                   placeholder="Search employee, ID or designation...">
+                <!-- 3 Key Metric Breakdown Counters (Checked In, Not Yet In, Leave Applications) -->
+                <div class="row g-3 mb-3">
+                    <!-- Metric 1: Checked In Data -->
+                    <div class="col-12 col-md-4">
+                        <div class="hero-stat-box" style="border-left: 4px solid #10b981;">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem;">Checked In</span>
+                                <span class="badge bg-success-subtle text-success rounded-pill px-2" style="font-size: 0.68rem;">Present</span>
+                            </div>
+                            <div class="d-flex align-items-baseline gap-2 mt-2">
+                                <h2 class="mb-0 fw-bold text-success">{{ present_today }}</h2>
+                                <span class="text-muted small">/ {{ total_employees }} staff</span>
+                            </div>
+                            <div class="mt-2 pt-1 d-flex align-items-center justify-content-between text-muted" style="font-size: 0.74rem;">
+                                <span>Active on Clock:</span>
+                                <span class="fw-semibold text-success">{{ currently_working }} working</span>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Mini Status Breakdown Pills -->
-                    <div class="d-flex flex-wrap gap-2 mt-3 pt-2 border-top">
-                        <div class="summary-pill" onclick="switchTab('tab-btn-present')">
-                            <span class="dot-indicator dot-blue"></span>
-                            <span class="fw-bold text-dark me-1">{{ present_today }}</span> Checked In
+                    <!-- Metric 2: Not Yet In Data -->
+                    <div class="col-12 col-md-4">
+                        <div class="hero-stat-box" style="border-left: 4px solid #ef4444;">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem;">Not In Yet</span>
+                                <span class="badge bg-danger-subtle text-danger rounded-pill px-2" style="font-size: 0.68rem;">Pending</span>
+                            </div>
+                            <div class="d-flex align-items-baseline gap-2 mt-2">
+                                <h2 class="mb-0 fw-bold text-danger">{{ absent_count }}</h2>
+                                <span class="text-muted small">staff absent</span>
+                            </div>
+                            <div class="mt-2 pt-1 d-flex align-items-center justify-content-between text-muted" style="font-size: 0.74rem;">
+                                <span>Pending Check-in:</span>
+                                <span class="fw-semibold text-danger">No punches registered</span>
+                            </div>
                         </div>
-                        <div class="summary-pill" onclick="switchTab('tab-btn-absent')">
-                            <span class="dot-indicator dot-red"></span>
-                            <span class="fw-bold text-dark me-1">{{ absent_count }}</span> Not in Yet
-                        </div>
-                        <div class="summary-pill" onclick="switchTab('tab-btn-onleave')">
-                            <span class="dot-indicator dot-purple"></span>
-                            <span class="fw-bold text-dark me-1">{{ time_off_count }}</span> Leave Applications
+                    </div>
+
+                    <!-- Metric 3: Leave Applications Data -->
+                    <div class="col-12 col-md-4">
+                        <div class="hero-stat-box" style="border-left: 4px solid #8b5cf6;">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <span class="text-muted text-uppercase fw-semibold" style="font-size: 0.72rem;">Leave Applications</span>
+                                <span class="badge bg-purple-subtle text-purple rounded-pill px-2" style="font-size: 0.68rem; color: #8b5cf6; background: rgba(139, 92, 246, 0.1);">On Leave</span>
+                            </div>
+                            <div class="d-flex align-items-baseline gap-2 mt-2">
+                                <h2 class="mb-0 fw-bold" style="color: #8b5cf6;">{{ time_off_count }}</h2>
+                                <span class="text-muted small">on leave today</span>
+                            </div>
+                            <div class="mt-2 pt-1 d-flex align-items-center justify-content-between text-muted" style="font-size: 0.74rem;">
+                                <span>Pending Approval:</span>
+                                <span class="fw-semibold text-primary">{{ pending_leaves }} requests</span>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Custom Tab Navigation -->
-                <div class="bg-light px-3 px-md-4 py-2 border-bottom">
-                    <ul class="nav tab-pills-custom gap-2" id="attendanceTab" role="tablist">
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link active" id="tab-btn-all" data-bs-toggle="tab" data-bs-target="#tab-content-all" type="button" role="tab">
-                                All <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ total_employees }}</span>
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="tab-btn-present" data-bs-toggle="tab" data-bs-target="#tab-content-present" type="button" role="tab">
-                                Present <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ present_today }}</span>
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="tab-btn-absent" data-bs-toggle="tab" data-bs-target="#tab-content-absent" type="button" role="tab">
-                                Absent <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ absent_count }}</span>
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="tab-btn-onleave" data-bs-toggle="tab" data-bs-target="#tab-content-onleave" type="button" role="tab">
-                                On Leave <span class="badge bg-white text-dark rounded-pill ms-1 border">{{ time_off_count }}</span>
-                            </button>
-                        </li>
-                    </ul>
-                </div>
 
-                <!-- Tab Contents: High Density Attendance Tables -->
-                <div class="card-body p-0">
-                    <div class="tab-content" id="attendanceTabContent">
 
-                        <!-- TAB 1: ALL EMPLOYEES -->
-                        <div class="tab-pane fade show active" id="tab-content-all" role="tabpanel">
-                            <div class="table-responsive">
-                                <table class="table attendance-table table-hover mb-0 align-middle">
-                                    <thead>
-                                        <tr>
-                                            <th class="ps-4">Employee</th>
-                                            <th>Roles</th>
-                                            <th>First Punch</th>
-                                            <th>Last Punch</th>
-                                            <th>Total Working Hours</th>
-                                            <th class="pe-4 text-end">Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="allTableBody">
-                                        {% for item in all_employees_detailed %}
-                                        <tr class="table-row-item"
-                                            data-name="{{ item.emp.full_name|lower }}"
-                                            data-code="{{ item.emp.employee_code|lower }}"
-                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
-                                            data-category="{{ item.status_category }}">
-                                            <td class="ps-4">
-                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
-                                                    <div class="emp-avatar">{{ item.emp.first_name|first|upper }}</div>
-                                                    <div>
-                                                        <div class="fw-bold text-dark small hover-underline">{{ item.emp.full_name }}</div>
-                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
-                                                    </div>
-                                                </a>
-                                            </td>
-                                            <td>
-                                                <div class="fw-medium text-dark small">{{ item.emp.designation.title|default:"--" }}</div>
-                                                <div class="text-muted" style="font-size: 0.7rem;">{{ item.emp.department.name|default:item.emp.company.name }}</div>
-                                            </td>
-                                            <td>
-                                                {% if item.check_in %}
-                                                    <span class="punch-badge bg-success-subtle text-success border border-success-subtle fw-semibold">
-                                                        {{ item.check_in|date:"h:i A" }}
-                                                    </span>
-                                                {% else %}
-                                                    <span class="text-muted small">--</span>
-                                                {% endif %}
-                                            </td>
-                                            <td>
-                                                {% if item.check_out %}
-                                                    <span class="punch-badge bg-light text-dark border">
-                                                        {{ item.check_out|date:"h:i A" }}
-                                                    </span>
-                                                {% else %}
-                                                    <span class="text-muted small">--</span>
-                                                {% endif %}
-                                            </td>
-                                            <td>
-                                                {% if item.is_running %}
-                                                    <span class="live-clock-badge" data-checkin="{{ item.check_in_iso }}">
-                                                        <span class="pulse-dot"></span>
-                                                        <span class="live-timer-text">Calculating...</span>
-                                                    </span>
-                                                {% elif item.total_hours_display and item.total_hours_display != '--' %}
-                                                    <span class="fw-semibold text-dark small">{{ item.total_hours_display }}</span>
-                                                {% else %}
-                                                    <span class="text-muted small">--</span>
-                                                {% endif %}
-                                            </td>
-                                            <td class="pe-4 text-end">
-                                                {% if item.status_category == 'present' %}
-                                                    {% if item.is_grace %}
-                                                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                            <i class="bi bi-exclamation-triangle-fill me-1"></i>Grace Period
-                                                        </span>
-                                                    {% elif item.is_late %}
-                                                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                            <i class="bi bi-clock-history me-1"></i>Late ({{ item.late_minutes }}m)
-                                                        </span>
-                                                    {% else %}
-                                                        <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                            <i class="bi bi-check-circle-fill me-1"></i>On-Time
-                                                        </span>
-                                                    {% endif %}
-                                                {% elif item.status_category == 'on_leave' %}
-                                                    <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                        <i class="bi bi-airplane me-1"></i>On Leave
-                                                    </span>
-                                                {% else %}
-                                                    <span class="badge bg-secondary-subtle text-secondary border rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                        Not In Yet
-                                                    </span>
-                                                {% endif %}
-                                            </td>
-                                        </tr>
-                                        {% empty %}
-                                        <tr>
-                                            <td colspan="6" class="text-center text-muted py-4">No employee records found.</td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- TAB 2: PRESENT EMPLOYEES -->
-                        <div class="tab-pane fade" id="tab-content-present" role="tabpanel">
-                            <div class="table-responsive">
-                                <table class="table attendance-table table-hover mb-0 align-middle">
-                                    <thead>
-                                        <tr>
-                                            <th class="ps-4">Employee</th>
-                                            <th>Roles</th>
-                                            <th>First Punch</th>
-                                            <th>Last Punch</th>
-                                            <th>Total Working Hours</th>
-                                            <th class="pe-4 text-end">Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {% for item in present_employees_detailed %}
-                                        <tr class="table-row-item"
-                                            data-name="{{ item.emp.full_name|lower }}"
-                                            data-code="{{ item.emp.employee_code|lower }}"
-                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
-                                            data-category="present">
-                                            <td class="ps-4">
-                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
-                                                    <div class="emp-avatar">{{ item.emp.first_name|first|upper }}</div>
-                                                    <div>
-                                                        <div class="fw-bold text-dark small hover-underline">{{ item.emp.full_name }}</div>
-                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
-                                                    </div>
-                                                </a>
-                                            </td>
-                                            <td>
-                                                <div class="fw-medium text-dark small">{{ item.emp.designation.title|default:"--" }}</div>
-                                                <div class="text-muted" style="font-size: 0.7rem;">{{ item.emp.department.name|default:item.emp.company.name }}</div>
-                                            </td>
-                                            <td>
-                                                <span class="punch-badge bg-success-subtle text-success border border-success-subtle fw-semibold">
-                                                    {{ item.check_in|date:"h:i A" }}
-                                                </span>
-                                            </td>
-                                            <td>
-                                                {% if item.check_out %}
-                                                    <span class="punch-badge bg-light text-dark border">
-                                                        {{ item.check_out|date:"h:i A" }}
-                                                    </span>
-                                                {% else %}
-                                                    <span class="text-muted small">--</span>
-                                                {% endif %}
-                                            </td>
-                                            <td>
-                                                {% if item.is_running %}
-                                                    <span class="live-clock-badge" data-checkin="{{ item.check_in_iso }}">
-                                                        <span class="pulse-dot"></span>
-                                                        <span class="live-timer-text">Calculating...</span>
-                                                    </span>
-                                                {% elif item.total_hours_display %}
-                                                    <span class="fw-semibold text-dark small">{{ item.total_hours_display }}</span>
-                                                {% else %}
-                                                    <span class="text-muted small">--</span>
-                                                {% endif %}
-                                            </td>
-                                            <td class="pe-4 text-end">
-                                                {% if item.is_grace %}
-                                                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                        <i class="bi bi-exclamation-triangle-fill me-1"></i>Grace Period
-                                                    </span>
-                                                {% elif item.is_late %}
-                                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                        <i class="bi bi-clock-history me-1"></i>Late ({{ item.late_minutes }}m)
-                                                    </span>
-                                                {% else %}
-                                                    <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                        <i class="bi bi-check-circle-fill me-1"></i>On-Time
-                                                    </span>
-                                                {% endif %}
-                                            </td>
-                                        </tr>
-                                        {% empty %}
-                                        <tr>
-                                            <td colspan="6" class="text-center text-muted py-4">No checked-in employees for this date.</td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- TAB 3: ABSENT EMPLOYEES -->
-                        <div class="tab-pane fade" id="tab-content-absent" role="tabpanel">
-                            <div class="table-responsive">
-                                <table class="table attendance-table table-hover mb-0 align-middle">
-                                    <thead>
-                                        <tr>
-                                            <th class="ps-4">Employee</th>
-                                            <th>Roles</th>
-                                            <th>Designation</th>
-                                            <th class="pe-4 text-end">Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {% for item in absent_employees %}
-                                        <tr class="table-row-item"
-                                            data-name="{{ item.emp.full_name|lower }}"
-                                            data-code="{{ item.emp.employee_code|lower }}"
-                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
-                                            data-category="absent">
-                                            <td class="ps-4">
-                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
-                                                    <div class="emp-avatar bg-danger-subtle text-danger">{{ item.emp.first_name|first|upper }}</div>
-                                                    <div>
-                                                        <div class="fw-bold text-dark small">{{ item.emp.full_name }}</div>
-                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
-                                                    </div>
-                                                </a>
-                                            </td>
-                                            <td>
-                                                <div class="fw-medium text-dark small">{{ item.emp.department.name|default:item.emp.company.name }}</div>
-                                            </td>
-                                            <td>
-                                                <div class="text-muted small">{{ item.emp.designation.title|default:"--" }}</div>
-                                            </td>
-                                            <td class="pe-4 text-end">
-                                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                    Not In Yet
-                                                </span>
-                                            </td>
-                                        </tr>
-                                        {% empty %}
-                                        <tr>
-                                            <td colspan="4" class="text-center text-muted py-4">No absent employees today!</td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- TAB 4: ON LEAVE -->
-                        <div class="tab-pane fade" id="tab-content-onleave" role="tabpanel">
-                            <div class="table-responsive">
-                                <table class="table attendance-table table-hover mb-0 align-middle">
-                                    <thead>
-                                        <tr>
-                                            <th class="ps-4">Employee</th>
-                                            <th>Department</th>
-                                            <th>Designation</th>
-                                            <th class="pe-4 text-end">Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {% for item in on_leave_employees %}
-                                        <tr class="table-row-item"
-                                            data-name="{{ item.emp.full_name|lower }}"
-                                            data-code="{{ item.emp.employee_code|lower }}"
-                                            data-desig="{{ item.emp.designation.title|default:''|lower }}"
-                                            data-category="on_leave">
-                                            <td class="ps-4">
-                                                <a href="{% url 'hrms:employee_detail' item.emp.pk %}" class="text-decoration-none d-flex align-items-center gap-2">
-                                                    <div class="emp-avatar bg-info-subtle text-info">{{ item.emp.first_name|first|upper }}</div>
-                                                    <div>
-                                                        <div class="fw-bold text-dark small">{{ item.emp.full_name }}</div>
-                                                        <div class="text-muted" style="font-size: 0.72rem;">{{ item.emp.employee_code }}</div>
-                                                    </div>
-                                                </a>
-                                            </td>
-                                            <td>
-                                                <div class="fw-medium text-dark small">{{ item.emp.department.name|default:item.emp.company.name }}</div>
-                                            </td>
-                                            <td>
-                                                <div class="text-muted small">{{ item.emp.designation.title|default:"--" }}</div>
-                                            </td>
-                                            <td class="pe-4 text-end">
-                                                <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-2 py-1" style="font-size: 0.7rem;">
-                                                    <i class="bi bi-umbrella me-1"></i>Approved Leave
-                                                </span>
-                                            </td>
-                                        </tr>
-                                        {% empty %}
-                                        <tr>
-                                            <td colspan="4" class="text-center text-muted py-4">No employees on leave for this date.</td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
+                <!-- Recent Live Punches Preview Stream -->
+                {% if recent_punches %}
+                <div class="bg-white rounded-3 p-3 border mb-2">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="small fw-bold text-dark"><i class="bi bi-broadcast text-danger me-1"></i>Recent Live Punch Stream</span>
+                        <span class="badge bg-light text-muted border" style="font-size: 0.7rem;">Latest {{ recent_punches|length }} Punches</span>
                     </div>
+                    <div class="list-group list-group-flush">
+                        {% for punch in recent_punches %}
+                        <div class="d-flex align-items-center justify-content-between py-2 border-bottom">
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="emp-avatar">{{ punch.emp.first_name|first|upper }}</div>
+                                <div>
+                                    <span class="fw-bold text-dark small d-block">{{ punch.emp.full_name }}</span>
+                                    <span class="text-muted" style="font-size: 0.7rem;">{{ punch.emp.employee_code }} • {{ punch.emp.department.name|default:punch.emp.company.name }}</span>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="punch-badge bg-success-subtle text-success border border-success-subtle fw-semibold">
+                                    <i class="bi bi-box-arrow-in-right me-1"></i>{{ punch.check_in|date:"h:i A" }}
+                                </span>
+                                {% if punch.is_running %}
+                                    <span class="live-clock-badge" data-checkin="{{ punch.check_in_iso }}">
+                                        <span class="pulse-dot"></span>
+                                        <span class="live-timer-text">Active</span>
+                                    </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Card Footer Banner -->
+                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center pt-2 mt-1 text-muted" style="font-size: 0.78rem;">
+                    <div>
+                        <i class="bi bi-info-circle text-primary me-1"></i>
+                        <span>Click card to inspect all punches, check-out times, working hours, and historical dates on the <strong>Daily Monitor</strong>.</span>
+                    </div>
+                    <span class="text-primary fw-semibold mt-1 mt-sm-0">
+                        View Details & Calendar <i class="bi bi-arrow-right"></i>
+                    </span>
                 </div>
 
             </div>
+
+            <!-- ACTIVE JOBS & RECRUITMENT SPOTLIGHT -->
+            <div class="card executive-card shadow-sm border-0 p-3 mb-4">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="icon-box icon-box-indigo" style="width:36px; height:36px; font-size:1rem;">
+                            <i class="bi bi-briefcase-fill"></i>
+                        </div>
+                        <div>
+                            <h6 class="mb-0 fw-bold text-dark">Active Recruitment Pipeline</h6>
+                            <span class="text-muted small">Open vacancies and candidates in screening</span>
+                        </div>
+                    </div>
+                    <a href="{% url 'hrms:jobposting_list' %}" class="small text-primary text-decoration-none fw-semibold">
+                        View All Jobs ({{ open_jobs|default:0 }}) <i class="bi bi-chevron-right"></i>
+                    </a>
+                </div>
+
+                <div class="row g-3">
+                    {% for job in open_jobs_list %}
+                    <div class="col-12 col-md-6">
+                        <div class="p-3 bg-light rounded-3 border d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="mb-0 fw-bold text-dark small">{{ job.title }}</h6>
+                                <span class="text-muted" style="font-size: 0.72rem;">{{ job.company.name }} • Posted {{ job.created_at|date:"d M" }}</span>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-2" style="font-size: 0.72rem;">
+                                    {{ job.app_count }} Apps
+                                </span>
+                                <a href="{% url 'hrms:job_kanban' job.pk %}" class="btn btn-sm btn-white border py-1 px-2" title="View Kanban Pipeline">
+                                    <i class="bi bi-kanban text-muted"></i>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    {% empty %}
+                    <div class="col-12 text-center text-muted py-3 small">
+                        No active job postings for this unit.
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- EXPLORE ALL MODULES: full sitemap of the HRMS, organized by function -->
+<!--            <div class="mt-2">-->
+<!--                <div class="d-flex align-items-center justify-content-between mb-3">-->
+<!--                    <div>-->
+<!--                        <h5 class="fw-bold text-dark mb-0"><i class="bi bi-grid-3x3-gap-fill text-primary me-2"></i>Explore All Modules</h5>-->
+<!--                        <span class="text-muted small">Every workspace in the HRMS, one click away</span>-->
+<!--                    </div>-->
+<!--                </div>-->
+
+<!--                <div class="row g-3">-->
+
+<!--                    &lt;!&ndash; Organization &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-primary" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-diagram-3-fill"></i></div>-->
+<!--                                <p class="module-card-title">Organization</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:company_list' %}"><span>Companies / Units</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:department_list' %}"><span>Departments</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:designation_list' %}"><span>Designations</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:employee_list' %}"><span>Employee Directory</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Hiring & Recruitment &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-indigo" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-briefcase-fill"></i></div>-->
+<!--                                <p class="module-card-title">Hiring &amp; Recruitment</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:jobposting_list' %}"><span>Job Postings</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:candidate_list' %}"><span>Candidates</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:application_list' %}"><span>Applications</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:interview_list' %}"><span>Interviews</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:recruitmentstage_list' %}"><span>Recruitment Stages</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:offertemplate_list' %}"><span>Offer Templates</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Attendance & Time &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-success" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-clock-fill"></i></div>-->
+<!--                                <p class="module-card-title">Attendance &amp; Time</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:attendance_daily_monitor' %}"><span>Daily Punch Monitor</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:attendance_records' %}"><span>Attendance Records</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:attendance_matrix' %}"><span>Attendance Matrix</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:regularization_list' %}"><span>Regularization Requests</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:attendance_policy' %}"><span>Attendance Policies</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:holiday_list' %}"><span>Holiday Calendar</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:biometric_status_list' %}"><span>Biometric Status</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:kiosk_page' %}"><span>Kiosk Punch-In</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Leave Management &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-purple" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-umbrella-fill"></i></div>-->
+<!--                                <p class="module-card-title">Leave Management</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:my_leave' %}"><span>My Leave</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:leave_balance' %}"><span>Leave Balances</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:leavetype_list' %}"><span>Leave Types</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:leave-bank' %}"><span>Leave Bank</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:comp_off_hr' %}"><span>Comp Off Overview (HR)</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:comp_off_history' %}"><span>My Comp Off History</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Payroll & Compensation &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-amber" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-cash-stack"></i></div>-->
+<!--                                <p class="module-card-title">Payroll &amp; Compensation</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:salarystructure_list' %}"><span>Salary Structures</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:employee_salary_list' %}"><span>Employee Salaries</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:loan_list' %}"><span>Loans &amp; Advances</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:extra_list' %}"><span>Payroll Extras</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:payrollrun_list' %}"><span>Payroll Runs</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:my_payslips' %}"><span>My Payslips</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:bulk_payment_payout' %}"><span>Bank Bulk Payout</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Assets &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-teal" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-laptop-fill"></i></div>-->
+<!--                                <p class="module-card-title">Assets</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:asset_list' %}"><span>All Assets</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:asset_add' %}"><span>Register New Asset</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Performance &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-sky" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-graph-up-arrow"></i></div>-->
+<!--                                <p class="module-card-title">Performance</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:performance_list' %}"><span>Performance Reviews</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:performance_add' %}"><span>New Review</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:manager_dashboard' %}"><span>Manager Dashboard</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                    &lt;!&ndash; Policies & Notices &ndash;&gt;-->
+<!--                    <div class="col-6 col-md-4 col-xl-3">-->
+<!--                        <div class="module-card">-->
+<!--                            <div class="module-card-header">-->
+<!--                                <div class="icon-box icon-box-rose" style="width:34px;height:34px;font-size:0.95rem;"><i class="bi bi-file-earmark-text-fill"></i></div>-->
+<!--                                <p class="module-card-title">Policies &amp; Notices</p>-->
+<!--                            </div>-->
+<!--                            <ul class="module-link-list">-->
+<!--                                <li><a href="{% url 'hrms:policy_list' %}"><span>Company Policies</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                                <li><a href="{% url 'hrms:notice_list' %}"><span>Notice Board</span><i class="bi bi-chevron-right"></i></a></li>-->
+<!--                            </ul>-->
+<!--                        </div>-->
+<!--                    </div>-->
+
+<!--                </div>-->
+<!--            </div>-->
+
         </div>
 
-        <!-- RIGHT COLUMN: Quick Actions, Celebrations & Active Jobs -->
+        <!-- RIGHT COLUMN: Fast Ops Actions, Celebrations & Work Policy Overview -->
         <div class="col-lg-4 col-xl-3">
 
-            <!-- Quick Action Buttons -->
-            <div class="card attendo-card shadow-sm bg-dark text-white p-3 mb-4 border-0" style="background: linear-gradient(145deg, #0f172a, #1e293b) !important;">
-                <div class="d-flex align-items-center justify-content-between mb-3">
-                    <h6 class="fw-bold mb-0 text-white"><i class="bi bi-lightning-charge-fill text-warning me-2"></i>Quick Actions</h6>
-                    <span class="badge bg-white bg-opacity-10 text-white rounded-pill px-2" style="font-size: 0.65rem;">Fast Ops</span>
+
+
+            <!-- Shift & Policy Snapshot Widget -->
+            <div class="card executive-card shadow-sm p-3 mb-4">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="fw-bold mb-0 text-dark">
+                        <i class="bi bi-clock text-primary me-2"></i>Shift Policy Rules
+                    </h6>
+                    <a href="{% url 'hrms:attendance_policy' %}" class="small text-primary text-decoration-none fw-semibold" style="font-size: 0.72rem;">Configure</a>
                 </div>
-                <div class="d-grid gap-2">
-                    <a href="{% url 'hrms:employee_add' %}" class="btn btn-primary btn-sm rounded-3 text-start py-2 fw-medium shadow-sm">
-                        <i class="bi bi-person-plus-fill me-2"></i> Add New Employee
-                    </a>
-                    <a href="{% url 'hrms:my_leave' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
-                        <i class="bi bi-calendar2-plus me-2 text-info"></i> Leave Applications
-                    </a>
-                    <a href="{% url 'hrms:asset_add' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
-                        <i class="bi bi-laptop me-2 text-success"></i> Register New Asset
-                    </a>
-<!--                    <a href="{% url 'hrms:performance_add' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">-->
-<!--                        <i class="bi bi-graph-up-arrow me-2 text-warning"></i> New Performance Review-->
-<!--                    </a>-->
-                    <a href="{% url 'hrms:notice_list' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
-                        <i class="bi bi-megaphone-fill me-2"></i> Post Notice / Memo
-                    </a>
-                    <a href="{% url 'hrms:payrollrun_list' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
-                        <i class="bi bi-cash-stack me-2"></i> Run Payroll Run
-                    </a>
-                    <a href="{% url 'hrms:attendance_records' %}" class="btn btn-outline-light btn-sm rounded-3 text-start py-2 fw-medium">
-                        <i class="bi bi-file-earmark-spreadsheet me-2"></i> Full Attendance Logs
-                    </a>
+                <div class="p-2 bg-light rounded-3 border mb-2" style="font-size: 0.76rem;">
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-muted">Standard Hours:</span>
+                        <strong class="text-dark">{{ active_shift_start }} – {{ active_shift_end }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-muted">Grace Allowance:</span>
+                        <span class="badge bg-warning-subtle text-warning border">{{ active_grace_minutes }} mins</span>
+                    </div>
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-muted">Active Policies:</span>
+                        <span class="text-dark fw-semibold">{{ total_policies_count }} policies active</span>
+                    </div>
                 </div>
             </div>
+
             <!-- Celebrations (Birthdays This Month) -->
-            <div class="card attendo-card shadow-sm mb-4 border-0">
+            <div class="card executive-card shadow-sm mb-4 border-0">
                 <div class="card-header bg-white py-3 px-3 border-bottom d-flex align-items-center justify-content-between">
                     <h6 class="fw-bold mb-0 text-dark">
                         <i class="bi bi-cake2-fill text-danger me-2"></i>Celebrations
@@ -812,183 +901,8 @@
                 </div>
             </div>
 
-            <!-- Active Jobs (Hiring Pipeline) -->
-            <div class="card attendo-card shadow-sm border-0">
-                <div class="card-header bg-white py-3 px-3 border-bottom d-flex align-items-center justify-content-between">
-                    <h6 class="fw-bold mb-0 text-dark">
-                        <i class="bi bi-briefcase-fill text-primary me-2"></i>Active Jobs
-                    </h6>
-                    <a href="{% url 'hrms:jobposting_list' %}" class="small text-primary text-decoration-none fw-semibold" style="font-size: 0.75rem;">
-                        View All
-                    </a>
-                </div>
-                <div class="list-group list-group-flush">
-                    {% for job in open_jobs_list %}
-                    <a href="{% url 'hrms:jobposting_list' %}" class="list-group-item list-group-item-action border-0 px-3 py-2 d-flex justify-content-between align-items-center">
-                        <div>
-                            <div class="small fw-bold text-dark">{{ job.title }}</div>
-                            <div class="text-muted" style="font-size: 0.7rem;">{{ job.company.name }}</div>
-                        </div>
-                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-2" style="font-size: 0.7rem;">
-                            {{ job.app_count }} Apps
-                        </span>
-                    </a>
-                    {% empty %}
-                    <div class="text-center text-muted p-3 small">No active job postings.</div>
-                    {% endfor %}
-                </div>
-            </div>
-
         </div>
 
-    </div>
-
-    <!-- EXPLORE ALL MODULES: full sitemap of the HRMS, organized by function -->
-    <div class="mt-4">
-        <div class="d-flex align-items-center justify-content-between mb-3">
-            <div>
-                <h5 class="fw-bold text-dark mb-0"><i class="bi bi-grid-3x3-gap-fill text-primary me-2"></i>Explore All Modules</h5>
-                <span class="text-muted small">Every workspace in the HRMS, one click away</span>
-            </div>
-        </div>
-
-        <div class="row g-3">
-
-            <!-- Organization -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-primary" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-diagram-3-fill"></i></div>
-                        <p class="module-card-title">Organization</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:company_list' %}"><span>Companies / Units</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:department_list' %}"><span>Departments</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:designation_list' %}"><span>Designations</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:employee_list' %}"><span>Employee Directory</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Hiring & Recruitment -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-indigo" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-briefcase-fill"></i></div>
-                        <p class="module-card-title">Hiring &amp; Recruitment</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:jobposting_list' %}"><span>Job Postings</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:candidate_list' %}"><span>Candidates</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:application_list' %}"><span>Applications</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:interview_list' %}"><span>Interviews</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:recruitmentstage_list' %}"><span>Recruitment Stages</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:offertemplate_list' %}"><span>Offer Templates</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Attendance & Time -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-success" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-clock-fill"></i></div>
-                        <p class="module-card-title">Attendance &amp; Time</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:attendance_records' %}"><span>Attendance Records</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:attendance_matrix' %}"><span>Attendance Matrix</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:regularization_list' %}"><span>Regularization Requests</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:attendance_policy' %}"><span>Attendance Policies</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:holiday_list' %}"><span>Holiday Calendar</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:live_tracking_dashboard' %}"><span>Live Tracking</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:biometric_status_list' %}"><span>Biometric Status</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:kiosk_page' %}"><span>Kiosk Punch-In</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Leave Management -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-purple" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-umbrella-fill"></i></div>
-                        <p class="module-card-title">Leave Management</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:my_leave' %}"><span>My Leave</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:leave_balance' %}"><span>Leave Balances</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:leavetype_list' %}"><span>Leave Types</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:leave-bank' %}"><span>Leave Bank</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:comp_off_hr' %}"><span>Comp Off Overview (HR)</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:comp_off_history' %}"><span>My Comp Off History</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Payroll & Compensation -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-amber" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-cash-stack"></i></div>
-                        <p class="module-card-title">Payroll &amp; Compensation</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:salarystructure_list' %}"><span>Salary Structures</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:employee_salary_list' %}"><span>Employee Salaries</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:loan_list' %}"><span>Loans &amp; Advances</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:extra_list' %}"><span>Payroll Extras</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:payrollrun_list' %}"><span>Payroll Runs</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:my_payslips' %}"><span>My Payslips</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:bulk_payment_payout' %}"><span>Bank Bulk Payout</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Assets -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-teal" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-laptop-fill"></i></div>
-                        <p class="module-card-title">Assets</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:asset_list' %}"><span>All Assets</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:asset_add' %}"><span>Register New Asset</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Performance -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-sky" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-graph-up-arrow"></i></div>
-                        <p class="module-card-title">Performance</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:performance_list' %}"><span>Performance Reviews</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:performance_add' %}"><span>New Review</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:manager_dashboard' %}"><span>Manager Dashboard</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Policies & Notices -->
-            <div class="col-6 col-md-4 col-xl-3">
-                <div class="module-card">
-                    <div class="module-card-header">
-                        <div class="icon-box icon-box-rose" style="width:36px;height:36px;font-size:1rem;"><i class="bi bi-file-earmark-text-fill"></i></div>
-                        <p class="module-card-title">Policies &amp; Notices</p>
-                    </div>
-                    <ul class="module-link-list">
-                        <li><a href="{% url 'hrms:policy_list' %}"><span>Company Policies</span><i class="bi bi-chevron-right"></i></a></li>
-                        <li><a href="{% url 'hrms:notice_list' %}"><span>Notice Board</span><i class="bi bi-chevron-right"></i></a></li>
-                    </ul>
-                </div>
-            </div>
-
-        </div>
     </div>
 
 </div>
@@ -996,37 +910,7 @@
 
 {% block extra_js %}
 <script>
-    // 1. Tab Switcher Helper (Used by Mini Summary Pills)
-    function switchTab(tabButtonId) {
-        const btn = document.getElementById(tabButtonId);
-        if (btn) {
-            const trigger = new bootstrap.Tab(btn);
-            trigger.show();
-        }
-    }
-
-    // 2. Real-Time Client-Side Table Search (Filters across name, ID code & designation)
-    const searchInput = document.getElementById('employeeSearchInput');
-    if (searchInput) {
-        searchInput.addEventListener('input', function() {
-            const query = this.value.trim().toLowerCase();
-            const rows = document.querySelectorAll('.table-row-item');
-
-            rows.forEach(row => {
-                const name = row.getAttribute('data-name') || '';
-                const code = row.getAttribute('data-code') || '';
-                const desig = row.getAttribute('data-desig') || '';
-
-                if (name.includes(query) || code.includes(query) || desig.includes(query)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            });
-        });
-    }
-
-    // 3. Live Running Clock (Calculates elapsed hours & minutes from ISO check-in time)
+    // Live Running Clock for Recent Punch Stream
     function updateLiveWorkingClocks() {
         const liveBadges = document.querySelectorAll('.live-clock-badge');
         const now = new Date();
@@ -1054,8 +938,7 @@
         });
     }
 
-    // Initial update and periodic interval update every 30 seconds
     updateLiveWorkingClocks();
-    setInterval(updateLiveWorkingClocks, 30000);
+    setInterval(updateLiveWorkingClocks, 10000);
 </script>
 {% endblock %}

@@ -131,11 +131,11 @@
             <ul class="nav flex-column hrms-sublist">
               {% if hrms_is_hr or request.user.is_superuser %}
               <li><a href="{% url 'hrms:jobposting_list' %}" class="{% if active_item == 'jobposting' %}current{% endif %}"><i class="bi bi-briefcase me-1 text-purple-400"></i>Job Postings</a></li>
-              <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}"><i class="bi bi-kanban me-1"></i>Applications</a></li>
-<!--              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}"><i class="bi bi-person-lines-fill me-1"></i>Candidates</a></li>-->
-              <li><a href="{% url 'hrms:talent_pool' %}" class="{% if active_item == 'talent_pool' %}current{% endif %}"><i class="bi bi-people me-1"></i>Talent Pool</a></li>
+<!--              <li><a href="{% url 'hrms:application_list' %}" class="{% if active_item == 'application' %}current{% endif %}"><i class="bi bi-kanban me-1"></i>Applications</a></li>-->
+              <li><a href="{% url 'hrms:candidate_list' %}" class="{% if active_item == 'candidate' %}current{% endif %}"><i class="bi bi-person-lines-fill me-1"></i>Candidates</a></li>
+<!--              <li><a href="{% url 'hrms:talent_pool' %}" class="{% if active_item == 'talent_pool' %}current{% endif %}"><i class="bi bi-people me-1"></i>Talent Pool</a></li>-->
               <li><a href="{% url 'hrms:interview_list' %}" class="{% if active_item == 'interview' %}current{% endif %}"><i class="bi bi-calendar-week me-1"></i>All Interviews</a></li>
-              <li><a href="{% url 'hrms:recruitmentstage_list' %}" class="{% if active_item == 'recruitmentstage' %}current{% endif %}"><i class="bi bi-diagram-3 me-1"></i>Pipeline Stages</a></li>
+<!--              <li><a href="{% url 'hrms:recruitmentstage_list' %}" class="{% if active_item == 'recruitmentstage' %}current{% endif %}"><i class="bi bi-diagram-3 me-1"></i>Pipeline Stages</a></li>-->
               {% else %}
               <li><a href="{% url 'hrms:my_interviews' %}" class="{% if active_item == 'my_interviews' %}current{% endif %}"><i class="bi bi-camera-video me-1"></i>My Interviews</a></li>
               {% endif %}

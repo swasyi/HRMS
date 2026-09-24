@@ -23,14 +23,14 @@ from django.core.files.storage import default_storage
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy, reverse
 from django.utils import timezone
-from django.db.models import Q, Count, Max, Sum
+from django.db.models import Q, Count, Max, Sum, Prefetch
 from . import forms as f
 from . import models as m
 from . import leave_logic as lv
 from . import payroll_logic as pay
 from . import attendance_logic as att_logic
 from . import hiring_logic as hire
-from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE
+from .permissions import get_role, is_hr_or_above, get_employee_profile, ROLE_SUPERADMIN, ROLE_HR, ROLE_EMPLOYEE, HRRequiredMixin
 from .emails import send_leave_notification_email
 
 
@@ -153,8 +153,213 @@ def set_active_company(request):
     return redirect(request.META.get('HTTP_REFERER', 'hrms:dashboard'))
 
 
+class SidebarContextMixin:
+    """Injects the active_group/active_item so the sidebar highlights correctly."""
+    active_group = 'dashboard'
+    active_item = ''
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['active_group'] = self.active_group
+        ctx['active_item'] = self.active_item
+        return ctx
+
+
+class AttendanceDailyMonitorView(HRRequiredMixin, SidebarContextMixin, TemplateView):
+    """
+    Dedicated Full-Page Daily Attendance & Punch Monitor.
+    Provides complete punch timestamps, first punch, last punch, working hours,
+    live clock status, and an interactive calendar to inspect any date.
+    """
+    template_name = 'hrms/attendance/daily_monitor.html'
+    active_group, active_item = 'attendance', 'attendance_records'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        request = self.request
+        user = request.user
+
+        # 1. Calendar date selection (defaults to today)
+        target_date_str = request.GET.get('date')
+        if target_date_str:
+            try:
+                target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                target_date = date.today()
+        else:
+            target_date = date.today()
+
+        today = date.today()
+        is_today = (target_date == today)
+
+        # 2. Company permissions & filter
+        if user.is_superuser:
+            available_companies = m.Company.objects.all()
+        else:
+            employee_profile = get_employee_profile(user)
+            if employee_profile and employee_profile.company:
+                available_companies = m.Company.objects.filter(
+                    Q(id=employee_profile.company_id) | Q(managers=employee_profile)
+                ).distinct()
+            else:
+                available_companies = m.Company.objects.none()
+
+        active_company_id = request.session.get('active_company_id')
+        emp_filter = Q(status=m.Employee.Status.ACTIVE)
+        attend_filter = Q(attendance_date=target_date)
+
+        if active_company_id and active_company_id != 'all':
+            emp_filter &= Q(company_id=active_company_id)
+            attend_filter &= Q(employee__company_id=active_company_id)
+        elif not user.is_superuser:
+            allowed_ids = list(available_companies.values_list('id', flat=True))
+            emp_filter &= Q(company_id__in=allowed_ids)
+            attend_filter &= Q(employee__company_id__in=allowed_ids)
+
+        active_employees = m.Employee.objects.filter(emp_filter).select_related(
+            'designation', 'department', 'company'
+        ).order_by('first_name', 'last_name')
+
+        attendance_records = m.AttendanceRecord.objects.filter(attend_filter).select_related('employee')
+        attendance_map = {r.employee_id: r for r in attendance_records}
+
+        on_leave_emp_ids = set(
+            m.LeaveApplication.objects.filter(
+                status=m.LeaveApplication.Status.APPROVED,
+                start_date__lte=target_date,
+                end_date__gte=target_date,
+                employee__in=active_employees
+            ).values_list('employee_id', flat=True)
+        )
+
+        all_detailed = []
+        present_detailed = []
+        absent_detailed = []
+        on_leave_detailed = []
+        currently_working_count = 0
+
+        for emp in active_employees:
+            record = attendance_map.get(emp.id)
+            policy = (
+                emp.company.get_policy_for_date(target_date)
+                if hasattr(emp.company, 'get_policy_for_date')
+                else None
+            )
+            grace_minutes = policy.grace_minutes if policy else 15
+
+            if record and (record.check_in or record.status in [m.AttendanceRecord.Status.PRESENT, m.AttendanceRecord.Status.HALF_DAY]):
+                is_grace = False
+                is_late = False
+                if record.late_minutes > 0:
+                    if record.late_minutes <= grace_minutes:
+                        is_grace = True
+                    else:
+                        is_late = True
+                elif record.check_in and policy and policy.office_start_time:
+                    local_in = timezone.localtime(record.check_in).time()
+                    if local_in > policy.office_start_time:
+                        diff_sec = (datetime.combine(date(2000, 1, 1), local_in) - datetime.combine(date(2000, 1, 1), policy.office_start_time)).total_seconds()
+                        if int(diff_sec / 60) <= grace_minutes:
+                            is_grace = True
+                        else:
+                            is_late = True
+
+                is_running = False
+                if record.check_in and not record.check_out:
+                    currently_working_count += 1
+                    if is_today:
+                        is_running = True
+
+                total_hours_display = ''
+                if record.total_hours and record.total_hours > 0:
+                    hrs = int(record.total_hours)
+                    mins = int((record.total_hours - hrs) * 60)
+                    total_hours_display = f'{hrs:02d}h {mins:02d}m'
+                elif record.check_in and record.check_out:
+                    diff_sec = (record.check_out - record.check_in).total_seconds()
+                    hrs = int(diff_sec // 3600)
+                    mins = int((diff_sec % 3600) // 60)
+                    total_hours_display = f'{hrs:02d}h {mins:02d}m'
+
+                emp_item = {
+                    'emp': emp,
+                    'record': record,
+                    'status_category': 'present',
+                    'check_in': record.check_in,
+                    'check_out': record.check_out,
+                    'check_in_iso': record.check_in.isoformat() if record.check_in else '',
+                    'total_hours_display': total_hours_display,
+                    'is_running': is_running,
+                    'is_grace': is_grace,
+                    'is_late': is_late,
+                    'late_minutes': record.late_minutes,
+                }
+                present_detailed.append(emp_item)
+                all_detailed.append(emp_item)
+
+            elif emp.id in on_leave_emp_ids or (record and record.status == m.AttendanceRecord.Status.ON_LEAVE):
+                emp_item = {
+                    'emp': emp,
+                    'record': record,
+                    'status_category': 'on_leave',
+                    'check_in': None,
+                    'check_out': None,
+                    'check_in_iso': '',
+                    'total_hours_display': '--',
+                    'is_running': False,
+                    'is_grace': False,
+                    'is_late': False,
+                    'late_minutes': 0,
+                }
+                on_leave_detailed.append(emp_item)
+                all_detailed.append(emp_item)
+
+            else:
+                emp_item = {
+                    'emp': emp,
+                    'record': record,
+                    'status_category': 'absent',
+                    'check_in': None,
+                    'check_out': None,
+                    'check_in_iso': '',
+                    'total_hours_display': '--',
+                    'is_running': False,
+                    'is_grace': False,
+                    'is_late': False,
+                    'late_minutes': 0,
+                }
+                absent_detailed.append(emp_item)
+                all_detailed.append(emp_item)
+
+        total_count = active_employees.count()
+        present_count = len(present_detailed)
+        absent_count = len(absent_detailed)
+        time_off_count = len(on_leave_detailed)
+        attendance_pct = round((present_count / total_count) * 100) if total_count > 0 else 0
+
+        ctx.update({
+            'selected_date': target_date.strftime('%Y-%m-%d'),
+            'display_date': target_date.strftime('%d %b, %Y'),
+            'is_today': is_today,
+            'available_companies': available_companies,
+            'active_company_id': active_company_id,
+            'total_employees': total_count,
+            'present_count': present_count,
+            'absent_count': absent_count,
+            'time_off_count': time_off_count,
+            'currently_working': currently_working_count,
+            'attendance_percentage': attendance_pct,
+            'all_employees_detailed': all_detailed,
+            'present_employees_detailed': present_detailed,
+            'absent_employees': absent_detailed,
+            'on_leave_employees': on_leave_detailed,
+        })
+        return ctx
+
+
 @login_required
 def dashboard(request):
+    import calendar
     user = request.user
     role = get_role(user)
 
@@ -180,69 +385,101 @@ def dashboard(request):
     }
 
     if is_hr_or_above(user):
-        # --- 2. Permission-Based Company List ---
+        # 2. Permission-Based Company List
         if user.is_superuser:
             available_companies = m.Company.objects.all()
         else:
             employee_profile = get_employee_profile(user)
-            if employee_profile:
-                # HR sees primary company + managed companies
+            if employee_profile and employee_profile.company:
                 available_companies = m.Company.objects.filter(
-                    Q(id=employee_profile.company_id) |
-                    Q(managed_companies__id=employee_profile.id)
+                    Q(id=employee_profile.company_id) | Q(managers=employee_profile)
                 ).distinct()
             else:
                 available_companies = m.Company.objects.none()
 
         active_company_id = request.session.get('active_company_id')
+        current_company = None
+        if active_company_id and active_company_id != 'all':
+            current_company = available_companies.filter(id=active_company_id).first()
+            current_company_name = current_company.name if current_company else "Unit"
+        else:
+            current_company_name = "All Global Units"
 
-        # --- 3. Robust Permission-Based Filters ---
+        # 3. Robust Permission & Company-Based Filters
         emp_filter = Q(status=m.Employee.Status.ACTIVE)
         leave_filter = Q(status=m.LeaveApplication.Status.PENDING)
         job_filter = Q(is_active=True)
         attend_filter = Q(attendance_date=target_date)
+        asset_filter = Q()
+        policy_filter = Q()
+        app_filter = Q()
 
-        if active_company_id and active_company_id != "all":
+        if active_company_id and active_company_id != 'all':
             emp_filter &= Q(company_id=active_company_id)
             leave_filter &= Q(employee__company_id=active_company_id)
             job_filter &= Q(company_id=active_company_id)
             attend_filter &= Q(employee__company_id=active_company_id)
+            asset_filter &= Q(company_id=active_company_id)
+            policy_filter &= Q(company_id=active_company_id)
+            app_filter &= Q(job_posting__company_id=active_company_id)
         elif not user.is_superuser:
             allowed_ids = list(available_companies.values_list('id', flat=True))
             emp_filter &= Q(company_id__in=allowed_ids)
             leave_filter &= Q(employee__company_id__in=allowed_ids)
             job_filter &= Q(company_id__in=allowed_ids)
             attend_filter &= Q(employee__company_id__in=allowed_ids)
+            asset_filter &= Q(company_id__in=allowed_ids)
+            policy_filter &= Q(company_id__in=allowed_ids)
+            app_filter &= Q(job_posting__company_id__in=allowed_ids)
 
-        # --- 4. Fetch Optimized Data ---
-        active_employees = m.Employee.objects.filter(emp_filter).select_related('designation', 'department', 'company')
+        # 4. Fetch Optimized Data & Sub-metrics
+        active_employees = m.Employee.objects.filter(emp_filter).select_related(
+            'designation', 'department', 'company'
+        )
+        total_employees = active_employees.count()
+
+        if active_company_id and active_company_id != 'all':
+            total_departments = m.Department.objects.filter(company_id=active_company_id).count()
+            total_designations = m.Designation.objects.filter(department__company_id=active_company_id).count()
+        else:
+            total_departments = m.Department.objects.count()
+            total_designations = m.Designation.objects.count()
+
+        curr_month_start = today.replace(day=1)
+        new_joiners_count = active_employees.filter(date_of_joining__gte=curr_month_start).count()
+
+        # 5. Attendance & Live Clock Processing
         attendance_records = m.AttendanceRecord.objects.filter(attend_filter).select_related('employee')
         attendance_map = {r.employee_id: r for r in attendance_records}
 
-        # Identify employees with approved leave on target_date
-        on_leave_emp_ids = set(m.LeaveApplication.objects.filter(
-            status=m.LeaveApplication.Status.APPROVED,
-            start_date__lte=target_date,
-            end_date__gte=target_date
-        ).values_list('employee_id', flat=True))
+        on_leave_emp_ids = set(
+            m.LeaveApplication.objects.filter(
+                status=m.LeaveApplication.Status.APPROVED,
+                start_date__lte=target_date,
+                end_date__gte=target_date,
+                employee__in=active_employees
+            ).values_list('employee_id', flat=True)
+        )
 
-        # --- 5. Categorize Attendance with Grace Period & Live Timing ---
-        present_employees_detailed = []
+        present_employees = []
         absent_employees = []
         on_leave_employees = []
         all_employees_detailed = []
         currently_working_count = 0
+        recent_punches = []
 
         for emp in active_employees:
             record = attendance_map.get(emp.id)
-            policy = emp.company.get_policy_for_date(target_date) if emp.company else None
+            policy = (
+                emp.company.get_policy_for_date(target_date)
+                if hasattr(emp.company, 'get_policy_for_date')
+                else None
+            )
             grace_minutes = policy.grace_minutes if policy else 15
 
             if record and (record.check_in or record.status in [m.AttendanceRecord.Status.PRESENT, m.AttendanceRecord.Status.HALF_DAY]):
-                # Status checks: Grace vs Late vs On-Time
                 is_grace = False
                 is_late = False
-
                 if record.late_minutes > 0:
                     if record.late_minutes <= grace_minutes:
                         is_grace = True
@@ -250,34 +487,29 @@ def dashboard(request):
                         is_late = True
                 elif record.check_in and policy and policy.office_start_time:
                     local_in = timezone.localtime(record.check_in).time()
-                    office_start = policy.office_start_time
-                    if local_in > office_start:
-                        dummy_d = date(2000, 1, 1)
-                        diff_sec = (datetime.combine(dummy_d, local_in) - datetime.combine(dummy_d, office_start)).total_seconds()
-                        diff_m = int(diff_sec / 60)
-                        if diff_m <= grace_minutes:
+                    if local_in > policy.office_start_time:
+                        diff_sec = (datetime.combine(date(2000, 1, 1), local_in) - datetime.combine(date(2000, 1, 1), policy.office_start_time)).total_seconds()
+                        if int(diff_sec / 60) <= grace_minutes:
                             is_grace = True
                         else:
                             is_late = True
 
-                # Check if currently working (checked in, not checked out)
                 is_running = False
                 if record.check_in and not record.check_out:
                     currently_working_count += 1
                     if is_today:
                         is_running = True
 
-                # Total hours display
-                total_hours_display = ""
+                total_hours_display = ''
                 if record.total_hours and record.total_hours > 0:
                     hrs = int(record.total_hours)
                     mins = int((record.total_hours - hrs) * 60)
-                    total_hours_display = f"{hrs:02d}h {mins:02d}m"
+                    total_hours_display = f'{hrs:02d}h {mins:02d}m'
                 elif record.check_in and record.check_out:
                     diff_sec = (record.check_out - record.check_in).total_seconds()
                     hrs = int(diff_sec // 3600)
                     mins = int((diff_sec % 3600) // 60)
-                    total_hours_display = f"{hrs:02d}h {mins:02d}m"
+                    total_hours_display = f'{hrs:02d}h {mins:02d}m'
 
                 emp_item = {
                     'emp': emp,
@@ -292,8 +524,10 @@ def dashboard(request):
                     'is_late': is_late,
                     'late_minutes': record.late_minutes,
                 }
-                present_employees_detailed.append(emp_item)
+                present_employees.append(emp_item)
                 all_employees_detailed.append(emp_item)
+                if record.check_in:
+                    recent_punches.append(emp_item)
 
             elif emp.id in on_leave_emp_ids or (record and record.status == m.AttendanceRecord.Status.ON_LEAVE):
                 emp_item = {
@@ -329,17 +563,50 @@ def dashboard(request):
                 absent_employees.append(emp_item)
                 all_employees_detailed.append(emp_item)
 
-        # Total counts
-        total_count = active_employees.count()
-        present_count = len(present_employees_detailed)
-        time_off_count = len(on_leave_employees)
-        absent_count = len(absent_employees)
-        attendance_pct = round((present_count / total_count) * 100) if total_count > 0 else 0
+        recent_punches.sort(key=lambda x: x['check_in'] or timezone.now(), reverse=True)
+        recent_punches = recent_punches[:5]
 
-        # Sidebar data
+        present_count = len(present_employees)
+        absent_count = len(absent_employees)
+        time_off_count = len(on_leave_employees)
+        attendance_pct = round((present_count / total_employees) * 100) if total_employees > 0 else 0
+
+        # 6. Biometrics (Company-Filtered!)
+        enrolled_biometrics_count = m.EmployeeBiometric.objects.filter(employee__in=active_employees).count()
+        pending_biometrics_count = max(0, total_employees - enrolled_biometrics_count)
+        biometric_pct = round((enrolled_biometrics_count / total_employees) * 100) if total_employees > 0 else 0
+
+        # 7. Assets (Company-Filtered!)
+        asset_qs = m.Asset.objects.filter(asset_filter)
+        total_assets = asset_qs.count()
+        assigned_assets = asset_qs.filter(status=m.Asset.Status.ASSIGNED).count()
+        unassigned_assets = asset_qs.filter(status=m.Asset.Status.AVAILABLE).count()
+
+        # 8. Leaves (Company-Filtered!)
+        pending_leaves_count = m.LeaveApplication.objects.filter(leave_filter).count()
+        approved_leaves_month = m.LeaveApplication.objects.filter(
+            status=m.LeaveApplication.Status.APPROVED,
+            start_date__gte=curr_month_start,
+            employee__in=active_employees
+        ).count()
+
+        # 9. Hiring & Jobs (Company-Filtered!)
+        open_jobs_count = m.JobPosting.objects.filter(job_filter).count()
+        applications_qs = m.Application.objects.filter(app_filter)
+        total_applications_count = applications_qs.count()
+        shortlisted_candidates_count = applications_qs.filter(status='shortlisted').count()
+        interviewing_candidates_count = applications_qs.filter(status='interviewing').count()
         open_jobs_list = m.JobPosting.objects.filter(job_filter).annotate(
             app_count=Count('applications')
         ).order_by('-created_at')[:4]
+
+        # 10. Policies & Shift Rules (Company-Filtered!)
+        policy_qs = m.AttendancePolicy.objects.filter(policy_filter)
+        total_policies_count = policy_qs.count()
+        first_policy = policy_qs.order_by('-effective_from').first()
+        active_shift_start = first_policy.office_start_time.strftime('%I:%M %p') if first_policy and first_policy.office_start_time else "09:30 AM"
+        active_shift_end = first_policy.office_end_time.strftime('%I:%M %p') if first_policy and first_policy.office_end_time else "06:30 PM"
+        active_grace_minutes = first_policy.grace_minutes if first_policy else 15
 
         upcoming_birthdays = active_employees.filter(
             date_of_birth__month=target_date.month
@@ -348,53 +615,83 @@ def dashboard(request):
         context.update({
             'available_companies': available_companies,
             'active_company_id': active_company_id,
-            'total_employees': total_count,
+            'current_company_name': current_company_name,
+
+            # Power Card 1: Workforce & Directory
+            'total_employees': total_employees,
+            'total_departments': total_departments,
+            'total_designations': total_designations,
+            'new_joiners_count': new_joiners_count,
+
+            # Power Card 2: Live Clock & Attendance
             'currently_working': currently_working_count,
-            'on_break_count': 0,
-            'time_off_count': time_off_count,
-            'pending_biometrics': 0,
             'present_today': present_count,
             'absent_count': absent_count,
+            'time_off_count': time_off_count,
             'attendance_percentage': attendance_pct,
-            'pending_leaves': m.LeaveApplication.objects.filter(leave_filter).count(),
-            'open_jobs': m.JobPosting.objects.filter(job_filter).count(),
+            'recent_punches': recent_punches,
 
-            # Tab data
+            # Power Card 3: Leave Applications
+            'pending_leaves': pending_leaves_count,
+            'on_leave_today': time_off_count,
+            'approved_leaves_month': approved_leaves_month,
+
+            # Power Card 4: Recruitment & Jobs
+            'open_jobs': open_jobs_count,
+            'total_applications': total_applications_count,
+            'shortlisted_candidates': shortlisted_candidates_count,
+            'interviewing_candidates': interviewing_candidates_count,
+            'open_jobs_list': open_jobs_list,
+
+            # Power Card 5: Face Biometrics
+            'enrolled_biometrics': enrolled_biometrics_count,
+            'pending_biometrics': pending_biometrics_count,
+            'biometric_percentage': biometric_pct,
+
+            # Power Card 6: Company Policies
+            'total_policies_count': total_policies_count,
+            'active_shift_start': active_shift_start,
+            'active_shift_end': active_shift_end,
+            'active_grace_minutes': active_grace_minutes,
+
+            # Power Card 7: Company Assets
+            'total_assets': total_assets,
+            'assigned_assets': assigned_assets,
+            'unassigned_assets': unassigned_assets,
+
+            # Feed & lists
+            'upcoming_birthdays': upcoming_birthdays,
             'all_employees_detailed': all_employees_detailed,
-            'present_employees_detailed': present_employees_detailed,
+            'present_employees_detailed': present_employees,
             'absent_employees': absent_employees,
             'on_leave_employees': on_leave_employees,
-
-            # Sidebar
-            'upcoming_birthdays': upcoming_birthdays,
-            'open_jobs_list': open_jobs_list,
         })
         template = 'hrms/dashboard_hr.html'
 
     else:
-        # Standard Employee Logic
+        # Standard Employee Dashboard Logic
         employee = get_employee_profile(user)
         if employee:
-            import calendar
             curr_month = today.month
             curr_year = today.year
             first_weekday, num_days = calendar.monthrange(curr_year, curr_month)
             leading_empty_range = list(range(first_weekday))
             trailing_empty_count = (7 - ((first_weekday + num_days) % 7)) % 7
             trailing_empty_range = list(range(trailing_empty_count))
-            month_days = [date(curr_year, curr_month, d) for d in range(1, num_days + 1)]
+            month_days = [
+                date(curr_year, curr_month, d) for d in range(1, num_days + 1)
+            ]
 
-            # Today's punch record
-            today_record = m.AttendanceRecord.objects.filter(employee=employee, attendance_date=today).first()
+            today_record = m.AttendanceRecord.objects.filter(
+                employee=employee, attendance_date=today
+            ).first()
 
-            # Month attendance records & leaves
             month_records = m.AttendanceRecord.objects.filter(
                 employee=employee,
                 attendance_date__range=[month_days[0], month_days[-1]]
             )
             rec_map = {r.attendance_date: r for r in month_records}
 
-            # Approved leaves
             app_leaves = m.LeaveApplication.objects.filter(
                 employee=employee,
                 status=m.LeaveApplication.Status.APPROVED,
@@ -408,14 +705,12 @@ def dashboard(request):
                     leave_day_map[c] = l.leave_type.code
                     c += timedelta(days=1)
 
-            # Holidays
             holidays = m.Holiday.objects.filter(
                 calendar=employee.holiday_calendar,
                 date__range=[month_days[0], month_days[-1]]
             ) if employee.holiday_calendar else []
             holiday_map = {h.date: h.name for h in holidays}
 
-            # Month Grid Cells
             present_days = 0
             half_days = 0
             absent_days = 0
@@ -448,11 +743,11 @@ def dashboard(request):
                 elif h_name:
                     cell_status = 'holiday'
                     badge_color = 'info'
-                    label = h_name
+                    label = f'Holiday: {h_name}'
                 elif d.weekday() == 6:
                     cell_status = 'week_off'
                     badge_color = 'secondary'
-                    label = 'Week Off'
+                    label = 'Sunday Off'
                 elif d > today:
                     cell_status = 'future'
                     badge_color = 'light text-muted'
@@ -466,28 +761,39 @@ def dashboard(request):
                     'badge_color': badge_color,
                     'label': label,
                     'record': r,
-                    'is_past': d <= today and d.weekday() != 6 and not h_name and not l_code,
+                    'is_past': (d <= today and d.weekday() != 6 and not h_name and not l_code),
                 })
 
-            working_days_so_far = max(1, len([c for c in calendar_cells if c['date'] <= today and c['status'] not in ('week_off', 'holiday')]))
+            working_days_so_far = max(1, len([
+                c for c in calendar_cells
+                if c['date'] <= today and c['status'] not in ('week_off', 'holiday')
+            ]))
             att_pct = round(((present_days + 0.5 * half_days) / working_days_so_far) * 100)
 
-            # Upcoming Holidays
-            upcoming_holidays = m.Holiday.objects.filter(
-                calendar=employee.holiday_calendar,
-                date__gte=today
-            ).order_by('date')[:4] if employee.holiday_calendar else []
+            upcoming_holidays = (
+                m.Holiday.objects.filter(
+                    calendar=employee.holiday_calendar, date__gte=today
+                ).order_by('date')[:4]
+                if employee.holiday_calendar
+                else []
+            )
 
-            # Leave Live balance
-            leave_live = m.EmployeeLeaveBalanceLive.objects.filter(e_name=employee).first()
+            leave_live = getattr(m, 'EmployeeLeaveBalanceLive', None)
+            leave_live_obj = (
+                leave_live.objects.filter(e_name=employee).first()
+                if leave_live
+                else None
+            )
 
             context.update({
                 'employee': employee,
                 'today_record': today_record,
-                'leave_balances': m.LeaveBalance.objects.filter(employee=employee, year=today.year).select_related('leave_type'),
-                'leave_live': leave_live,
+                'leave_balances': m.EmployeeLeaveBalance.objects.filter(e_name=employee).first(),
+                'leave_live': leave_live_obj,
                 'recent_attendance': month_records.order_by('-attendance_date')[:7],
-                'recent_notices': m.CompanyNotice.objects.filter(company=employee.company, is_active=True).order_by('-notice_date')[:5],
+                'recent_notices': m.CompanyNotice.objects.filter(
+                    company=employee.company, is_active=True
+                ).order_by('-notice_date')[:5],
                 'calendar_cells': calendar_cells,
                 'leading_empty_range': leading_empty_range,
                 'trailing_empty_range': trailing_empty_range,
@@ -495,8 +801,17 @@ def dashboard(request):
                 'present_days': present_days,
                 'half_days': half_days,
                 'absent_days': absent_days,
-                'pending_leaves_count': m.LeaveApplication.objects.filter(employee=employee, status__in=['pending', 'pending_manager', 'pending_hr']).count(),
-                'pending_regularizations_count': m.PunchRegularizationRequest.objects.filter(employee=employee, status='pending').count(),
+                'pending_leaves_count': m.LeaveApplication.objects.filter(
+                    employee=employee,
+                    status__in=['pending', 'pending_manager', 'pending_hr'],
+                ).count(),
+                'pending_regularizations_count': (
+                    m.PunchRegularizationRequest.objects.filter(
+                        employee=employee, status='pending'
+                    ).count()
+                    if hasattr(m, 'PunchRegularizationRequest')
+                    else 0
+                ),
                 'upcoming_holidays': upcoming_holidays,
                 'current_month_name': calendar.month_name[curr_month],
                 'current_year': curr_year,
@@ -504,418 +819,6 @@ def dashboard(request):
         template = 'hrms/dashboard_employee.html'
 
     return render(request, template, context)
-@login_required
-def dashboard(request):
-  user = request.user
-  role = get_role(user)
-
-  # 1. Date Filtering
-  target_date_str = request.GET.get('date')
-  if target_date_str:
-    try:
-      target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
-    except ValueError:
-      target_date = date.today()
-  else:
-    target_date = date.today()
-
-  today = date.today()
-  is_today = target_date == today
-
-  context = {
-      'active_group': 'dashboard',
-      'active_item': 'dashboard',
-      'selected_date': target_date.strftime('%Y-%m-%d'),
-      'display_date': target_date.strftime('%d %b, %Y'),
-      'is_today': is_today,
-  }
-
-  if is_hr_or_above(user):
-    # --- 2. Permission-Based Company List (FIXED) ---
-    if user.is_superuser:
-      available_companies = m.Company.objects.all()
-    else:
-      employee_profile = get_employee_profile(user)
-      if employee_profile and employee_profile.company:
-        available_companies = m.Company.objects.filter(
-            Q(id=employee_profile.company_id) | Q(managers=employee_profile)
-        ).distinct()
-      else:
-        available_companies = m.Company.objects.none()
-
-    active_company_id = request.session.get('active_company_id')
-
-    # --- 3. Robust Permission-Based Filters ---
-    emp_filter = Q(status=m.Employee.Status.ACTIVE)
-    leave_filter = Q(status=m.LeaveApplication.Status.PENDING)
-    job_filter = Q(is_active=True)
-    attend_filter = Q(attendance_date=target_date)
-
-    if active_company_id and active_company_id != 'all':
-      emp_filter &= Q(company_id=active_company_id)
-      leave_filter &= Q(employee__company_id=active_company_id)
-      job_filter &= Q(company_id=active_company_id)
-      attend_filter &= Q(employee__company_id=active_company_id)
-    elif not user.is_superuser:
-      allowed_ids = list(available_companies.values_list('id', flat=True))
-      emp_filter &= Q(company_id__in=allowed_ids)
-      leave_filter &= Q(employee__company_id__in=allowed_ids)
-      job_filter &= Q(company_id__in=allowed_ids)
-      attend_filter &= Q(employee__company_id__in=allowed_ids)
-
-    # --- 4. Fetch Optimized Data ---
-    active_employees = m.Employee.objects.filter(emp_filter).select_related(
-        'designation', 'department', 'company'
-    )
-    attendance_records = m.AttendanceRecord.objects.filter(
-        attend_filter
-    ).select_related('employee')
-    attendance_map = {r.employee_id: r for r in attendance_records}
-
-    on_leave_emp_ids = set(
-        m.LeaveApplication.objects.filter(
-            status=m.LeaveApplication.Status.APPROVED,
-            start_date__lte=target_date,
-            end_date__gte=target_date,
-        ).values_list('employee_id', flat=True)
-    )
-
-    # --- 5. Categorize Attendance with Grace Period & Live Timing ---
-    present_employees_detailed = []
-    absent_employees = []
-    on_leave_employees = []
-    all_employees_detailed = []
-    currently_working_count = 0
-
-    for emp in active_employees:
-      record = attendance_map.get(emp.id)
-      policy = (
-          emp.company.get_policy_for_date(target_date)
-          if hasattr(emp.company, 'get_policy_for_date')
-          else None
-      )
-      grace_minutes = policy.grace_minutes if policy else 15
-
-      if record and (
-          record.check_in
-          or record.status
-          in [
-              m.AttendanceRecord.Status.PRESENT,
-              m.AttendanceRecord.Status.HALF_DAY,
-          ]
-      ):
-        is_grace = False
-        is_late = False
-
-        if record.late_minutes > 0:
-          if record.late_minutes <= grace_minutes:
-            is_grace = True
-          else:
-            is_late = True
-        elif record.check_in and policy and policy.office_start_time:
-          local_in = timezone.localtime(record.check_in).time()
-          office_start = policy.office_start_time
-          if local_in > office_start:
-            dummy_d = date(2000, 1, 1)
-            diff_sec = (
-                datetime.combine(dummy_d, local_in)
-                - datetime.combine(dummy_d, office_start)
-            ).total_seconds()
-            diff_m = int(diff_sec / 60)
-            if diff_m <= grace_minutes:
-              is_grace = True
-            else:
-              is_late = True
-
-        is_running = False
-        if record.check_in and not record.check_out:
-          currently_working_count += 1
-          if is_today:
-            is_running = True
-
-        total_hours_display = ''
-        if record.total_hours and record.total_hours > 0:
-          hrs = int(record.total_hours)
-          mins = int((record.total_hours - hrs) * 60)
-          total_hours_display = f'{hrs:02d}h {mins:02d}m'
-        elif record.check_in and record.check_out:
-          diff_sec = (record.check_out - record.check_in).total_seconds()
-          hrs = int(diff_sec // 3600)
-          mins = int((diff_sec % 3600) // 60)
-          total_hours_display = f'{hrs:02d}h {mins:02d}m'
-
-        emp_item = {
-            'emp': emp,
-            'record': record,
-            'status_category': 'present',
-            'check_in': record.check_in,
-            'check_out': record.check_out,
-            'check_in_iso': (
-                record.check_in.isoformat() if record.check_in else ''
-            ),
-            'total_hours_display': total_hours_display,
-            'is_running': is_running,
-            'is_grace': is_grace,
-            'is_late': is_late,
-            'late_minutes': record.late_minutes,
-        }
-        present_employees_detailed.append(emp_item)
-        all_employees_detailed.append(emp_item)
-
-      elif emp.id in on_leave_emp_ids or (
-          record and record.status == m.AttendanceRecord.Status.ON_LEAVE
-      ):
-        emp_item = {
-            'emp': emp,
-            'record': record,
-            'status_category': 'on_leave',
-            'check_in': None,
-            'check_out': None,
-            'check_in_iso': '',
-            'total_hours_display': '--',
-            'is_running': False,
-            'is_grace': False,
-            'is_late': False,
-            'late_minutes': 0,
-        }
-        on_leave_employees.append(emp_item)
-        all_employees_detailed.append(emp_item)
-
-      else:
-        emp_item = {
-            'emp': emp,
-            'record': record,
-            'status_category': 'absent',
-            'check_in': None,
-            'check_out': None,
-            'check_in_iso': '',
-            'total_hours_display': '--',
-            'is_running': False,
-            'is_grace': False,
-            'is_late': False,
-            'late_minutes': 0,
-        }
-        absent_employees.append(emp_item)
-        all_employees_detailed.append(emp_item)
-
-    total_count = active_employees.count()
-    present_count = len(present_employees_detailed)
-    time_off_count = len(on_leave_employees)
-    absent_count = len(absent_employees)
-    attendance_pct = (
-        round((present_count / total_count) * 100) if total_count > 0 else 0
-    )
-
-    open_jobs_list = (
-        m.JobPosting.objects.filter(job_filter)
-        .annotate(app_count=Count('applications'))
-        .order_by('-created_at')[:4]
-    )
-
-    upcoming_birthdays = active_employees.filter(
-        date_of_birth__month=target_date.month
-    ).order_by('date_of_birth')[:4]
-
-    # Inside your Dashboard View in hrms/views.py
-    total_active_employees = Employee.objects.filter(status='active').count()
-    enrolled_biometrics_count = EmployeeBiometric.objects.filter(employee__status='active').count()
-    pending_biometrics_count = total_active_employees - enrolled_biometrics_count
-
-    context.update({
-        'available_companies': available_companies,
-        'active_company_id': active_company_id,
-        'total_employees': total_count,
-        'currently_working': currently_working_count,
-        'on_break_count': 0,
-        'time_off_count': time_off_count,
-        'pending_biometrics': 0,
-        'present_today': present_count,
-        'absent_count': absent_count,
-        'attendance_percentage': attendance_pct,
-        'pending_leaves': m.LeaveApplication.objects.filter(
-            leave_filter
-        ).count(),
-        'open_jobs': m.JobPosting.objects.filter(job_filter).count(),
-        'all_employees_detailed': all_employees_detailed,
-        'present_employees_detailed': present_employees_detailed,
-        'absent_employees': absent_employees,
-        'on_leave_employees': on_leave_employees,
-        'upcoming_birthdays': upcoming_birthdays,
-        'open_jobs_list': open_jobs_list,
-        'enrolled_biometrics': enrolled_biometrics_count,
-        'pending_biometrics': pending_biometrics_count,
-        'total_employees': total_active_employees,
-
-    })
-    template = 'hrms/dashboard_hr.html'
-
-  else:
-    # Standard Employee Logic
-    employee = get_employee_profile(user)
-    if employee:
-      import calendar
-
-      curr_month = today.month
-      curr_year = today.year
-      first_weekday, num_days = calendar.monthrange(curr_year, curr_month)
-      leading_empty_range = list(range(first_weekday))
-      trailing_empty_count = (7 - ((first_weekday + num_days) % 7)) % 7
-      trailing_empty_range = list(range(trailing_empty_count))
-      month_days = [
-          date(curr_year, curr_month, d) for d in range(1, num_days + 1)
-      ]
-
-      today_record = m.AttendanceRecord.objects.filter(
-          employee=employee, attendance_date=today
-      ).first()
-      month_records = m.AttendanceRecord.objects.filter(
-          employee=employee,
-          attendance_date__range=[month_days[0], month_days[-1]],
-      )
-      rec_map = {r.attendance_date: r for r in month_records}
-
-      app_leaves = m.LeaveApplication.objects.filter(
-          employee=employee,
-          status=m.LeaveApplication.Status.APPROVED,
-          start_date__lte=month_days[-1],
-          end_date__gte=month_days[0],
-      ).select_related('leave_type')
-
-      leave_day_map = {}
-      for l in app_leaves:
-        c = max(l.start_date, month_days[0])
-        while c <= min(l.end_date, month_days[-1]):
-          leave_day_map[c] = l.leave_type.code
-          c += timedelta(days=1)
-
-      holidays = (
-          m.Holiday.objects.filter(
-              calendar=employee.holiday_calendar,
-              date__range=[month_days[0], month_days[-1]],
-          )
-          if employee.holiday_calendar
-          else []
-      )
-      holiday_map = {h.date: h.name for h in holidays}
-
-      present_days = 0
-      half_days = 0
-      absent_days = 0
-      calendar_cells = []
-
-      for d in month_days:
-        r = rec_map.get(d)
-        l_code = leave_day_map.get(d)
-        h_name = holiday_map.get(d)
-
-        cell_status = 'absent'
-        badge_color = 'danger'
-        label = 'Absent'
-
-        if r and r.check_in:
-          if r.status == m.AttendanceRecord.Status.PRESENT:
-            cell_status = 'present'
-            badge_color = 'success'
-            label = 'Present'
-            present_days += 1
-          elif r.status == m.AttendanceRecord.Status.HALF_DAY:
-            cell_status = 'half_day'
-            badge_color = 'warning'
-            label = 'Half Day'
-            half_days += 1
-        elif l_code:
-          cell_status = 'leave'
-          badge_color = 'primary'
-          label = f'Leave ({l_code})'
-        elif h_name:
-          cell_status = 'holiday'
-          badge_color = 'info'
-          label = h_name
-        elif d.weekday() == 6:
-          cell_status = 'week_off'
-          badge_color = 'secondary'
-          label = 'Week Off'
-        elif d > today:
-          cell_status = 'future'
-          badge_color = 'light text-muted'
-          label = 'Upcoming'
-        else:
-          absent_days += 1
-
-        calendar_cells.append({
-            'date': d,
-            'status': cell_status,
-            'badge_color': badge_color,
-            'label': label,
-            'record': r,
-            'is_past': (
-                d <= today and d.weekday() != 6 and not h_name and not l_code
-            ),
-        })
-
-      working_days_so_far = max(
-          1,
-          len([
-              c
-              for c in calendar_cells
-              if c['date'] <= today and c['status'] not in ('week_off', 'holiday')
-          ]),
-      )
-      att_pct = round(
-          ((present_days + 0.5 * half_days) / working_days_so_far) * 100
-      )
-
-      upcoming_holidays = (
-          m.Holiday.objects.filter(
-              calendar=employee.holiday_calendar, date__gte=today
-          ).order_by('date')[:4]
-          if employee.holiday_calendar
-          else []
-      )
-
-      leave_live = getattr(m, 'EmployeeLeaveBalanceLive', None)
-      leave_live_obj = (
-          leave_live.objects.filter(e_name=employee).first()
-          if leave_live
-          else None
-      )
-
-      context.update({
-          'employee': employee,
-          'today_record': today_record,
-          'leave_balances': m.EmployeeLeaveBalance.objects.filter(
-              e_name=employee
-          ).first(),
-          'leave_live': leave_live_obj,
-          'recent_attendance': month_records.order_by('-attendance_date')[:7],
-          'recent_notices': m.CompanyNotice.objects.filter(
-              company=employee.company, is_active=True
-          ).order_by('-notice_date')[:5],
-          'calendar_cells': calendar_cells,
-          'leading_empty_range': leading_empty_range,
-          'trailing_empty_range': trailing_empty_range,
-          'monthly_attendance_pct': min(100, att_pct),
-          'present_days': present_days,
-          'half_days': half_days,
-          'absent_days': absent_days,
-          'pending_leaves_count': m.LeaveApplication.objects.filter(
-              employee=employee,
-              status__in=['pending', 'pending_manager', 'pending_hr'],
-          ).count(),
-          'pending_regularizations_count': (
-              m.PunchRegularizationRequest.objects.filter(
-                  employee=employee, status='pending'
-              ).count()
-              if hasattr(m, 'PunchRegularizationRequest')
-              else 0
-          ),
-          'upcoming_holidays': upcoming_holidays,
-          'current_month_name': calendar.month_name[curr_month],
-          'current_year': curr_year,
-      })
-    template = 'hrms/dashboard_employee.html'
-
-  return render(request, template, context)
 
 
 @login_required
@@ -5790,15 +5693,95 @@ class CandidateListView(HRRequiredMixin, SidebarContextMixin, ListView):
     paginate_by = 30
 
     def get_queryset(self):
-        qs = m.Candidate.objects.all().order_by('-created_at')
+        qs = m.Candidate.objects.prefetch_related(
+            Prefetch(
+                'applications',
+                queryset=m.Application.objects.select_related('job_posting', 'current_stage').order_by('-applied_on')
+            )
+        ).order_by('-created_at')
+
+        # Keyword search
         q = self.request.GET.get('q', '').strip()
         if q:
-            qs = qs.filter(Q(first_name__icontains=q) | Q(last_name__icontains=q) | Q(email__icontains=q))
-        return qs
+            qs = qs.filter(
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q) |
+                Q(email__icontains=q) |
+                Q(phone__icontains=q) |
+                Q(current_company__icontains=q) |
+                Q(applications__job_posting__title__icontains=q)
+            )
+
+        # Status filter
+        status = self.request.GET.get('status', '').strip()
+        if status:
+            qs = qs.filter(applications__status=status)
+
+        # Experience filter
+        exp = self.request.GET.get('exp', '').strip()
+        if exp == '0-1':
+            qs = qs.filter(experience_years__lte=1)
+        elif exp == '1-3':
+            qs = qs.filter(experience_years__gt=1, experience_years__lte=3)
+        elif exp == '3-5':
+            qs = qs.filter(experience_years__gt=3, experience_years__lte=5)
+        elif exp == '5-10':
+            qs = qs.filter(experience_years__gt=5, experience_years__lte=10)
+        elif exp == '10+':
+            qs = qs.filter(experience_years__gt=10)
+
+        # Current Company filter
+        company = self.request.GET.get('company', '').strip()
+        if company:
+            qs = qs.filter(current_company__icontains=company)
+
+        # Location filter (city or state)
+        location = self.request.GET.get('location', '').strip()
+        if location:
+            qs = qs.filter(Q(city__icontains=location) | Q(state__icontains=location))
+
+        # Job posting filter
+        job_id = self.request.GET.get('job', '').strip()
+        if job_id:
+            qs = qs.filter(applications__job_posting_id=job_id)
+
+        # Date range filter (from_date / to_date)
+        from_date = self.request.GET.get('from_date', '').strip()
+        to_date = self.request.GET.get('to_date', '').strip()
+        if from_date:
+            try:
+                qs = qs.filter(created_at__date__gte=from_date)
+            except Exception:
+                pass
+        if to_date:
+            try:
+                qs = qs.filter(created_at__date__lte=to_date)
+            except Exception:
+                pass
+
+        return qs.distinct()
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx['q'] = self.request.GET.get('q', '')
+        ctx['q'] = self.request.GET.get('q', '').strip()
+        ctx['status'] = self.request.GET.get('status', '').strip()
+        ctx['exp'] = self.request.GET.get('exp', '').strip()
+        ctx['company'] = self.request.GET.get('company', '').strip()
+        ctx['location'] = self.request.GET.get('location', '').strip()
+        ctx['job_id'] = self.request.GET.get('job', '').strip()
+        ctx['from_date'] = self.request.GET.get('from_date', '').strip()
+        ctx['to_date'] = self.request.GET.get('to_date', '').strip()
+
+        # Count active filters
+        active_filters = 0
+        for key in ['q', 'status', 'exp', 'company', 'location', 'job_id', 'from_date', 'to_date']:
+            if ctx.get(key):
+                active_filters += 1
+        ctx['active_filters_count'] = active_filters
+
+        # Choices & dropdown data
+        ctx['status_choices'] = m.Application.Status.choices
+        ctx['jobs_list'] = m.JobPosting.objects.all().order_by('title')
         return ctx
 
 
@@ -5822,11 +5805,37 @@ class CandidateCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
         messages.success(self.request, f"Candidate {self.object.first_name} {self.object.last_name} added successfully.")
         return redirect(self.success_url)
 
+
+class CandidateUpdateView(HRRequiredMixin, SidebarContextMixin, UpdateView):
+    model = m.Candidate
+    form_class = f.CandidateForm
+    template_name = 'hrms/hiring/candidate_form.html'
+    active_group, active_item = 'hiring', 'candidate'
+
+    def get_success_url(self):
+        next_url = self.request.GET.get('next') or self.request.POST.get('next')
+        if next_url:
+            return next_url
+        return reverse('hrms:candidate_detail', kwargs={'pk': self.object.pk})
+
+    def form_valid(self, form):
+        messages.success(self.request, f"Candidate {self.object.first_name} {self.object.last_name} updated successfully.")
+        return super().form_valid(form)
+
+
 class CandidateDetailView(HRRequiredMixin, SidebarContextMixin, DetailView):
     model = m.Candidate
     template_name = 'hrms/hiring/candidate_detail.html'
     context_object_name = 'candidate'
     active_group, active_item = 'hiring', 'candidate'
+
+    def get_queryset(self):
+        return m.Candidate.objects.prefetch_related(
+            Prefetch(
+                'applications',
+                queryset=m.Application.objects.select_related('job_posting', 'current_stage').prefetch_related('audit_logs').order_by('-applied_on')
+            )
+        )
 
 
 class ApplicationListView(HRRequiredMixin, SidebarContextMixin, ListView):
@@ -5838,50 +5847,36 @@ class ApplicationListView(HRRequiredMixin, SidebarContextMixin, ListView):
 
     def get_queryset(self):
         qs = m.Application.objects.select_related('candidate', 'job_posting').order_by('-applied_on')
+
+        # 1. Filter by Job ID
+        job_id = self.request.GET.get('job')
+        if job_id:
+            qs = qs.filter(job_posting_id=job_id)
+
+        # 2. Filter by Status
         status = self.request.GET.get('status')
         if status:
             qs = qs.filter(status=status)
+
+        # 3. Search by candidate name or email
+        q = self.request.GET.get('q', '').strip()
+        if q:
+            qs = qs.filter(
+                Q(candidate__first_name__icontains=q) |
+                Q(candidate__last_name__icontains=q) |
+                Q(candidate__email__icontains=q)
+            )
+
         return qs
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx['status_choices'] = m.Application.Status.choices
-        ctx['selected_status'] = self.request.GET.get('status', '')
+        ctx['jobs'] = m.JobPosting.objects.all().order_by('-posted_on')
+        ctx['statuses'] = m.Application.Status.choices
+        ctx['current_job_id'] = self.request.GET.get('job', '')
+        ctx['current_status'] = self.request.GET.get('status', '')
+        ctx['search_query'] = self.request.GET.get('q', '')
         return ctx
-
-
-from django.views.generic import ListView
-from .models import Application, JobPosting
-
-
-class ApplicationListView(ListView):
-    model = Application
-    template_name = 'hrms/hiring/application_list.html'  # ensure this path matches your files
-    context_object_name = 'applications'
-
-    def get_queryset(self):
-        queryset = super().get_queryset().select_related('candidate', 'job_posting')
-
-        # 1. Filter by Job ID (from the link in Job Posting page)
-        job_id = self.request.GET.get('job')
-        if job_id:
-            queryset = queryset.filter(job_posting_id=job_id)
-
-        # 2. Filter by Status (useful for "field wise" filtration)
-        status = self.request.GET.get('status')
-        if status:
-            queryset = queryset.filter(status=status)
-
-        return queryset
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # Pass extra data for the filter UI
-        context['jobs'] = JobPosting.objects.all()
-        context['statuses'] = Application.Status.choices
-        context['current_job_id'] = self.request.GET.get('job')
-        context['current_status'] = self.request.GET.get('status')
-        return context
 
 class ApplicationCreateView(HRRequiredMixin, SidebarContextMixin, CreateView):
     model = m.Application
@@ -6347,10 +6342,32 @@ class JobKanbanView(HRRequiredMixin, SidebarContextMixin, DetailView):
         # Get the ordered pipeline stages for this specific job
         pipeline_stages = job.pipeline_stages.select_related('stage').order_by('order')
 
-        # Prefetch applications for each stage to avoid N+1 queries
-        apps_by_stage = collections.defaultdict(list)
+        # Check if single application or candidate filter requested
+        app_id = self.request.GET.get('application') or self.request.GET.get('app')
+        candidate_id = self.request.GET.get('candidate')
+        filtered_app = None
+
         all_apps = job.applications.select_related('candidate', 'current_stage').all()
 
+        if app_id:
+            try:
+                candidate_app = all_apps.filter(pk=app_id).first()
+                if candidate_app:
+                    filtered_app = candidate_app
+                    all_apps = all_apps.filter(pk=app_id)
+            except Exception:
+                pass
+        elif candidate_id:
+            try:
+                candidate_app = all_apps.filter(candidate_id=candidate_id).first()
+                if candidate_app:
+                    filtered_app = candidate_app
+                    all_apps = all_apps.filter(candidate_id=candidate_id)
+            except Exception:
+                pass
+
+        # Prefetch applications for each stage to avoid N+1 queries
+        apps_by_stage = collections.defaultdict(list)
         for app in all_apps:
             apps_by_stage[app.current_stage_id].append(app)
 
@@ -6358,6 +6375,7 @@ class JobKanbanView(HRRequiredMixin, SidebarContextMixin, DetailView):
             {'stage': ps.stage, 'apps': apps_by_stage[ps.stage_id]}
             for ps in pipeline_stages
         ]
+        ctx['filtered_app'] = filtered_app
         return ctx
 
 

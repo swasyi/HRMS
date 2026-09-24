@@ -96,6 +96,7 @@ urlpatterns = [
     path('hiring/candidates/', views.CandidateListView.as_view(), name='candidate_list'),
     path('hiring/candidates/add/', views.CandidateCreateView.as_view(), name='candidate_add'),
     path('hiring/candidates/<int:pk>/', views.CandidateDetailView.as_view(), name='candidate_detail'),
+    path('hiring/candidates/<int:pk>/edit/', views.CandidateUpdateView.as_view(), name='candidate_edit'),
 
     path('hiring/applications/', views.ApplicationListView.as_view(), name='application_list'),
     path('hiring/applications/add/', views.ApplicationCreateView.as_view(), name='application_add'),
@@ -140,6 +141,7 @@ urlpatterns = [
          views.OfferTemplatePreviewView.as_view(), name='offertemplate_preview'),
 
     # --- Attendance ---
+    path('attendance/daily-monitor/', views.AttendanceDailyMonitorView.as_view(), name='attendance_daily_monitor'),
     path('attendance/records/', views.AttendanceRecordListView.as_view(), name='attendance_records'),
     path('attendance/matrix/', views.AttendanceMatrixView.as_view(), name='attendance_matrix'),
     path('attendance/records/add/', views.AttendanceRecordCreateView.as_view(), name='attendance_record_add'),

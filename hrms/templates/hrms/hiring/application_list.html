@@ -26,6 +26,55 @@
   .btn-export:hover { background:rgba(255,255,255,.22); color:#fff; }
   .next-iv-badge { font-size:.7rem; background:#ede9fe; color:#5b21b6; border-radius:6px; padding:.1rem .45rem; }
   .lock-icon { color:#9ca3af; }
+
+  /* Modal Dropzone */
+  .modal-dropzone {
+    border: 2.5px dashed #c4b5fd;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #faf5ff 0%, #f5f3ff 100%);
+    padding: 2rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .modal-dropzone:hover, .modal-dropzone.drag-over {
+    border-color: #7c3aed;
+    background: linear-gradient(135deg, #ede9fe 0%, #e0e7ff 100%);
+    transform: scale(1.008);
+  }
+  .modal-dropzone .dz-icon {
+    font-size: 2.6rem;
+    color: #8b5cf6;
+    margin-bottom: 0.5rem;
+    display: inline-block;
+    transition: transform 0.2s ease;
+  }
+  .modal-dropzone:hover .dz-icon {
+    transform: translateY(-3px);
+  }
+  .file-chip {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .file-chip .remove-file {
+    color: #ef4444;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0 4px;
+    font-size: 0.9rem;
+  }
+  .file-chip .remove-file:hover {
+    color: #b91c1c;
+  }
 </style>
 {% endblock %}
 
@@ -42,9 +91,12 @@
     <a href="{% url 'hrms:application_add' %}" class="btn btn-sm btn-light fw-semibold" style="border-radius:9px;">
       <i class="bi bi-plus-lg me-1"></i>Add Application
     </a>
-    <a href="{% url 'hrms:bulk_download_resumes' %}" class="btn btn-sm btn-export">
+    <button type="button" class="btn btn-sm fw-semibold shadow-sm text-dark bg-white" data-bs-toggle="modal" data-bs-target="#bulkUploadModal" style="border-radius:9px; border: 1.5px solid #c4b5fd;">
+      <i class="bi bi-cloud-arrow-up-fill me-1 text-primary"></i>Bulk Resume Upload
+    </button>
+    <button type="button" id="bulkDownloadBtn" class="btn btn-sm btn-export" disabled title="Select applications first">
       <i class="bi bi-download me-1"></i>Bulk Résumés
-    </a>
+    </button>
   </div>
 </div>
 
@@ -176,12 +228,484 @@
 </nav>
 {% endif %}
 
+<!-- Bulk Resume Upload Modal -->
+<div class="modal fade" id="bulkUploadModal" tabindex="-1" aria-labelledby="bulkUploadModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content border-0 shadow-lg" style="border-radius: 18px; overflow: hidden;">
+      
+      <!-- Modal Header -->
+      <div class="modal-header border-0 px-4 pt-4 pb-2" style="background: linear-gradient(135deg, #1e1b4b, #312e81); color: #fff;">
+        <div>
+          <h5 class="modal-title fw-bold d-flex align-items-center gap-2" id="bulkUploadModalLabel">
+            <i class="bi bi-cloud-arrow-up-fill text-warning"></i> Bulk Resume Upload
+          </h5>
+          <p class="mb-0 text-white-50" style="font-size: 0.82rem;">
+            Upload multiple candidate resumes (PDFs or a ZIP archive) directly to parse and create pipeline applications.
+          </p>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="modal-body px-4 py-3">
+        
+        <!-- Target Job Posting -->
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label fw-bold small text-dark mb-0">
+              <i class="bi bi-briefcase me-1 text-primary"></i> Target Job Posting <span class="text-danger">*</span>
+            </label>
+            <span id="fullStudioLinkWrap" style="font-size: 0.75rem;">
+              <a href="#" id="modalStudioLink" target="_blank" class="text-primary text-decoration-none fw-semibold">
+                Open Full Screen Studio <i class="bi bi-box-arrow-up-right"></i>
+              </a>
+            </span>
+          </div>
+          <select id="modalJobSelect" class="form-select form-select-sm" style="border-radius: 9px; border: 1.5px solid #cbd5e1;">
+            <option value="">-- Choose Job Role --</option>
+            {% for job in jobs %}
+            <option value="{{ job.id }}" {% if current_job_id == job.id|stringformat:"i" %}selected{% endif %}>
+              {{ job.title }} {% if job.department %}· {{ job.department }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text text-muted" style="font-size: 0.75rem;">
+            Parsed candidates will automatically receive an active application for this role.
+          </div>
+        </div>
+
+        <!-- Dropzone Area -->
+        <div class="modal-dropzone" id="modalDropzone">
+          <i class="bi bi-cloud-arrow-up dz-icon"></i>
+          <div class="fw-bold text-dark mb-1" style="font-size: 0.95rem;">Drag & drop resume files here, or click to browse</div>
+          <div class="text-muted small mb-2">Supports multiple <code>.pdf</code> resumes or a single <code>.zip</code> file (up to 50MB)</div>
+          <button type="button" class="btn btn-sm btn-outline-primary fw-semibold px-3" style="border-radius: 8px;">
+            <i class="bi bi-folder2-open me-1"></i> Browse Files
+          </button>
+          <input type="file" id="modalFileInput" multiple accept=".pdf,.zip" class="d-none">
+        </div>
+
+        <!-- Staged Files Tray -->
+        <div id="modalFileTray" class="mt-3" style="display: none;">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="small fw-bold text-dark"><i class="bi bi-files me-1 text-primary"></i>Staged Files (<span id="modalFileCount">0</span>)</span>
+            <button type="button" class="btn btn-link btn-sm text-danger text-decoration-none p-0" id="modalClearFilesBtn" style="font-size: 0.75rem;">
+              <i class="bi bi-trash3 me-1"></i>Clear all
+            </button>
+          </div>
+          <div id="modalFileList" style="max-height: 140px; overflow-y: auto; padding-right: 4px;"></div>
+        </div>
+
+        <!-- Upload Progress Indicator -->
+        <div id="modalUploadProgress" class="mt-3" style="display: none;">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="small fw-bold text-primary"><i class="bi bi-arrow-repeat me-1 spinner-border spinner-border-sm"></i> Uploading & Parsing Resumes...</span>
+            <span class="small text-muted" id="modalUploadProgressText">Please wait</span>
+          </div>
+          <div class="progress" style="height: 8px; border-radius: 6px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" role="progressbar" style="width: 100%"></div>
+          </div>
+          <div class="form-text text-muted mt-1" style="font-size: 0.72rem;">Extracting candidate contact details, skills, and work experience...</div>
+        </div>
+
+        <!-- Results Breakdown Box -->
+        <div id="modalResultsBox" class="mt-3" style="display: none;">
+          <div class="p-3 bg-light rounded-3 border">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <h6 class="fw-bold mb-0 text-success"><i class="bi bi-check-circle-fill me-1"></i> Upload Complete</h6>
+              <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2" id="modalTotalProcessed"></span>
+            </div>
+            
+            <div class="row g-2 text-center my-2">
+              <div class="col-3">
+                <div class="p-2 bg-white rounded-2 border">
+                  <div class="fw-bold text-success" style="font-size: 1.1rem;" id="resCountCreated">0</div>
+                  <div class="text-muted" style="font-size: 0.68rem; text-transform: uppercase;">New Created</div>
+                </div>
+              </div>
+              <div class="col-3">
+                <div class="p-2 bg-white rounded-2 border">
+                  <div class="fw-bold text-warning" style="font-size: 1.1rem;" id="resCountLinked">0</div>
+                  <div class="text-muted" style="font-size: 0.68rem; text-transform: uppercase;">Existing Linked</div>
+                </div>
+              </div>
+              <div class="col-3">
+                <div class="p-2 bg-white rounded-2 border">
+                  <div class="fw-bold text-secondary" style="font-size: 1.1rem;" id="resCountSkipped">0</div>
+                  <div class="text-muted" style="font-size: 0.68rem; text-transform: uppercase;">Duplicates</div>
+                </div>
+              </div>
+              <div class="col-3">
+                <div class="p-2 bg-white rounded-2 border">
+                  <div class="fw-bold text-danger" style="font-size: 1.1rem;" id="resCountErrors">0</div>
+                  <div class="text-muted" style="font-size: 0.68rem; text-transform: uppercase;">Errors</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Error list if any -->
+            <div id="modalErrorsList" class="mt-2" style="display: none;">
+              <div class="alert alert-danger py-2 px-3 small mb-2" style="font-size: 0.78rem;">
+                <div class="fw-bold mb-1"><i class="bi bi-exclamation-triangle-fill me-1"></i> Some files could not be parsed:</div>
+                <ul class="mb-0 ps-3" id="modalErrorsUl"></ul>
+              </div>
+            </div>
+
+            <!-- Parsed Candidates List preview -->
+            <div id="modalCandidatesList" class="mt-2" style="max-height: 130px; overflow-y: auto;"></div>
+
+            <button type="button" class="btn btn-success btn-sm w-100 fw-bold mt-2 py-2" onclick="window.location.reload();" style="border-radius: 9px;">
+              <i class="bi bi-arrow-clockwise me-1"></i> Refresh Applications List
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="modal-footer border-0 px-4 pb-4 pt-2 d-flex justify-content-between">
+        <button type="button" class="btn btn-sm btn-light border text-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-sm btn-primary fw-semibold px-3" id="modalStartUploadBtn" disabled style="background: linear-gradient(135deg, #8b5cf6, #6366f1); border: none; border-radius: 8px;">
+          <i class="bi bi-cloud-arrow-up-fill me-1"></i> Upload & Parse Resumes
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
 <script>
-document.getElementById('selectAll')?.addEventListener('change', function() {
-  document.querySelectorAll('.app-check').forEach(cb => cb.checked = this.checked);
-});
+(function() {
+  /* -------------------------------------------------------------
+     1. Bulk Download Checkbox Selection Handler
+     ------------------------------------------------------------- */
+  const selectAll = document.getElementById('selectAll');
+  const bulkBtn = document.getElementById('bulkDownloadBtn');
+
+  function updateBulkBtn() {
+    const checked = document.querySelectorAll('.app-check:checked');
+    if (bulkBtn) {
+      bulkBtn.disabled = checked.length === 0;
+      bulkBtn.title = checked.length ? `Download ${checked.length} résumé(s)` : 'Select applications first';
+    }
+  }
+
+  selectAll?.addEventListener('change', function() {
+    document.querySelectorAll('.app-check').forEach(cb => cb.checked = this.checked);
+    updateBulkBtn();
+  });
+
+  document.querySelectorAll('.app-check').forEach(cb => cb.addEventListener('change', updateBulkBtn));
+
+  bulkBtn?.addEventListener('click', function() {
+    const ids = Array.from(document.querySelectorAll('.app-check:checked')).map(cb => cb.value);
+    if (!ids.length) { alert('Please select at least one application.'); return; }
+
+    // Build a hidden form and POST it
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '{% url "hrms:bulk_download_resumes" %}';
+    form.style.display = 'none';
+
+    // CSRF token
+    const csrf = document.createElement('input');
+    csrf.type = 'hidden';
+    csrf.name = 'csrfmiddlewaretoken';
+    csrf.value = '{{ csrf_token }}';
+    form.appendChild(csrf);
+
+    ids.forEach(id => {
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'application_ids';
+      inp.value = id;
+      form.appendChild(inp);
+    });
+
+    document.body.appendChild(form);
+    form.submit();
+  });
+
+  /* -------------------------------------------------------------
+     2. Bulk Resume Upload Modal Handler
+     ------------------------------------------------------------- */
+  const dropzone = document.getElementById('modalDropzone');
+  const fileInput = document.getElementById('modalFileInput');
+  const fileTray = document.getElementById('modalFileTray');
+  const fileList = document.getElementById('modalFileList');
+  const fileCount = document.getElementById('modalFileCount');
+  const clearFilesBtn = document.getElementById('modalClearFilesBtn');
+  const jobSelect = document.getElementById('modalJobSelect');
+  const studioLink = document.getElementById('modalStudioLink');
+  const uploadProgress = document.getElementById('modalUploadProgress');
+  const resultsBox = document.getElementById('modalResultsBox');
+  const startUploadBtn = document.getElementById('modalStartUploadBtn');
+
+  let stagedFiles = [];
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function updateStudioLink() {
+    const jobId = jobSelect ? jobSelect.value : '';
+    if (studioLink) {
+      if (jobId) {
+        studioLink.href = `/hrms/hiring/jobs/${jobId}/bulk-upload/`;
+        studioLink.style.display = 'inline-block';
+      } else {
+        studioLink.style.display = 'none';
+      }
+    }
+  }
+
+  jobSelect?.addEventListener('change', function() {
+    updateStudioLink();
+    checkUploadButtonState();
+  });
+  updateStudioLink();
+
+  function checkUploadButtonState() {
+    const hasJob = jobSelect && jobSelect.value;
+    const hasFiles = stagedFiles.length > 0;
+    if (startUploadBtn) {
+      startUploadBtn.disabled = !(hasJob && hasFiles);
+    }
+  }
+
+  function renderStagedFiles() {
+    if (!fileList || !fileTray || !fileCount) return;
+    fileList.innerHTML = '';
+    fileCount.textContent = stagedFiles.length;
+
+    if (stagedFiles.length === 0) {
+      fileTray.style.display = 'none';
+      checkUploadButtonState();
+      return;
+    }
+
+    fileTray.style.display = 'block';
+
+    stagedFiles.forEach((file, idx) => {
+      const isZip = file.name.toLowerCase().endsWith('.zip');
+      const chip = document.createElement('div');
+      chip.className = 'file-chip';
+      chip.innerHTML = `
+        <div class="d-flex align-items-center gap-2 text-truncate">
+          <i class="bi ${isZip ? 'bi-file-earmark-zip text-warning' : 'bi-file-earmark-pdf text-danger'}"></i>
+          <span class="fw-semibold text-dark text-truncate" title="${file.name}">${file.name}</span>
+          <span class="badge bg-light text-muted border" style="font-size: 0.68rem;">${formatBytes(file.size)}</span>
+        </div>
+        <button type="button" class="remove-file" title="Remove file" data-idx="${idx}">
+          <i class="bi bi-x-circle-fill"></i>
+        </button>
+      `;
+      fileList.appendChild(chip);
+    });
+
+    fileList.querySelectorAll('.remove-file').forEach(btn => {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const removeIdx = parseInt(this.getAttribute('data-idx'), 10);
+        stagedFiles.splice(removeIdx, 1);
+        renderStagedFiles();
+      });
+    });
+
+    checkUploadButtonState();
+  }
+
+  function addFiles(filesList) {
+    Array.from(filesList).forEach(file => {
+      const name = file.name.toLowerCase();
+      if (!name.endsWith('.pdf') && !name.endsWith('.zip')) {
+        alert(`"${file.name}" is not a valid resume file. Only .PDF and .ZIP files are accepted.`);
+        return;
+      }
+      // Check if file already staged
+      const exists = stagedFiles.some(f => f.name === file.name && f.size === file.size);
+      if (!exists) {
+        stagedFiles.push(file);
+      }
+    });
+    renderStagedFiles();
+  }
+
+  dropzone?.addEventListener('click', function() {
+    fileInput?.click();
+  });
+
+  fileInput?.addEventListener('change', function() {
+    if (this.files && this.files.length) {
+      addFiles(this.files);
+      this.value = '';
+    }
+  });
+
+  dropzone?.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    dropzone.classList.add('drag-over');
+  });
+
+  dropzone?.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+  });
+
+  dropzone?.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    if (e.dataTransfer && e.dataTransfer.files) {
+      addFiles(e.dataTransfer.files);
+    }
+  });
+
+  clearFilesBtn?.addEventListener('click', function() {
+    stagedFiles = [];
+    renderStagedFiles();
+  });
+
+  // Start Upload
+  startUploadBtn?.addEventListener('click', async function() {
+    const jobId = jobSelect ? jobSelect.value : '';
+    if (!jobId) {
+      alert('Please select a target job posting.');
+      jobSelect?.focus();
+      return;
+    }
+    if (!stagedFiles.length) {
+      alert('Please select at least one resume PDF or ZIP file.');
+      return;
+    }
+
+    // UI state: uploading
+    startUploadBtn.disabled = true;
+    startUploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading...';
+    if (jobSelect) jobSelect.disabled = true;
+    if (dropzone) dropzone.style.display = 'none';
+    if (fileTray) fileTray.style.display = 'none';
+    if (uploadProgress) uploadProgress.style.display = 'block';
+    if (resultsBox) resultsBox.style.display = 'none';
+
+    const formData = new FormData();
+    stagedFiles.forEach(file => {
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        formData.append('zip_file', file);
+      } else {
+        formData.append('files', file);
+      }
+    });
+
+    try {
+      const csrfToken = '{{ csrf_token }}';
+      const response = await fetch(`/hrms/api/jobs/${jobId}/bulk-upload-resumes/`, {
+        method: 'POST',
+        headers: {
+          'X-CSRFToken': csrfToken
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (uploadProgress) uploadProgress.style.display = 'none';
+
+      if (!response.ok) {
+        alert(data.detail || data.error || 'Bulk upload failed. Please try again.');
+        if (dropzone) dropzone.style.display = 'block';
+        if (fileTray) fileTray.style.display = 'block';
+        if (jobSelect) jobSelect.disabled = false;
+        checkUploadButtonState();
+        startUploadBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> Upload & Parse Resumes';
+        return;
+      }
+
+      // Success Display
+      if (resultsBox) {
+        resultsBox.style.display = 'block';
+        const createdCandidates = data.created_candidates || [];
+        const errors = data.errors || [];
+        const skipped = data.skipped || [];
+
+        let countCreated = 0;
+        let countLinked = 0;
+        let countSkipped = skipped.length;
+
+        createdCandidates.forEach(item => {
+          if (item.status === 'created') countCreated++;
+          else if (item.status === 'duplicate_linked') countLinked++;
+          else if (item.status === 'duplicate_skipped') countSkipped++;
+        });
+
+        document.getElementById('resCountCreated').textContent = countCreated;
+        document.getElementById('resCountLinked').textContent = countLinked;
+        document.getElementById('resCountSkipped').textContent = countSkipped;
+        document.getElementById('resCountErrors').textContent = errors.length;
+        document.getElementById('modalTotalProcessed').textContent = `${data.processed_count || createdCandidates.length} Resumes Processed`;
+
+        // Render Candidates List
+        const candList = document.getElementById('modalCandidatesList');
+        if (candList) {
+          candList.innerHTML = '';
+          createdCandidates.forEach(cand => {
+            const row = document.createElement('div');
+            row.className = 'd-flex align-items-center justify-content-between p-2 bg-white rounded-2 border mb-1';
+            row.style.fontSize = '0.78rem';
+            row.innerHTML = `
+              <div class="d-flex align-items-center gap-2 text-truncate">
+                <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center fw-bold" style="width:24px; height:24px; font-size:0.7rem;">
+                  ${cand.candidate_name ? cand.candidate_name.charAt(0).toUpperCase() : 'C'}
+                </div>
+                <div class="text-truncate">
+                  <span class="fw-bold text-dark">${cand.candidate_name || 'Candidate'}</span>
+                  <span class="text-muted ms-1">(${cand.email || 'No email'})</span>
+                </div>
+              </div>
+              <span class="badge ${cand.status === 'created' ? 'bg-success-subtle text-success' : 'bg-warning-subtle text-warning'} rounded-pill">
+                ${cand.status === 'created' ? 'Created' : 'Linked'}
+              </span>
+            `;
+            candList.appendChild(row);
+          });
+        }
+
+        // Render Errors if any
+        const errorsList = document.getElementById('modalErrorsList');
+        const errorsUl = document.getElementById('modalErrorsUl');
+        if (errorsList && errorsUl) {
+          if (errors.length > 0) {
+            errorsUl.innerHTML = '';
+            errors.forEach(err => {
+              const li = document.createElement('li');
+              li.textContent = `${err.filename}: ${err.error}`;
+              errorsUl.appendChild(li);
+            });
+            errorsList.style.display = 'block';
+          } else {
+            errorsList.style.display = 'none';
+          }
+        }
+
+        startUploadBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i> Completed';
+        startUploadBtn.disabled = true;
+      }
+
+    } catch (err) {
+      if (uploadProgress) uploadProgress.style.display = 'none';
+      if (dropzone) dropzone.style.display = 'block';
+      if (fileTray) fileTray.style.display = 'block';
+      if (jobSelect) jobSelect.disabled = false;
+      checkUploadButtonState();
+      startUploadBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> Upload & Parse Resumes';
+      alert('Network error occurred during resume upload: ' + err.message);
+    }
+  });
+
+})();
 </script>
 {% endblock %}
